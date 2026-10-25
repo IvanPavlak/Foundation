@@ -110,13 +110,47 @@ together path for path. Each path then has one upstream:
 
 ### One-time setup
 
+Branches of each remote live under its own name (`upstream/master`, `macupstream/master`), but tags
+share one namespace in a clone, and both upstreams tag `v0.1.0` and up: with plain remotes every
+Foundation fetch would refuse to overwrite WinuX's tags of the same name. So each upstream's tags get
+their own prefix, `winux/v1.7.0` and `foundation/v0.1.0`, and both release histories stay browsable
+(`git log foundation/v0.1.0`, `git diff winux/v1.6.0 winux/v1.7.0`).
+
+The WinuX remote first: stop its plain tag import, drop the bare copies it made (they exist only in
+your clone and come back prefixed; a fork that tags releases of its own deletes only the names
+`git ls-remote --tags upstream` lists), and fetch its tags under `winux/`:
+
 ```bash
-git remote add macupstream https://github.com/IvanPavlak/Foundation.git
+git config remote.upstream.tagOpt --no-tags
+```
+
+```bash
+git config --add remote.upstream.fetch '+refs/tags/*:refs/tags/winux/*'
+```
+
+```bash
+git tag -l | grep -v / | xargs git tag -d
+```
+
+```bash
+git fetch upstream
+```
+
+Then Foundation, the same way under `foundation/`:
+
+```bash
+git remote add --no-tags macupstream https://github.com/IvanPavlak/Foundation.git
+```
+
+```bash
+git config --add remote.macupstream.fetch '+refs/tags/*:refs/tags/foundation/*'
 ```
 
 ```bash
 git fetch macupstream
 ```
+
+Then the bridge, once:
 
 ```bash
 git merge -s ours --allow-unrelated-histories -m "Bridge Foundation as second upstream" macupstream/master
@@ -145,6 +179,10 @@ lines that it changed is put back as your branch has it, a path it added there i
 removed, and a conflict there is resolved the same way. It lists what it took back and warns about
 a mirrored file among them, which you take from WinuX instead. `Merge-Upstream macupstream
 --dry-run` shows the split before anything is merged.
+
+Check the setup at any time: `git tag -l | grep -v /` prints nothing, `git tag -l 'winux/*'` and
+`git tag -l 'foundation/*'` list each upstream's releases, and `Merge-Upstream macupstream --dry-run`
+fetches and lists what a merge would take without merging.
 
 Two things never arrive by themselves: a Foundation page added to its own `docs/_sidebar.md` (yours
 is WinuX's; the Foundation pages have their own sidebar, `docs/unix/_sidebar.md`, which does

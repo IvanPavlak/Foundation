@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Fork Model's two-upstream setup no longer breaks on tags.** Branches stay under each remote's name, but a clone keeps every tag in one namespace and both WinuX and Foundation tag `v0.1.0` and up, so a fork of both had every Foundation fetch refuse to overwrite WinuX's tags of the same name (and `Merge-Upstream`, which fetches first, stopped there). The one-time setup now keeps each upstream's tags under a prefix, `winux/v1.7.0` and `foundation/v0.1.0` (`--no-tags` plus a `+refs/tags/*:refs/tags/<prefix>/*` refspec per remote), and ends with a check: no bare tag left, both prefixes listed, `Merge-Upstream macupstream --dry-run` up to date. The `Merge-Upstream` guide points at it. Documentation only.
+
 ## [0.1.0] - 2026-10-25
 
 ### Added
