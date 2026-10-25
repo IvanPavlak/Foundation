@@ -41,8 +41,9 @@ types.
 
 ## Step 1: Name the Foundation remote
 
-The remote itself is added once with `git remote add macupstream URL`; this line only makes its
-merges owned-only:
+The remote itself is added once, with its tags under their own prefix as the
+[Fork Model](../../fork-model.md#one-time-setup) shows (both upstreams tag `v0.1.0` and up); this
+line only makes its merges owned-only:
 
 ```conf
 owned-only macupstream

@@ -285,6 +285,30 @@ setup() {
 	printf '%s\n' "${lines[@]}" | grep -qx $'0\t500'
 }
 
+@test "a frame read once never makes a window ready, even when the pass is slower than stable-ms" {
+	# A slow pass (a loaded CI runner): each window-list read takes longer than the stability
+	# window, so by the first frame read the claim is already older than stable-ms. That first
+	# frame alone must not count as held; the frame still grows on every read, so the window never
+	# settles.
+	as_windows() {
+		sleep 0.3
+		printf '500\tCode\tcom.microsoft.VSCode\t1\t1\tCode\tDotfiles\n'
+	}
+	as_window_frames() {
+		local n
+		n=$(($(cat "$BATS_TEST_TMPDIR/reads" 2>/dev/null || echo 0) + 1))
+		echo "$n" >"$BATS_TEST_TMPDIR/reads"
+		printf '500 0 0 %s 600\n' "$((800 + n))"
+	}
+	FOUNDATION_POLL_SECONDS=0.05 FOUNDATION_STABLE_MS=150 run layout_wait 1 "" Code -- ""
+	[[ $output == *"did not settle in time"* ]]
+	# The same slow reads with a frame that holds: the second matching read makes it ready.
+	as_window_frames() { printf '500 0 0 800 600\n'; }
+	FOUNDATION_POLL_SECONDS=0.05 FOUNDATION_STABLE_MS=150 run layout_wait 2 "" Code -- ""
+	[[ $output != *"did not settle"* ]]
+	printf '%s\n' "${lines[@]}" | grep -qx $'0\t500'
+}
+
 @test "layout_render: proportional columns, halved column split, labels in their cells" {
 	expected='┌───────────────────┬───────────────────┐
 │                   │    [Top-Right]    │

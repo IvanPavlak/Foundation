@@ -2,10 +2,12 @@
 # Only the pure helpers and file checks run here; AeroSpace and WezTerm are exercised by hand.
 name: Unix
 
-# Every push and pull request runs it: the repository is all Unix, so the required `Unix Tests`
-# check always reports.
+# Every pull request runs it, and every push to master: the repository is all Unix, so the
+# required `Unix Tests` check always reports. A push to any other branch does not, since its pull
+# request runs the same commit (a macOS run per push and per pull request doubled every branch).
 on:
   push:
+    branches: [master]
   pull_request:
   # Manual escape hatch: re-fires the run when GitHub drops the push or
   # pull_request event. GitHub restricts workflow_dispatch to collaborators with write access.
