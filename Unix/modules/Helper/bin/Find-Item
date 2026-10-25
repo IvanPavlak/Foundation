@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# Find-Item - finds files or directories by name, searching down and then up from a start path.
+#
+# Usage: Find-Item PATTERN [--directory] [--search-target file|directory|both]
+#                          [--name-filter TEXT] [--start-path DIR] [--max-downward-depth N]
+#                          [--max-upward-depth N] [--select-first]
+#
+# PATTERN is a shell glob matched against names, case-insensitive ("*.sln", "Program.cs").
+# Searches level by level as on Windows: the start path (default: the current directory) and
+# everything below it to --max-downward-depth levels (default 5, counted as Get-ChildItem -Depth
+# counts them), then, while nothing matched, the parent and its whole subtree (so a sibling
+# project folder is found), up to --max-upward-depth levels (default 5). The first level with a
+# match wins. One match is printed; several (all from that level) show a menu (--select-first
+# takes the first). The chosen path is the only thing on stdout, so `cd "$(Find-Item -d src)"`
+# works. --directory is --search-target directory; `both` matches files and folders.
+# --name-filter keeps only matches whose own name (directories) or folder name (files and both)
+# contains TEXT, case-insensitive. .git and node_modules are never searched.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+pattern=''
+type=f
+filter=''
+start=$PWD
+down=5
+up=5
+first=0
+while [ $# -gt 0 ]; do
+	case $1 in
+		-d | --directory) type=d ;;
+		--search-target)
+			case $(foundation_lower "${2:-}") in
+				directory) type=d ;;
+				both) type='' ;;
+				file) type=f ;;
+				*) foundation_die "--search-target takes file, directory or both" ;;
+			esac
+			shift
+			;;
+		--name-filter)
+			filter=${2:-}
+			shift
+			;;
+		--start-path)
+			start=$2
+			shift
+			;;
+		--max-downward-depth)
+			down=$2
+			shift
+			;;
+		--max-upward-depth)
+			up=$2
+			shift
+			;;
+		--select-first) first=1 ;;
+		-v | --verbose) ;;
+		*) pattern=$1 ;;
+	esac
+	shift
+done
+[ -n "$pattern" ] || foundation_die "Usage: Find-Item PATTERN [--directory]"
+start=$(cd "$start" 2>/dev/null && pwd -P) || foundation_die "Start path not found"
+
+# One level: DIR and its subtree. Get-ChildItem -Depth N reaches N levels below the children,
+# so find goes one deeper; .git and node_modules are pruned.
+search_level() { # DIR
+	local kind=()
+	[ -n "$type" ] && kind=(-type "$type")
+	find "$1" -mindepth 1 -maxdepth $((down + 1)) \( -name .git -o -name node_modules \) -prune \
+		-o "${kind[@]}" -iname "$pattern" -print 2>/dev/null | sort |
+		while IFS= read -r path; do
+			if [ -n "$filter" ]; then
+				# Directories match on their own name, files (and both) on their folder's name.
+				name=$([ "$type" = d ] && basename "$path" || basename "$(dirname "$path")")
+				case $(foundation_lower "$name") in *"$(foundation_lower "$filter")"*) ;; *) continue ;; esac
+			fi
+			printf '%s\n' "$path"
+		done
+}
+
+matches=()
+dir=$start
+level=0
+while :; do
+	while IFS= read -r path; do matches+=("$path"); done < <(search_level "$dir")
+	[ ${#matches[@]} -eq 0 ] || break
+	parent=$(dirname "$dir")
+	[ "$parent" != "$dir" ] || break
+	dir=$parent
+	level=$((level + 1))
+	[ "$level" -lt "$up" ] || break
+done
+
+if [ ${#matches[@]} -eq 0 ]; then
+	case $type in d) what='directory' ;; f) what='file' ;; *) what='item' ;; esac
+	log_warning "No $what matching [$pattern]${filter:+ in [$filter]} found from $start within $level parent directories" >&2
+	exit 1
+fi
+if [ ${#matches[@]} -eq 1 ] || [ "$first" -eq 1 ]; then
+	printf '%s\n' "${matches[0]}"
+	exit 0
+fi
+choice=$(foundation_resolve_selection "[Found ${#matches[@]}]" "Select an item" 0 0 "${matches[@]}") || exit 1
+printf '%s\n' "$choice"

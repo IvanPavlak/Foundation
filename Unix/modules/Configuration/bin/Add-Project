@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# Add-Project - adds a project section to Unix/config/projects.local.conf.
+#
+# Usage: Add-Project NAME|--name NAME [--path KEY DIR]... [--tab KEY [DIR]]... [--paths KEY,...] [--run KEY "COMMAND"]... [--action "LINE"]...
+#
+# Appends [NAME] with its path keys, terminal tabs (`tab KEY`, titled NAME.KEY), run commands
+# for Run-Project and actions. Without actions it gets the defaults `Open-VSCode NAME` and
+# `Open-ProjectTerminals NAME`; without a path, `path ROOT` is the current directory and one
+# ROOT tab is added. An existing project is left alone; the file is backed up first.
+# Give NAME first (or as --name NAME, the Windows-style flag): a plain word right after
+# `--tab KEY` is taken as that tab's DIR. --run and --action each take ONE argument, so quote a
+# command with spaces (`--run API "dotnet run"`); an unquoted second word is not part of the
+# command but a plain argument, which is taken as NAME, and a second NAME is an error.
+# --paths KEY,... adds a `tab KEY` per key (the -Paths of Windows, the paths that get a terminal);
+# each key other than ROOT needs its --path. A flag it does not know is an error and nothing is
+# written. The Windows -Runnable, -TerminalTabs, -BasePath and -Actions have no Unix form and
+# stop it with the flag to use instead: a project is runnable through its --run lines, tabs are
+# --tab, directories --path KEY DIR, actions --action "LINE".
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config backup confedit
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+# Paths are written with $DEV for the dev root ({Dev} of Windows) and ~ for $HOME (the shell
+# expands ~ before this sees it), so the file stays machine-independent like the committed sections.
+# shellcheck disable=SC2016,SC2088 # $DEV and ~ are written literally into the config, not expanded
+home_relative() {
+	local dev
+	dev=$(foundation_dev_root)
+	case $1 in
+		"$dev") printf '$DEV' ;;
+		"$dev"/*) printf '$DEV/%s' "${1#"$dev"/}" ;;
+		"$HOME") printf '~' ;;
+		"$HOME"/*) printf '~/%s' "${1#"$HOME"/}" ;;
+		*) printf '%s' "$1" ;;
+	esac
+}
+# NAME once: a second plain word is an error, not a silent rename.
+set_name() {
+	[ -z "$name" ] || foundation_die "One project at a time - got [$name] and [$1] - nothing was written"
+	name=$1
+}
+name=''
+path_keys=()
+paths=()
+tabs=()
+runs=()
+actions=()
+while [ $# -gt 0 ]; do
+	case $1 in
+		--path)
+			paths+=("path $2 $(home_relative "$3")")
+			shift 2
+			;;
+		--tab) if [ $# -gt 2 ] && [ "${3#-}" = "$3" ]; then
+			tabs+=("tab $2 $(home_relative "$3")")
+			shift 2
+		else
+			tabs+=("tab $2")
+			shift
+		fi ;;
+		--run)
+			runs+=("run $2 $3")
+			shift 2
+			;;
+		--action)
+			actions+=("action $2")
+			shift
+			;;
+		--paths)
+			foundation_split_list path_keys "${2:-}"
+			shift
+			;;
+		--name)
+			set_name "${2:-}"
+			shift
+			;;
+		--runnable) foundation_die "--runnable has no Unix form: a project runs through its --run KEY \"COMMAND\" lines - nothing was written" ;;
+		--terminal-tabs) foundation_die "--terminal-tabs has no Unix form: add each tab with --tab KEY [DIR] - nothing was written" ;;
+		--base-path) foundation_die "--base-path has no Unix form: give each directory with --path KEY DIR - nothing was written" ;;
+		--actions) foundation_die "--actions has no Unix form: add each action with --action \"LINE\" - nothing was written" ;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1 - nothing was written" ;;
+		*) set_name "$1" ;;
+	esac
+	shift
+done
+for key in ${path_keys[@]+"${path_keys[@]}"}; do
+	if ! foundation_ieq "$key" ROOT && ! printf '%s\n' ${paths[@]+"${paths[@]}"} | awk -v k="$(foundation_lower "$key")" 'tolower($2) == k { found = 1 } END { exit !found }'; then
+		foundation_die "--paths names [$key], which has no --path $key DIR - nothing was written"
+	fi
+	tabs+=("tab $key")
+done
+[ -n "$name" ] || foundation_die 'Usage: Add-Project NAME [--path KEY DIR]... [--tab KEY [DIR]]... [--run KEY "COMMAND"]... [--action "LINE"]...'
+if [ ${#paths[@]} -eq 0 ]; then
+	paths=("path ROOT $(home_relative "$PWD")")
+	[ ${#tabs[@]} -gt 0 ] || tabs=("tab ROOT")
+fi
+[ ${#actions[@]} -gt 0 ] || actions=("action Open-VSCode $name" "action Open-ProjectTerminals $name")
+file=$(conf_path projects.conf) || foundation_die "Missing Unix/config/projects.conf"
+# The order of the committed sections: paths, actions, tabs, run commands.
+printf '%s\n' "${paths[@]}" "${actions[@]}" "${tabs[@]}" "${runs[@]}" | grep . | conf_add_section "$file" "$name"

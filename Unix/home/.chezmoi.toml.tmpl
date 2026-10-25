@@ -1,0 +1,24 @@
+{{- /*
+  chezmoi's configuration, rendered by `chezmoi init --source <repository>/Unix` (Unix/bootstrap.sh).
+  The source state is Unix/home (Unix/.chezmoiroot); every entry links into the repository, so
+  editing a dotfile edits the repository and chezmoi only ever creates links.
+
+  machineType: asked once, one of the `type` lines of Unix/config/machines.conf (Test when it
+  lists none); the default is what Foundation itself detects for this host. bootstrapOnFirstApply: asked once; true runs Bootstrap
+  --with-initial-setup after the first apply (.chezmoiscripts/run_once_after_bootstrap.sh.tmpl).
+*/ -}}
+{{- $types := output "/bin/bash" "-c" (printf ". '%s/Unix/lib/foundation.sh' >/dev/null 2>&1 && foundation_load config && foundation_machine_types" .chezmoi.workingTree) | trim | splitList "\n" | compact -}}
+{{- if not $types }}{{ $types = list "Test" }}{{ end -}}
+{{- $detected := output "/bin/bash" "-c" (printf ". '%s/Unix/lib/foundation.sh' >/dev/null 2>&1 && foundation_load config && foundation_machine_type || echo Test" .chezmoi.workingTree) | trim -}}
+{{- if not (has $detected $types) }}{{ $detected = ternary "Test" (first $types) (has "Test" $types) }}{{ end -}}
+{{- /* promptChoice only takes an exact match, so the answer is read as text and compared in any case. */ -}}
+{{- $answer := promptStringOnce . "machineType" (printf "Machine type of this Mac (%s)" (join ", " $types)) $detected | trim -}}
+{{- $machineType := "" -}}
+{{- range $types }}{{ if eq (lower .) (lower $answer) }}{{ $machineType = . }}{{ end }}{{ end -}}
+{{- if not $machineType }}{{ fail (printf "Unknown machine type %q - answer one of %s" $answer (join ", " $types)) }}{{ end -}}
+{{- $bootstrap := promptBoolOnce . "bootstrapOnFirstApply" "Run Bootstrap --with-initial-setup after the first apply" true -}}
+sourceDir = {{ joinPath .chezmoi.workingTree "Unix" | quote }}
+
+[data]
+    machineType = {{ $machineType | quote }}
+    bootstrapOnFirstApply = {{ $bootstrap }}

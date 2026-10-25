@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# Test-MachineOnline - tests whether a machine answers a ping.
+#
+# Usage: Test-MachineOnline MACHINE|ADDRESS|--machine MACHINE|--address ADDRESS [--wait-for-online]
+#        [--timeout-seconds N] [--interval-seconds N] [--ping-timeout-milliseconds N] [--quiet]
+#        [--display-name NAME]
+#
+# MACHINE is a machine of Unix/config/wake-on-lan.conf, pinged at its `address`; anything else
+# is pinged as an IP address or hostname. One ping by default; --wait-for-online polls until it
+# answers or --timeout-seconds (default 120) pass. Exit status 0 = online, 1 = not reachable or
+# no address, so it works in conditions: `Test-MachineOnline Server && ssh server`.
+# --machine and --address name the target as the Windows -Machine and -Address do (both work like
+# the bare argument); --display-name NAME is the name the messages use instead of the target.
+# --interval-seconds (default 3, as on Windows) is the pause between the pings of a wait, and
+# --ping-timeout-milliseconds (default 1000) how long one ping waits, rounded up to whole
+# seconds because ping takes seconds. A flag it does not know is an error, never the target.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config network
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+target=''
+wait_online=0
+timeout=120
+interval=3
+ping_ms=1000
+quiet=0
+display_name=''
+while [ $# -gt 0 ]; do
+	case $1 in
+		--wait-for-online) wait_online=1 ;;
+		--timeout-seconds)
+			timeout=$2
+			shift
+			;;
+		--interval-seconds)
+			interval=${2:-}
+			shift
+			;;
+		--ping-timeout-milliseconds)
+			ping_ms=${2:-}
+			shift
+			;;
+		--quiet) quiet=1 ;;
+		--machine | --address)
+			target=$2
+			shift
+			;;
+		--display-name)
+			display_name=$2
+			shift
+			;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1 - nothing was pinged" ;;
+		*) target=$1 ;;
+	esac
+	shift
+done
+foundation_whole_number "$interval" 1 3600 || foundation_die "--interval-seconds takes a whole number from 1 to 3600, not [$interval]"
+foundation_whole_number "$ping_ms" 1 60000 || foundation_die "--ping-timeout-milliseconds takes a whole number from 1 to 60000, not [$ping_ms]"
+ping_seconds=$(net_seconds "$ping_ms")
+[ -n "$target" ] || foundation_die "Usage: Test-MachineOnline MACHINE|ADDRESS [--wait-for-online] [--timeout-seconds N]"
+
+say() { [ "$quiet" -eq 1 ] || "$@"; }
+
+address=$(net_machine_address "$target") || address=''
+if [ -z "$address" ]; then
+	file=$(conf_path wake-on-lan.conf) || file=''
+	if [ -n "$file" ] && conf_section_name "$file" "$target" >/dev/null; then
+		say log_warning "[$target] has no address in wake-on-lan.conf - reachability unknown"
+		exit 1
+	fi
+	address=$target
+fi
+label=$target
+[ "$address" = "$target" ] || label="$target ($address)"
+[ -z "$display_name" ] || label=$display_name
+
+if [ "$wait_online" -eq 1 ]; then
+	say log_step "Waiting up to ${timeout}s for $label..."
+	if net_wait_online "$address" "$timeout" "$interval" "$ping_seconds"; then
+		say log_success "$label is online!"
+		exit 0
+	fi
+	say log_warning "$label did not answer within ${timeout}s"
+	exit 1
+fi
+if net_ping "$address" "$ping_seconds"; then
+	say log_success "$label is online!"
+	exit 0
+fi
+say log_warning "$label is offline or unreachable"
+exit 1

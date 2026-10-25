@@ -1,0 +1,383 @@
+#!/usr/bin/env bash
+# Deploy-AiArtifacts - links the repository's AI skills, mods, rules, prompts and agents into the AI
+# apps this machine deploys into.
+#
+# Usage: Deploy-AiArtifacts [--kind KIND...] [--check]
+#
+# The apps are the harnesses of the `deploy` line of Unix/config/ai-artifacts.conf, each defined by
+# a [section] of ai-harnesses.conf (the base catalogue: claude-code, codex, gemini-cli, copilot,
+# all inactive until named); the items are every <root>/<Kind>/<source>/<item> of the sources read
+# (own first, then foundation, example and the vendored sources in name order; the first wins an
+# item name two carry, with a warning), minus the `exclude` lines. Design: docs/unix/ai.md.
+#
+# Per destination of an app:
+#   each   one link per item in the folder: the item folder itself (`.`), or the first file of the
+#          destination's list the item has, named <item> plus that file's extension; an item
+#          with none of them is left out
+#   copy   as each, copied instead of linked; a copy that differs from the repository's is
+#          replaced
+#   file   one link to the item of the `use KIND NAME` line (the rules: ~/.claude/CLAUDE.md)
+# A destination two apps name is filled once; one no item goes to is left alone (only pruned). A folder destination that is itself a link into the
+# repository (the earlier whole-folder style) is replaced by a real folder; one that links
+# elsewhere, or a file in its place, is skipped. A real file or folder where a link or a copy goes
+# is first copied into Backups/Unix/SymbolicLinks/AiArtifacts.<kind>.<item> (backup_item, skip,
+# never destroy: when the copy fails that item is skipped and the run fails). Only dangling links
+# that point into the artifacts root are pruned; a link to anything else is never touched.
+# Hooks of a destination: +claude-plugin-dirs sets env.CLAUDE_CODE_PLUGIN_DIRS of
+# ~/.claude/settings.json to its links, then every entry added by hand (python3 edits the JSON;
+# without it a warning), and runs `claude plugin validate` on each (a missing or rejecting CLI only
+# warns); +managed-settings makes the link through sudo (Claude Code's managed settings, which no
+# other setting overrides).
+# --kind deploys only those kinds; --check (--dry-run, the Windows -WhatIf) reports what a run would
+# change and changes nothing.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config backup artifacts
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+check_only=0
+kinds=()
+while [ $# -gt 0 ]; do
+	case $1 in
+		--check | --dry-run) check_only=1 ;;
+		--kind) ;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument: $1 (expected --kind KIND... or --check)" ;;
+		*)
+			IFS=, read -r -a list <<<"$1"
+			for kind in "${list[@]}"; do
+				ai_kind_folder "$kind" >/dev/null || foundation_die "Unknown kind => [$kind] (expected one of: $(ai_kinds))"
+				kinds+=("$(foundation_lower "$kind")")
+			done
+			;;
+	esac
+	shift
+done
+
+root=$(ai_root)
+settings="$HOME/.claude/settings.json"
+claude_cli=${FOUNDATION_CLAUDE_CLI:-claude}
+
+failures=0
+linked=0
+
+log_title "Deploy-AiArtifacts"
+log_step "Repository root : $DOTFILES_ROOT"
+log_step "Artifacts root  : $root"
+
+if [ -z "$(ai_deployed_harnesses)" ]; then
+	log_warning "No harness to deploy into - add a deploy line to ai-artifacts.conf (see ai-harnesses.conf for the catalogue)!"
+	exit 0
+fi
+log_step "Harnesses       : $(ai_deployed_harnesses | paste -sd' ' -)"
+
+# Runs COMMAND through sudo when ELEVATE is set, else as is. Usage: as_owner ELEVATE COMMAND...
+as_owner() {
+	local elevate=$1
+	shift
+	if [ -n "$elevate" ]; then sudo "$@"; else "$@"; fi
+}
+
+# Moves a real item at TARGET out of the way: a copy into the sink, then removal. Fails (and says
+# so) when the copy fails, leaving it in place. Usage: clear_target KEY TARGET ELEVATE
+clear_target() {
+	local key=$1 target=$2 elevate=$3 folder
+	if [ -L "$target" ]; then
+		as_owner "$elevate" rm "$target"
+		return
+	fi
+	[ -e "$target" ] || return 0
+	# The copy is taken as this user: the sink is user-owned and a managed-settings file is
+	# world-readable; one that is not fails the backup, and the target is then left alone.
+	folder=$(backup_item SymbolicLinks "AiArtifacts.$key" "$target") || {
+		log_error "SKIPPED $target (its backup failed, left untouched)"
+		return 1
+	}
+	as_owner "$elevate" rm -rf "$target" || return 1
+	log_step "backed up existing item to $folder"
+}
+
+# Reports the state of one link and, unless --check, creates it.
+# Usage: link_item KEY SOURCE TARGET ELEVATE
+link_item() {
+	local key=$1 source_path=$2 target_path=$3 elevate=$4
+	if [ -L "$target_path" ] && [ "$(readlink "$target_path")" = "$source_path" ]; then
+		linked=$((linked + 1))
+		return 0
+	fi
+	if [ "$check_only" -eq 1 ]; then
+		if [ -e "$target_path" ] || [ -L "$target_path" ]; then
+			log_step "WRONG   $target_path (exists, not linked to the repository)"
+		else
+			log_step "MISSING $target_path"
+		fi
+		failures=$((failures + 1))
+		return 0
+	fi
+	if ! as_owner "$elevate" mkdir -p "$(dirname "$target_path")" ||
+		! clear_target "$key" "$target_path" "$elevate" ||
+		! as_owner "$elevate" ln -s "$source_path" "$target_path"; then
+		failures=$((failures + 1))
+		return 0
+	fi
+	linked=$((linked + 1))
+	log_step "linked  $target_path"
+}
+
+# Reports the state of one copy and, unless --check, refreshes it. Usage: copy_item KEY SOURCE TARGET
+copy_item() {
+	local key=$1 source_path=$2 target_path=$3
+	if [ -e "$target_path" ] && [ ! -L "$target_path" ] && diff -rq "$source_path" "$target_path" >/dev/null 2>&1; then
+		linked=$((linked + 1))
+		return 0
+	fi
+	if [ "$check_only" -eq 1 ]; then
+		if [ -e "$target_path" ] || [ -L "$target_path" ]; then
+			log_step "DIFFERS $target_path (not the repository's copy)"
+		else
+			log_step "MISSING $target_path"
+		fi
+		failures=$((failures + 1))
+		return 0
+	fi
+	if ! clear_target "$key" "$target_path" '' || ! cp -R "$source_path" "$target_path"; then
+		failures=$((failures + 1))
+		return 0
+	fi
+	linked=$((linked + 1))
+	log_step "copied  $target_path"
+}
+
+# Makes the folder of an each or copy destination ready; fails (counted) when it cannot be used.
+# Usage: prepare_folder PATH
+prepare_folder() {
+	local folder=$1
+	if [ -L "$folder" ]; then
+		case "$(readlink "$folder")" in
+			"$DOTFILES_ROOT"*)
+				if [ "$check_only" -eq 1 ]; then
+					log_step "WRONG   $folder is a folder link into the repository (will be replaced)"
+					failures=$((failures + 1))
+					return 1
+				fi
+				rm "$folder" || {
+					failures=$((failures + 1))
+					return 1
+				}
+				log_step "replaced folder link into the repository with a real folder"
+				;;
+			*)
+				log_step "SKIPPED $folder (a link to somewhere Foundation does not manage)"
+				failures=$((failures + 1))
+				return 1
+				;;
+		esac
+	elif [ -e "$folder" ] && [ ! -d "$folder" ]; then
+		log_step "SKIPPED $folder (a file sits at that path)"
+		failures=$((failures + 1))
+		return 1
+	fi
+	[ "$check_only" -eq 1 ] && return 0
+	mkdir -p "$folder" || {
+		failures=$((failures + 1))
+		return 1
+	}
+}
+
+# Removes the dangling links into the artifacts root from FOLDER (reports them with --check).
+# Usage: prune_folder FOLDER
+prune_folder() {
+	local existing
+	[ -d "$1" ] || return 0
+	for existing in "$1"/* "$1"/.[!.]*; do
+		[ -L "$existing" ] && [ ! -e "$existing" ] || continue
+		case "$(readlink "$existing")" in
+			"$root"/*)
+				if [ "$check_only" -eq 1 ]; then
+					log_step "STALE   $existing (dangling link into the artifacts root)"
+					failures=$((failures + 1))
+				else
+					rm "$existing" && log_step "removed dangling link $existing"
+				fi
+				;;
+		esac
+	done
+}
+
+# The claude-plugin-dirs hook: env.CLAUDE_CODE_PLUGIN_DIRS of the Claude Code settings lists LINKS
+# (one per line) first, then every entry not under FOLDER; then each link is validated.
+# Usage: hook_claude_plugin_dirs FOLDER LINKS
+hook_claude_plugin_dirs() {
+	local folder=$1 links=$2 rejected='' link
+	[ -n "$links" ] || return 0
+	if ! command -v python3 >/dev/null 2>&1; then
+		log_warning "python3 not found - $settings was not updated; add the mod links to env.CLAUDE_CODE_PLUGIN_DIRS by hand!"
+	else
+		python3 - "$settings" "$folder" "$check_only" "$links" <<'PY'
+import json, os, sys
+
+path, harness, check_only, links = sys.argv[1], sys.argv[2].rstrip("/"), sys.argv[3] == "1", sys.argv[4]
+deployed = [line for line in links.splitlines() if line]
+key = "CLAUDE_CODE_PLUGIN_DIRS"
+
+document = {}
+if os.path.exists(path):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        document = json.loads(text) if text.strip() else {}
+    except ValueError as error:
+        print(f"Could not parse {path} - left untouched: {error}", file=sys.stderr)
+        sys.exit(2)
+if not isinstance(document, dict):
+    print(f"The top level of {path} is not a JSON object - left untouched", file=sys.stderr)
+    sys.exit(2)
+env = document.get("env")
+if env is None:
+    env = {}
+elif not isinstance(env, dict):
+    print(f"The env entry in {path} is not a JSON object - left untouched", file=sys.stderr)
+    sys.exit(2)
+
+current = env.get(key, "")
+merged, seen = [], set()
+for entry in deployed:
+    if entry not in seen:
+        seen.add(entry)
+        merged.append(entry)
+for entry in (current.split(":") if isinstance(current, str) else []):
+    trimmed = entry.rstrip("/")
+    if not entry or trimmed == harness or trimmed.startswith(harness + "/"):
+        continue
+    if entry not in seen:
+        seen.add(entry)
+        merged.append(entry)
+value = ":".join(merged)
+
+if current == value:
+    print(f"env.{key} in {path} is up to date")
+    sys.exit(0)
+if check_only:
+    print(f"DIFFERS env.{key} in {path}")
+    sys.exit(3)
+
+env[key] = value
+document["env"] = env
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(document, handle, indent=2, ensure_ascii=False)
+    handle.write("\n")
+print(f"Set env.{key} in {path}")
+PY
+		case $? in
+			0) ;;
+			3) failures=$((failures + 1)) ;;
+			*)
+				log_error "Claude Code settings not updated: $settings"
+				failures=$((failures + 1))
+				;;
+		esac
+	fi
+	# The CLI is the practical gate for the mod API; it only ever warns.
+	if ! command -v "$claude_cli" >/dev/null 2>&1; then
+		log_warning "Claude Code CLI (claude) not found on PATH - mods are deployed but cannot be used until the Claude Code CLI is installed or updated!"
+		return 0
+	fi
+	while IFS= read -r link; do
+		[ -n "$link" ] || continue
+		"$claude_cli" plugin validate "$link" >/dev/null 2>&1 || rejected="$rejected${rejected:+, }$(basename "$link")"
+	done <<<"$links"
+	[ -z "$rejected" ] || log_warning "claude plugin validate failed for [$rejected] - mods are deployed but cannot be used until the Claude Code CLI is updated or the mod is fixed!"
+}
+
+# Finishes the current destination: prunes its folder and runs its hooks.
+finish_destination() {
+	[ -n "$dest_path" ] || return 0
+	if [ "$dest_ready" -ne 0 ] && [ "$dest_placement" != file ]; then
+		prune_folder "$dest_path"
+	fi
+	case ",$dest_hooks," in
+		*,claude-plugin-dirs,*) [ "$dest_ready" -eq 1 ] && hook_claude_plugin_dirs "$dest_path" "$dest_links" ;;
+	esac
+	dest_path=''
+}
+
+# Readies the current destination for its first item: the hooks that change how it is written,
+# and its folder (each, copy). A destination without items is never created. Sets dest_ready to 1,
+# or 0 when it cannot be used.
+open_destination() {
+	local hook
+	dest_ready=1
+	log_step "[$dest_harness] $dest_kind => $dest_path"
+	for hook in ${dest_hooks//,/ }; do
+		case $hook in
+			- | claude-plugin-dirs) ;;
+			managed-settings)
+				[ "$check_only" -eq 1 ] && continue
+				if command -v sudo >/dev/null 2>&1; then
+					dest_elevate=sudo
+				else
+					log_step "SKIPPED $dest_path (sudo unavailable)"
+					failures=$((failures + 1))
+					dest_ready=0
+				fi
+				;;
+			*) log_warning "Unknown hook +$hook of $dest_path - ignored (known: +claude-plugin-dirs, +managed-settings)" ;;
+		esac
+	done
+	if [ "$dest_ready" -eq 1 ] && [ "$dest_placement" != file ]; then
+		prepare_folder "$dest_path" || dest_ready=0
+	fi
+}
+
+dest_path=''
+dest_ready=0
+while IFS=$'\t' read -r record a b c d e; do
+	case $record in
+		WARN) log_warning "$a" ;;
+		NOTE) log_step "$a" ;;
+		DEST)
+			finish_destination
+			dest_kind=$a dest_placement=$b dest_hooks=$c dest_path=$d dest_harness=$e dest_links='' dest_elevate=''
+			# -1: no item yet (opened by the first one).
+			dest_ready=-1
+			;;
+		ITEM)
+			[ "$dest_ready" -ne -1 ] || open_destination
+			[ "$dest_ready" -eq 1 ] || continue
+			key=$a.$b
+			[ "$dest_placement" = file ] && key=$a.$b.$(basename "$d")
+			if [ "$dest_placement" = copy ]; then
+				copy_item "$key" "$c" "$d"
+			else
+				link_item "$key" "$c" "$d" "$dest_elevate"
+			fi
+			dest_links+="$d"$'\n'
+			;;
+	esac
+done < <(ai_plan "${kinds[@]}")
+finish_destination
+
+if [ "$check_only" -eq 1 ]; then
+	if [ "$failures" -eq 0 ]; then
+		log_success "AI artifacts fully deployed ($linked items)!"
+	else
+		log_warning "AI artifacts incomplete: $failures item(s) need deployment!"
+	fi
+	exit 0
+fi
+
+if [ "$failures" -eq 0 ]; then
+	log_success "AI artifacts deployed ($linked items)!"
+else
+	log_error "AI artifacts deployment finished with $failures failure(s)!"
+	exit 1
+fi

@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+# Measure-ShellStartup - times the interactive shell start, stage by stage.
+#
+# Usage: Measure-ShellStartup [--runs N] [--mode Cumulative|Isolated] [--leave-one-out]
+#                             [--stages NAME...] [--shell PATH] [--pass-thru]
+#
+# The Unix twin of the Windows Measure-ShellStartup. Unix/shell/shellrc.sh runs its optional parts as
+# named stages (LineEditing, Aliases, Prompt, Plugins, Icons, Greeting, RepositoryUpdate); a shell
+# leaves out the ones FOUNDATION_STARTUP_SKIP names and writes what each stage it ran cost to the file
+# FOUNDATION_STARTUP_TRACE names. Two more names belong to the greeting: FastfetchImageLogo (the
+# image logo of Invoke-Fastfetch) and OnefetchStyle (the restyle of Invoke-Onefetch), walked after
+# Greeting as on Windows. Each configuration starts `SHELL -i -c exit` N times (--runs, 1-50,
+# default 5; --shell, default $SHELL) and reports min / median / max of the wall time, in
+# milliseconds; the median of an even count is the mean of the two middle values, as on Windows.
+#
+#   additive (default; --mode Cumulative)
+#                       A bare row first (`zsh -f`, `bash --norc`: the floor no rc can go under;
+#                       no row for another shell), then Core (every stage left out: PATH and the
+#                       module functions only), then one more stage per row in shellrc.sh order.
+#                       Delta is what the row costs on top of the row before it.
+#   --leave-one-out (--mode Isolated)
+#                       Full first, then every row with exactly one stage left out. Delta is what
+#                       leaving that stage out saves on its own.
+#
+# --stages walks only the named stages (any case, separated by commas or spaces), in the order
+# given; the others stay out of every additive row and in every leave-one-out row. --pass-thru
+# prints the rows as tab-separated values with a header line (Configuration, Runs, Min, Median,
+# Max, Delta, InShell) instead of the table, for a script.
+#
+# One warm-up start that is not counted comes first (a cold start pays for loading the binaries).
+# InShell is the median the stage measured for itself (- for the greeting names, which the rc does
+# not trace). The shells draw nothing (output goes to /dev/null and FOUNDATION_TTY to /dev/null, so
+# the greeting cannot resize this terminal's font), but the stages run for real: a RepositoryUpdate
+# that is due runs during the measurement.
+# Windows-style names: --additive (-Additive) is the default mode, accepted for parity.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+STAGES=(LineEditing Aliases Prompt Plugins Icons Greeting FastfetchImageLogo OnefetchStyle RepositoryUpdate)
+runs=5
+mode=additive
+shell=${SHELL:-/bin/zsh}
+pass_thru=0
+selected=()
+while [ $# -gt 0 ]; do
+	case $1 in
+		--runs)
+			runs=${2:-}
+			shift
+			;;
+		--mode)
+			case ${2,,} in
+				cumulative | additive) mode=additive ;;
+				isolated | leave-one-out) mode=leave-one-out ;;
+				*) foundation_die "--mode takes Cumulative or Isolated => ${2:-}" ;;
+			esac
+			shift
+			;;
+		--leave-one-out) mode=leave-one-out ;;
+		--additive) mode=additive ;;
+		--stages)
+			# Every word up to the next flag, commas splitting a word further.
+			while [ $# -gt 1 ] && [[ $2 != -* ]]; do
+				IFS=', ' read -r -a words <<<"$2"
+				selected+=("${words[@]}")
+				shift
+			done
+			[ "${#selected[@]}" -gt 0 ] || foundation_die "--stages takes stage names => ${STAGES[*]}"
+			;;
+		--shell)
+			shell=$2
+			shift
+			;;
+		--pass-thru) pass_thru=1 ;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument => $1" ;;
+	esac
+	shift
+done
+case $runs in '' | *[!0-9]*) foundation_die "--runs must be a whole number from 1 to 50 => $runs" ;; esac
+[ "$runs" -ge 1 ] && [ "$runs" -le 50 ] || foundation_die "--runs must be a whole number from 1 to 50 => $runs"
+# The selected stages in their own spelling; an unknown name stops it before any start.
+walk=()
+for name in "${selected[@]}"; do
+	[ -n "$name" ] || continue
+	match=''
+	for stage in "${STAGES[@]}"; do
+		[ "${stage,,}" = "${name,,}" ] && match=$stage
+	done
+	[ -n "$match" ] || foundation_die "No stage [$name] => ${STAGES[*]}"
+	walk+=("$match")
+done
+[ "${#walk[@]}" -gt 0 ] || walk=("${STAGES[@]}")
+command -v "$shell" >/dev/null 2>&1 || foundation_die "No shell [$shell]"
+# The flag that starts the shell without any rc file, for the bare row.
+case ${shell##*/} in
+	*zsh*) no_rc=-f ;;
+	*bash*) no_rc=--norc ;;
+	*) no_rc='' ;;
+esac
+
+work=$(mktemp -d "${TMPDIR:-/tmp}/foundation-startup.XXXXXX") || foundation_die "Cannot create a work folder"
+trap 'rm -rf "$work"' EXIT
+
+# "MIN MEDIAN MAX" of the numbers on stdin; the median of an even count is the mean of the two
+# middle values, rounded (Windows takes the mean too).
+statistics() {
+	sort -n | awk 'NF { v[++n] = $1 }
+		END {
+			if (!n) { print "0 0 0"; exit }
+			m = (n % 2) ? v[(n + 1) / 2] : int((v[n / 2] + v[n / 2 + 1]) / 2 + 0.5)
+			print v[1], m, v[n]
+		}'
+}
+
+# Runs one configuration RUNS times with SKIP (a FOUNDATION_STARTUP_SKIP value) and prints
+# "MIN MEDIAN MAX"; every run's stage times are appended to $work/trace.<LABEL>. BARE starts the
+# shell without its rc instead. Usage: measure LABEL SKIP [BARE]
+measure() {
+	local label=$1 skip=$2 run start times=''
+	local -a flags=(-i -c exit)
+	[ -z "${3:-}" ] || flags=("$no_rc" -i -c exit)
+	: >"$work/trace.$label"
+	for ((run = 0; run < runs; run++)); do
+		start=$(foundation_now_ms)
+		env FOUNDATION_STARTUP_SKIP="$skip" FOUNDATION_STARTUP_TRACE="$work/trace.$label" FOUNDATION_TTY=/dev/null \
+			"$shell" "${flags[@]}" </dev/null >/dev/null 2>&1
+		times="$times$(($(foundation_now_ms) - start))"$'\n'
+	done
+	printf '%s' "$times" | statistics
+}
+
+# The median a stage measured for itself in a configuration's runs (- when it never ran). A line
+# that is not NAME<TAB>MILLISECONDS is ignored.
+in_shell() { # LABEL STAGE
+	local values
+	values=$(awk -F'\t' -v s="$2" 'NF == 2 && $1 == s && $2 ~ /^[0-9]+$/ { print $2 }' "$work/trace.$1")
+	if [ -n "$values" ]; then printf '%s\n' "$values" | statistics | cut -d' ' -f2; else printf -- '-'; fi
+}
+
+joined() { # NAME... - comma-joined
+	local IFS=,
+	printf '%s' "$*"
+}
+
+# The stages of STAGES that are not among the walked ones: left out of every additive row.
+others=()
+for stage in "${STAGES[@]}"; do
+	[[ " ${walk[*]} " == *" $stage "* ]] || others+=("$stage")
+done
+
+[ "$pass_thru" -eq 1 ] || log_title "Measuring Shell Startup ($mode, $runs run(s) each, ${shell##*/})"
+env FOUNDATION_STARTUP_TRACE=/dev/null FOUNDATION_TTY=/dev/null "$shell" -i -c exit </dev/null >/dev/null 2>&1
+if [ "$pass_thru" -eq 1 ]; then
+	printf 'Configuration\tRuns\tMin\tMedian\tMax\tDelta\tInShell\n'
+else
+	printf '\n  %-22s %7s %7s %7s %7s %8s\n' Configuration Min Median Max Delta InShell
+fi
+row() { # NAME MIN MEDIAN MAX DELTA IN-SHELL
+	if [ "$pass_thru" -eq 1 ]; then
+		printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$runs" "$2" "$3" "$4" "$5" "$6"
+	else
+		printf '  %-22s %7s %7s %7s %7s %8s\n' "$@"
+	fi
+}
+
+if [ "$mode" = additive ]; then
+	previous=''
+	if [ -n "$no_rc" ]; then
+		read -r low mid high <<<"$(measure bare '' bare)"
+		row "bare (no rc)" "$low" "$mid" "$high" - -
+		previous=$mid
+	fi
+	read -r low mid high <<<"$(measure core "$(joined "${STAGES[@]}")")"
+	delta=-
+	[ -z "$previous" ] || delta=$((mid - previous))
+	row Core "$low" "$mid" "$high" "$delta" -
+	previous=$mid
+	for ((i = 0; i < ${#walk[@]}; i++)); do
+		stage=${walk[i]}
+		read -r low mid high <<<"$(measure "$stage" "$(joined "${others[@]}" "${walk[@]:i+1}")")"
+		row "+ $stage" "$low" "$mid" "$high" "$((mid - previous))" "$(in_shell "$stage" "$stage")"
+		previous=$mid
+	done
+else
+	read -r low full high <<<"$(measure full '')"
+	row Full "$low" "$full" "$high" - -
+	for stage in "${walk[@]}"; do
+		read -r low mid high <<<"$(measure "$stage" "$stage")"
+		row "- $stage" "$low" "$mid" "$high" "$((full - mid))" "$(in_shell full "$stage")"
+	done
+fi
+[ "$pass_thru" -eq 1 ] || log_success "Shell startup measured!"

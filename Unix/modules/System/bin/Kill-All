@@ -1,0 +1,313 @@
+#!/usr/bin/env bash
+# Kill-All - closes everything: browsers, every app with a window, named apps, terminal tabs.
+#
+# Usage: Kill-All [PATTERN...] [--exclude PATTERN...] [--skip STEP...] [--include STEP...] [--include-current] [--reload-profile]
+#
+# Steps, in order, with defaults from Unix/config/kill-all.conf (a step with no line there
+# behaves like the base file's line: on, except MoveTerminal, CenterTerminal and ReloadProfile):
+#   VirtualDesktops  focus desktop 1 (AeroSpace workspaces vanish when emptied)
+#   Docker           stop running containers and quit Docker Desktop (Open-Docker --stop)
+#   Browsers         quit every configured browser; with --exclude matches, close only its
+#                    other windows
+#   VisibleWindows   quit every app with a window except browsers and the `keep` apps
+#                    (Finder, ...); --exclude keeps an app, closing its other windows. The
+#                    Terminal role is never quit (this runs in it); without any `keep` line the
+#                    step warns and quits nothing, as on Windows
+#   NamedProcesses   quit the `quit` apps: an apps.conf token, else a bundle id, else - when no
+#                    app answers to it - a process by its exact name (a daemon or helper, as
+#                    TerminateProcessNames ends VBoxSVC): pkill, then pkill -9 after 5 s.
+#                    Without any `quit` line it warns, as on Windows
+#   TerminalTabs     close every WezTerm tab but this one (--include-current: this one too)
+#   MoveTerminal     off by default: move the terminal window to desktop 1 (skipped with
+#                    --include-current, which closes it)
+#   CenterTerminal   off by default on Unix: center this terminal (Center-Terminal; skipped
+#                    quietly without the Accessibility permission)
+#   FocusTerminal    focus the terminal window this runs in
+#   ReloadProfile    off by default (--reload-profile, or --reload-power-shell-profile as on
+#                    Windows, turns it on); prints how to reload the shell
+# Apps are quit the way Cmd+Q does and killed after 5 s if they ignore it - except browsers, which
+# are never killed, as on Windows: a browser still running 4 s after the quit request is asked
+# once more, and one still running 2 s later is named in a warning and left alone (it is holding
+# a dialog - unsaved form data, a download, "close all tabs?" - that killing would answer for
+# the user). --exclude takes
+# window-title or app patterns (Windows semantics: *YouTube*, regex, exact app name).
+# When Browsers, VisibleWindows and NamedProcesses all ran, it clears the Close-Workspace record
+# and audits what is left (Report-KillAllSurvivors): every window AeroSpace still lists, minus the
+# keep apps, the terminal, Finder and --exclude matches, is reported, and the run ends with a warning instead of
+# the success line (exit status 0; a survivor is usually a dialog waiting for an answer).
+# A flag it does not know (a typo, -WhatIf) or a step name that is none of the above stops it
+# before anything is closed, as on Windows.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config steps apps drivers/aerospace drivers/wezterm state docker
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+excludes=()
+skips=()
+includes=()
+include_current=0
+list=''
+while [ $# -gt 0 ]; do
+	case $1 in
+		--exclude) list=excludes ;;
+		--skip) list=skips ;;
+		--include) list=includes ;;
+		--include-current)
+			include_current=1
+			list=''
+			;;
+		--reload-power-shell-profile | --reload-profile)
+			includes+=(ReloadProfile)
+			list=''
+			;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1 - nothing was closed" ;;
+		*)
+			# Comma lists work as in PowerShell (-Exclude Claude,Code); a bare value with no
+			# preceding flag is an exclude pattern, because -Exclude is the first positional
+			# parameter on Windows (Kill-All Claude).
+			IFS=, read -r -a values <<<"$1"
+			for value in "${values[@]}"; do
+				value=$(foundation_trim "$value")
+				[ -n "$value" ] || continue
+				case $list in
+					skips) skips+=("$value") ;;
+					includes) includes+=("$value") ;;
+					*) excludes+=("$value") ;;
+				esac
+			done
+			;;
+	esac
+	shift
+done
+
+config=$(conf_path kill-all.conf) || config=''
+# Step toggles (lib/steps.sh): kill-all.conf, then --include, then --skip, which wins.
+# shellcheck disable=SC2034 # read by step_on
+{
+	STEP_CONFIG=$config
+	STEP_SKIPS=(${skips[@]+"${skips[@]}"})
+	STEP_INCLUDES=(${includes[@]+"${includes[@]}"})
+}
+steps_validate VirtualDesktops Docker Browsers VisibleWindows NamedProcesses TerminalTabs MoveTerminal \
+	CenterTerminal FocusTerminal ReloadProfile
+
+config_tokens() {
+	[ -n "$config" ] || return 0
+	conf_lines "$config" | awk -v k="$1" '$1 == k { print $2 }'
+}
+
+excluded() { # TOKEN TITLE [APP-NAME]
+	[ ${#excludes[@]} -gt 0 ] || return 1
+	foundation_match_any "$1" "$2" "${excludes[@]}" && return 0
+	# Also accept the name macOS shows for the app ("Visual Studio Code").
+	[ -n "${3:-}" ] && foundation_match_any "$3" '' "${excludes[@]}"
+}
+
+log_title "Kill All"
+as_start || foundation_die "AeroSpace is required to enumerate windows - aborting"
+
+browser_tokens=$(app_role_members Browser)
+is_browser() { printf '%s\n' "$browser_tokens" | grep -qixF -- "$1"; }
+
+# Quits the app of BUNDLE, or closes its windows one by one when an --exclude keeps one. With
+# --no-force the app is only asked to quit and its bundle is added to asked_bundles.
+process_app() { # BUNDLE LABEL [--no-force]
+	local bundle=$1 label=$2 windows kept=0 id token name title
+	windows=$(as_windows | awk -F'\t' -v b="$bundle" '$3 == b')
+	while IFS=$'\t' read -r id token _ _ _ name title; do
+		[ -n "$id" ] && excluded "$token" "$title" "$name" && kept=1
+	done <<<"$windows"
+	if [ "$kept" -eq 0 ]; then
+		if [ "${3:-}" = --no-force ]; then
+			app_quit "$bundle" && log_debug "asked $label to quit"
+			asked_bundles+=("$bundle")
+		else
+			app_quit "$bundle" --force 5 && log_debug "quit $label"
+		fi
+		quit_count=$((quit_count + 1))
+		return
+	fi
+	while IFS=$'\t' read -r id token _ _ _ name title; do
+		[ -n "$id" ] || continue
+		if excluded "$token" "$title" "$name"; then
+			log_debug "keeping [$token] [$title] (excluded)"
+			continue
+		fi
+		as_close_window "$id" && close_count=$((close_count + 1))
+	done <<<"$windows"
+}
+
+if step_on VirtualDesktops on; then
+	as_focus_workspace 1
+	log_debug "AeroSpace workspaces disappear when emptied - nothing to remove"
+fi
+step_on Docker on && docker_stop
+
+if step_on Browsers on; then
+	log_step "Quitting browsers..."
+	quit_count=0
+	close_count=0
+	asked_bundles=()
+	for token in $browser_tokens; do
+		bundle=$(app_bundle "$token") || continue
+		[ -n "$(app_pids "$bundle")" ] || continue
+		process_app "$bundle" "$token" --no-force
+	done
+	# Terminate-AllBrowserProcesses: wait, ask once more, wait, report - never force-kill.
+	still=()
+	if [ ${#asked_bundles[@]} -gt 0 ]; then
+		while IFS= read -r bundle; do [ -n "$bundle" ] && still+=("$bundle"); done \
+			< <(app_wait_quit "${FOUNDATION_BROWSER_QUIT_SECONDS:-4}" "${asked_bundles[@]}")
+	fi
+	if [ ${#still[@]} -gt 0 ]; then
+		log_debug "${#still[@]} browser(s) still running after the first quit request - asking again"
+		for bundle in "${still[@]}"; do app_quit "$bundle"; done
+		retry=("${still[@]}")
+		still=()
+		while IFS= read -r bundle; do [ -n "$bundle" ] && still+=("$bundle"); done \
+			< <(app_wait_quit "${FOUNDATION_BROWSER_RETRY_SECONDS:-2}" "${retry[@]}")
+	fi
+	if [ ${#still[@]} -gt 0 ]; then
+		log_warning "${#still[@]} browser(s) did not quit (a dialog may be waiting for an answer) - left running:"
+		# Each survivor by its windows, as Windows lists the window titles; a browser with no
+		# window AeroSpace lists is named by its bundle id.
+		for bundle in "${still[@]}"; do
+			lines=$(as_windows | awk -F'\t' -v b="$bundle" '$3 == b { print ($7 == "" ? "(untitled)" : $7) " (" $6 ")" }')
+			[ -n "$lines" ] || lines=$bundle
+			printf '  - %s\n' "${lines//$'\n'/$'\n'  - }"
+		done
+	else
+		log_success "Browsers processed ($quit_count quit, $close_count window(s) closed)!"
+	fi
+fi
+
+if step_on VisibleWindows on; then
+	log_step "Quitting applications with visible windows..."
+	keep=$(config_tokens keep)
+	quit_count=0
+	close_count=0
+	if [ -z "$keep" ]; then
+		# Terminate-AllProcessesWithVisibleWindows: without exclusions the sweep would take the
+		# terminal running this with it, so it quits nothing.
+		log_warning "No keep lines in kill-all.conf - no application with a visible window was quit"
+	else
+		for bundle in $(as_windows | cut -f3 | sort -u); do
+			token=$(as_windows | awk -F'\t' -v b="$bundle" '$3 == b { print $2; exit }')
+			is_browser "$token" && continue
+			# The terminal this runs in is never quit, whatever the keep lines say: the
+			# TerminalTabs step closes its tabs.
+			app_matches Terminal "$token" && continue
+			skip=0
+			for k in $keep; do app_matches "$k" "$token" && skip=1; done
+			[ "$bundle" = "com.apple.finder" ] && skip=1
+			[ "$skip" -eq 1 ] && continue
+			process_app "$bundle" "$token"
+		done
+		log_success "Applications processed ($quit_count quit, $close_count window(s) closed)!"
+	fi
+fi
+
+# Terminate-AllProcessesByName for a process that is no app: TERM, then KILL after 5 s.
+quit_process() { # NAME
+	local waited=0
+	pgrep -xq -- "$1" || return 1
+	pkill -x -- "$1"
+	while pgrep -xq -- "$1" && [ "$waited" -lt 25 ]; do
+		sleep 0.2
+		waited=$((waited + 1))
+	done
+	pgrep -xq -- "$1" && pkill -9 -x -- "$1"
+	log_debug "[Kill-All] ended process [$1]"
+	return 0
+}
+
+if step_on NamedProcesses on; then
+	log_step "Quitting named applications..."
+	count=0
+	tokens=$(config_tokens quit)
+	[ -n "$tokens" ] || log_warning "No quit lines in kill-all.conf - no named application to quit"
+	for token in $tokens; do
+		if ! bundle=$(app_bundle "$token"); then
+			bundle=$token
+			# Neither a token nor a running app's bundle id: a process by its exact name.
+			if [ -z "$(app_pids "$bundle")" ]; then
+				quit_process "$token" && count=$((count + 1))
+				continue
+			fi
+		fi
+		keep_it=0
+		while IFS=$'\t' read -r id wt _ _ _ name title; do
+			[ -n "$id" ] && excluded "$wt" "$title" "$name" && keep_it=1
+		done < <(as_windows | awk -F'\t' -v b="$bundle" '$3 == b')
+		if [ "$keep_it" -eq 1 ]; then
+			log_debug "keeping [$token] (excluded window)"
+			continue
+		fi
+		app_quit "$bundle" --force 5 && count=$((count + 1))
+	done
+	log_success "Named applications processed ($count)!"
+fi
+
+sleep 0.5
+
+survivors=0
+if step_on Browsers on && step_on VisibleWindows on && step_on NamedProcesses on; then
+	while IFS= read -r key; do state_forget "$key"; done < <(state_keys)
+	# Report-KillAllSurvivors: browsers are not exempt, they were quit and waited for.
+	keep=$(config_tokens keep)
+	report=()
+	while IFS=$'\t' read -r id token bundle pid _ name title; do
+		[ -n "$id" ] || continue
+		[ "$bundle" = com.apple.finder ] && continue
+		app_matches Terminal "$token" && continue
+		kept=0
+		for k in $keep; do app_matches "$k" "$token" && kept=1; done
+		[ "$kept" -eq 1 ] && continue
+		excluded "$token" "$title" "$name" && continue
+		report+=("${title:-(untitled)} (${name:-$token}, PID $pid)")
+	done < <(as_windows)
+	survivors=${#report[@]}
+	if [ "$survivors" -gt 0 ]; then
+		log_warning "$survivors window(s) survived the cleanup:"
+		printf '  - %s\n' "${report[@]}"
+	fi
+fi
+
+if step_on TerminalTabs on; then
+	if [ "$include_current" -eq 1 ]; then
+		foundation_run Terminate-WindowsTerminalTabs --include-current
+	else
+		foundation_run Terminate-WindowsTerminalTabs
+	fi
+fi
+
+# A child process cannot reload the shell that started it; point at the shell function.
+step_on ReloadProfile && log_step "Reload the shell configuration with => Reload-Profile"
+
+if [ "$include_current" -eq 0 ]; then
+	# Focus-TerminalTab finds this shell's window and focuses it, so it is the focused one.
+	if step_on MoveTerminal && foundation_run Focus-TerminalTab --quiet; then
+		terminal=$(as_focused_window)
+		if [ -n "$terminal" ] && [ "$(as_windows | awk -F'\t' -v i="$terminal" '$1 == i { print $5; exit }')" != 1 ]; then
+			as_move_window "$terminal" 1 && log_debug "[Kill-All] moved the terminal to desktop 1"
+			as_focus_window "$terminal"
+		fi
+	fi
+	step_on CenterTerminal && { foundation_run Center-Terminal >/dev/null 2>&1 || log_debug "[Kill-All] CenterTerminal skipped (Center-Terminal failed - Accessibility permission?)"; }
+	step_on FocusTerminal on && foundation_run Focus-TerminalTab --quiet
+fi
+
+if [ "$survivors" -gt 0 ]; then
+	log_warning "Kill All finished - $survivors window(s) survived the cleanup (see above)"
+else
+	log_success "Kill All finished successfully!"
+fi

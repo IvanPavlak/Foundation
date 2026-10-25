@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# Rename-Machine - sets the Mac's name to one configured in machines.conf, or a new one.
+#
+# Usage: Rename-Machine [NAME] [--override]
+#
+# The configured names are the `host` lines of Unix/config/machines.conf (HostnameToMachineType).
+# When the current name already is one of them nothing changes, unless --override. Otherwise
+# NAME, or the name picked from a menu of the configured names (its last entry, Enter new name,
+# asks for a new one), is set as the ComputerName, HostName and LocalHostName through scutil,
+# which asks for the administrator password. LocalHostName (the .local Bonjour name) gets spaces
+# replaced by hyphens. That host name must follow the Windows naming rules: at most 63 characters,
+# only letters, digits and hyphens, not digits alone; it is checked before any scutil call, so a
+# rejected name never leaves the Mac half renamed. A typed new name that breaks them is asked
+# again; a NAME argument that breaks them stops the command. A flag it does not know is an
+# error, never taken for the name.
+# Windows-style names: --name (-Name) NAME is the same as a bare NAME.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+name=''
+override=0
+while [ $# -gt 0 ]; do
+	case $1 in
+		--override) override=1 ;;
+		--name)
+			name=$2
+			shift
+			;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1 - the name was not changed" ;;
+		*) name=$1 ;;
+	esac
+	shift
+done
+
+command -v scutil >/dev/null 2>&1 || foundation_die "scutil is required (macOS only)"
+file=$(conf_path machines.conf) || foundation_die "Missing Unix/config/machines.conf"
+configured=()
+while IFS= read -r line; do
+	set -- $line
+	[ "$1" = host ] && [ -n "${2:-}" ] && configured+=("$2")
+done < <(conf_lines "$file")
+current=$(foundation_hostname)
+
+# The naming rules of the Windows Rename-Machine, on the host name NAME becomes (spaces
+# hyphenated): every rule it breaks is reported. Succeeds when NAME is valid.
+valid_name() { # NAME
+	local host=${1// /-} valid=0
+	if [ ${#host} -gt 63 ]; then
+		log_error "Name cannot be longer than 63 characters!"
+		valid=1
+	fi
+	if [[ $host =~ ^[0-9]+$ ]]; then
+		log_error "Name cannot consist entirely of numbers!"
+		valid=1
+	fi
+	if ! [[ $host =~ ^[A-Za-z0-9-]+$ ]]; then
+		log_error "Name can only contain letters (a-z), numbers (0-9), hyphens (-) and spaces (which become hyphens)!"
+		valid=1
+	fi
+	return $valid
+}
+
+log_title "Rename Machine"
+if [ -z "$name" ] && [ "$override" -eq 0 ]; then
+	for host in "${configured[@]}"; do
+		if foundation_ieq "$host" "$current"; then
+			log_success "Machine name is already configured => $current (machine type $(foundation_machine_type))"
+			exit 0
+		fi
+	done
+fi
+
+if [ -z "$name" ]; then
+	[ ${#configured[@]} -gt 0 ] || foundation_die "No host lines in machines.conf - pass the new name"
+	# The menu takes only its own options, so a new name is its own last entry, then typed.
+	new_option="Enter new name"
+	log_step "Current name => $current"
+	selection=$(foundation_resolve_selection "[Configured machine names]" "Enter a name by number or name" 0 0 "${configured[@]}" "$new_option") || exit 1
+	if [ "$selection" = "$new_option" ]; then
+		# Asked again until the name is valid, as on Windows; the terminal is opened once, so a
+		# second answer follows the first.
+		exec 3<"${FOUNDATION_TTY:-/dev/tty}" || foundation_die "No terminal to read the new name from"
+		while :; do
+			printf '\nProvide new machine name (or press Enter to cancel): ' >&2
+			IFS= read -r name <&3 || name=''
+			name=$(foundation_trim "$name")
+			[ -n "$name" ] || foundation_die "Machine renaming cancelled"
+			valid_name "$name" && break
+		done
+		exec 3<&-
+	else
+		name=$selection
+	fi
+fi
+[ -n "$name" ] || foundation_die "No name given"
+if [ "$name" = "$current" ]; then
+	log_success "Machine name is already $name"
+	exit 0
+fi
+
+valid_name "$name" || foundation_die "Invalid machine name [$name] - the name was not changed"
+local_name=${name// /-}
+log_step "Renaming $current => $name (administrator password required)"
+sudo scutil --set ComputerName "$name" &&
+	sudo scutil --set HostName "$local_name" &&
+	sudo scutil --set LocalHostName "$local_name" || foundation_die "Renaming failed"
+log_success "Machine renamed to $name!"

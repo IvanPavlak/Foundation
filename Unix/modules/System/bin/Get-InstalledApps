@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# Get-InstalledApps - writes the installed applications to installed_apps.txt on the Desktop.
+#
+# Usage: Get-InstalledApps [--output PATH]
+#
+# The Unix twin of the Windows Get-InstalledApps (which reads the registry's Uninstall keys). Lists,
+# each sorted under its own heading: the Homebrew formulae installed on request (`brew leaves`,
+# not the dependencies) and casks with their versions, the App Store apps (`mas list`), and every
+# app bundle in /Applications and ~/Applications with its version. A source whose tool is missing
+# is skipped with a note in the file. --output writes somewhere else than
+# ~/Desktop/installed_apps.txt.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+output=$HOME/Desktop/installed_apps.txt
+while [ $# -gt 0 ]; do
+	case $1 in
+		--output)
+			output=$2
+			shift
+			;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument => $1" ;;
+	esac
+	shift
+done
+
+# The version of an app bundle (CFBundleShortVersionString), empty when it has none.
+bundle_version() {
+	defaults read "$1/Contents/Info" CFBundleShortVersionString 2>/dev/null || true
+}
+
+# Prints the report.
+report() {
+	printf 'Installed applications on %s, %s\n' "$(scutil --get ComputerName 2>/dev/null || hostname)" "$(date '+%Y-%m-%d %H:%M')"
+	printf '\n[Homebrew formulae]\n'
+	if command -v brew >/dev/null 2>&1; then
+		# One listing of every formula with its versions, kept for the ones installed on request.
+		brew list --formula --versions 2>/dev/null | awk 'NR == FNR { wanted[$1] = 1; next } $1 in wanted { print $1, $NF }' <(brew leaves 2>/dev/null) - | LC_ALL=C sort
+		printf '\n[Homebrew casks]\n'
+		brew list --cask --versions 2>/dev/null | LC_ALL=C sort
+	else
+		printf '(Homebrew is not installed)\n'
+	fi
+	printf '\n[App Store]\n'
+	if command -v mas >/dev/null 2>&1; then
+		mas list 2>/dev/null | LC_ALL=C sort -k2
+	else
+		printf '(mas is not installed)\n'
+	fi
+	printf '\n[Applications]\n'
+	local app
+	for app in /Applications/*.app "$HOME"/Applications/*.app; do
+		[ -d "$app" ] || continue
+		printf '%s %s\n' "$(basename "$app" .app)" "$(bundle_version "$app")"
+	done | LC_ALL=C sort -f
+}
+
+log_title "Exporting Installed Apps"
+mkdir -p "$(dirname "$output")" || foundation_die "Cannot create [$(dirname "$output")]"
+report >"$output" || foundation_die "Could not write [$output]"
+count=$(grep -cvE '^(\[|\(|$|Installed applications)' "$output")
+log_success "Exported $count installed app(s) => [$output]"

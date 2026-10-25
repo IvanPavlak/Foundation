@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# Invoke-GoogleTranslate - translates text with Google Translate. Alias: translate
+#
+# Usage: Invoke-GoogleTranslate [--input-language LANGUAGE] [--output-language LANGUAGE] TEXT...
+#
+# TEXT may be several words without quotes. The source language is detected unless
+# --input-language names one (auto, detect or automatic also detect it); the target defaults to
+# `output` in Unix/config/translate.conf (DefaultTranslateLanguages.OutputLanguage). Languages
+# are English names (Croatian, German, Chinese) or their codes (hr, de, zh-CN), the list of the
+# Windows function; an unsupported one fails with the supported names. Uses the same public
+# endpoint as the Windows function. The Windows-style --text TEXT adds TEXT as one more word.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+languages='Afrikaans af;Albanian sq;Arabic ar;Armenian hy;Azerbaijani az;Basque eu;Belarusian be;Bengali bn;Bosnian bs;Bulgarian bg;Catalan ca;Chinese zh-CN;Croatian hr;Czech cs;Danish da;Dutch nl;English en;Estonian et;Finnish fi;French fr;Galician gl;Georgian ka;German de;Greek el;Gujarati gu;Hebrew he;Hindi hi;Hungarian hu;Icelandic is;Indonesian id;Irish ga;Italian it;Japanese ja;Kannada kn;Kazakh kk;Korean ko;Latvian lv;Lithuanian lt;Macedonian mk;Malay ms;Maltese mt;Mongolian mn;Norwegian no;Persian fa;Polish pl;Portuguese pt;Romanian ro;Russian ru;Serbian sr;Slovak sk;Slovenian sl;Spanish es;Swahili sw;Swedish sv;Tamil ta;Telugu te;Thai th;Turkish tr;Ukrainian uk;Urdu ur;Uzbek uz;Vietnamese vi;Welsh cy'
+
+# Prints "NAME CODE" for a language name or code, fails when unknown.
+language() {
+	printf '%s' "$languages" | tr ';' '\n' | awk -v want="$(foundation_lower "$1")" 'tolower($1) == want || tolower($2) == want { print; found = 1; exit } END { exit found ? 0 : 1 }'
+}
+
+# Fails with the unsupported language and the supported names, as on Windows.
+unsupported() { # DIRECTION LANGUAGE
+	log_error "Unsupported $1 language: [$2]"
+	printf 'Supported:\n' >&2
+	printf '%s' "$languages" | tr ';' '\n' | awk '{ print "  - " $1 }' >&2
+	exit 1
+}
+
+input=''
+output=''
+words=()
+while [ $# -gt 0 ]; do
+	case $1 in
+		--input-language)
+			input=$2
+			shift
+			;;
+		--output-language)
+			output=$2
+			shift
+			;;
+		--text)
+			words+=("$2")
+			shift
+			;;
+		-v | --verbose) ;;
+		*) words+=("$1") ;;
+	esac
+	shift
+done
+[ ${#words[@]} -gt 0 ] || foundation_die "Usage: translate [--output-language LANGUAGE] TEXT..."
+
+if [ -z "$output" ]; then
+	if file=$(conf_path translate.conf); then output=$(conf_value "$file" output) || output=''; fi
+	[ -n "$output" ] || output=English
+fi
+target=$(language "$output") || unsupported output "$output"
+source_code=auto
+case $(foundation_lower "$input") in
+	'' | auto | detect | automatic) ;;
+	*)
+		source=$(language "$input") || unsupported input "$input"
+		source_code=${source##* }
+		;;
+esac
+
+command -v jq >/dev/null 2>&1 || foundation_die "jq is required => brew install jq"
+response=$(curl -sS -A 'Mozilla/5.0' -w '\n%{http_code}' --get "https://translate.googleapis.com/translate_a/single" \
+	--data-urlencode "client=gtx" --data-urlencode "sl=$source_code" \
+	--data-urlencode "tl=${target##* }" --data-urlencode "dt=t" \
+	--data-urlencode "q=${words[*]}" 2>&1) || foundation_die "Translation failed: $response"
+code=${response##*$'\n'}
+response=${response%$'\n'*}
+case $code in
+	200) ;;
+	429) foundation_die "Google Translate is rate-limiting this network (HTTP 429) - try again later" ;;
+	*) foundation_die "Translation failed: HTTP $code" ;;
+esac
+translated=$(printf '%s' "$response" | jq -r '[.[0][] | .[0] // empty] | join("")') || foundation_die "Unexpected answer from Google Translate"
+if log_use_color 1; then
+	printf '\n\033[32m[%s] => %s\033[0m\n' "${target% *}" "$translated"
+else
+	printf '\n[%s] => %s\n' "${target% *}" "$translated"
+fi

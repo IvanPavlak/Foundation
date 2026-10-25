@@ -1,0 +1,283 @@
+#!/usr/bin/env bash
+# Update-Repositories - clones missing repositories and updates existing ones without losing local work.
+#
+# Usage: Update-Repositories [GROUP|NAME...] [--all] [--archive] [--in-current-directory]
+#                            [--no-clone] [--quiet]
+#                            [--include-default-branch | --no-include-default-branch]
+#        Update-Repositories --group GROUP... | --repositories NAME... [OPTIONS]
+#        Update-Repositories --repository-url URL --local-path DIR [OPTIONS]
+#
+# Repositories and groups come from Unix/config/repositories.conf. Without arguments a menu of
+# the groups and repositories is shown (a flat stand-in for the hierarchical Windows menu). A bare
+# name matches a group first, then a repository; an unknown one is reported and the others run.
+# Repositories run in file order and each folder at most once (a repository listed in two groups,
+# or two entries with the same DIR); entries that share a name but not a folder all run.
+#
+# A missing (or empty) directory is cloned (base URL + path; `--depth 1` when the line ends in
+# `shallow`, a clone that can still commit and push). An existing checkout is updated the safe way
+# (Unix/lib/repository.sh): a path that is not the top of its own repository, a merge, rebase,
+# cherry-pick, revert or bisect in progress, unresolved conflicts, or a detached HEAD is left
+# alone; local changes, untracked files included, are stashed by commit and restored exactly
+# (staged changes stay staged); the branch is fetched and only fast-forwarded, never merged, and
+# never over an ignored local file; a branch origin does not have, or an origin that cannot be
+# reached, is reported instead of pulled. A stash that cannot be restored cleanly is kept.
+#
+#   --all                        every repository
+#   --group GROUP...             the Windows -Group: every name is a group; one that is not
+#                                aborts the call with the configured groups, nothing updated
+#   --repositories NAME...       the Windows -Repositories: every name is a repository, never a
+#                                group of the same name
+#   --repository-url URL --local-path DIR
+#                                one repository outside repositories.conf (the Windows custom
+#                                mode): cloned into DIR when missing, updated safely otherwise
+#                                (shallow when a `shallow` line of the file has the same URL)
+#   --archive                    clone without history (shallow, .git removed) into
+#                                ~/Desktop/<name>, never the configured path, as on Windows; one
+#                                whose folder exists is skipped with a warning (none with
+#                                --quiet) and left out of the totals
+#   --in-current-directory       clone (and update) into ./<name> instead of the configured
+#                                paths; with --archive the copies land there instead of the
+#                                Desktop (the Windows -InCurrentDirectory)
+#   --no-clone                   report missing repositories as skipped instead of cloning them
+#   --quiet                      one line per repository plus a totals line, git silenced
+#   --include-default-branch     also fast-forward each default branch while another one is
+#                                checked out (git fetch origin <default>:<default>); default from
+#                                `include-default-branch on|off` in repositories.conf
+#   --no-include-default-branch  turn that off for this run
+#
+# --all, --group, --repositories and the URL/path pair are separate modes, as the Windows parameter
+# sets: one per call, and the pair takes no names. `A,B` names two groups or repositories; a flag it
+# does not know is an error.
+# Exit status 1 when a repository needs attention (could not be updated or restored).
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config repository
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+file=$(conf_path repositories.conf) || foundation_die "Missing Unix/config/repositories.conf"
+base=$(conf_value "$file" base) || base=https://github.com
+
+# A top-level `KEY VALUE` of repositories.conf for this machine type (@TYPE lines), the last
+# match winning. Usage: setting KEY DEFAULT
+setting() {
+	local key=$1 value=$2 line k v
+	while IFS= read -r line; do
+		read -r k v <<<"$line"
+		foundation_ieq "$k" "$key" && value=$v
+	done < <(conf_lines "$file")
+	printf '%s' "$value"
+}
+
+names=()
+all=0
+archive=0
+in_current=0
+no_clone=0
+quiet=0
+include_default=''
+mode=''
+custom_url=''
+custom_dir=''
+# One mode per call, as the Windows parameter sets. Usage: set_mode MODE
+set_mode() {
+	[ -z "$mode" ] || [ "$mode" = "$1" ] || foundation_die "--$mode and --$1 are separate modes - nothing was updated"
+	mode=$1
+}
+while [ $# -gt 0 ]; do
+	case $1 in
+		--all) all=1 ;;
+		--archive) archive=1 ;;
+		--in-current-directory) in_current=1 ;;
+		--no-clone) no_clone=1 ;;
+		--quiet) quiet=1 ;;
+		--include-default-branch) include_default=1 ;;
+		--no-include-default-branch) include_default=0 ;;
+		--group) set_mode group ;;
+		--repositories) set_mode repositories ;;
+		--repository-url | --local-path)
+			set_mode repository-url
+			[ $# -ge 2 ] || foundation_die "$1 needs a value - nothing was updated"
+			if [ "$1" = --repository-url ]; then custom_url=$2; else custom_dir=$2; fi
+			shift
+			;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1 - nothing was updated" ;;
+		*) foundation_split_list names "$1" ;;
+	esac
+	shift
+done
+[ "$all" -eq 0 ] || [ -z "$mode" ] || foundation_die "--all and --$mode are separate modes - nothing was updated"
+case $mode in
+	repository-url)
+		[ -n "$custom_url" ] && [ -n "$custom_dir" ] || foundation_die "--repository-url and --local-path go together - nothing was updated"
+		[ ${#names[@]} -eq 0 ] || foundation_die "--repository-url takes no group or repository names - nothing was updated"
+		;;
+	group | repositories)
+		[ ${#names[@]} -gt 0 ] || foundation_die "--$mode needs at least one name - nothing was updated"
+		;;
+esac
+if [ -z "$include_default" ]; then
+	case $(foundation_lower "$(setting include-default-branch off)") in on | true | yes | 1) include_default=1 ;; *) include_default=0 ;; esac
+fi
+REPO_DEFAULT_CONFIGURED=$(setting default-branch '')
+export REPO_DEFAULT_CONFIGURED
+
+groups=()
+while IFS= read -r group; do groups+=("$group"); done < <(conf_sections "$file")
+if [ "$all" -eq 1 ]; then
+	names=("${groups[@]}")
+elif [ "$mode" = group ]; then
+	# Every name is checked first, as Resolve-RepositoryTargets: a typo updates nothing instead of
+	# half the groups.
+	resolved=$(repo_scope_groups "$file" --group "${names[@]}") || exit 1
+	names=()
+	while IFS= read -r name; do [ -n "$name" ] && names+=("$name"); done <<<"$resolved"
+elif [ -z "$mode" ] && [ ${#names[@]} -eq 0 ]; then
+	# Flat stand-in for the hierarchical Windows menu: the groups first, then every repository.
+	options=("${groups[@]}")
+	for group in "${groups[@]}"; do
+		while read -r repo _; do [ -n "$repo" ] && options+=("$repo"); done < <(conf_section "$file" "$group")
+	done
+	selection=$(foundation_resolve_selection "[Available Repositories]" "Enter repository/repositories by number or name" 0 1 "${options[@]}") || exit 1
+	while IFS= read -r name; do [ -n "$name" ] && names+=("$name"); done <<<"$selection"
+fi
+
+# Collect "GROUP LINE" (LINE as repositories.conf writes it) in file order. The URL/path pair is
+# one entry of its own, under the group `-`, shallow when a `shallow` line has the same URL.
+selected=''
+if [ "$mode" = repository-url ]; then
+	custom_name=${custom_url%/}
+	custom_name=${custom_name##*[:/]}
+	custom_name=${custom_name%.git}
+	shallow_word=''
+	repo_url_shallow "$file" "$(repo_resolve_url "$custom_url" "$base")" && shallow_word=' shallow'
+	selected="- ${custom_name:-repository} $custom_url $custom_dir$shallow_word"$'\n'
+fi
+for name in "${names[@]}"; do
+	if [ "$mode" != repositories ] && lines=$(conf_section "$file" "$name"); then
+		group_name=$(conf_section_name "$file" "$name")
+		while IFS= read -r line; do [ -n "$line" ] && selected+="$group_name $line"$'\n'; done <<<"$lines"
+		continue
+	fi
+	found=0
+	for group in "${groups[@]}"; do
+		while IFS= read -r line; do
+			read -r repo _ <<<"$line"
+			if [ -n "$repo" ] && foundation_ieq "$repo" "$name"; then
+				selected+="$group $line"$'\n'
+				found=1
+			fi
+		done < <(conf_section "$file" "$group")
+	done
+	if [ "$found" -eq 0 ]; then
+		if [ "$mode" = repositories ]; then
+			log_error "No repository named [$name] in repositories.conf"
+		else
+			log_error "No group or repository named [$name] in repositories.conf"
+		fi
+	fi
+done
+
+# A quiet run over several groups prints one heading per group.
+distinct_groups=$(printf '%s' "$selected" | awk 'NF && !seen[$1]++' | wc -l | tr -d ' ')
+[ "$quiet" -eq 1 ] || log_title "Update-Repositories"
+
+seen=$'\n'
+current_group=''
+first_after_heading=0
+updated=0
+up_to_date=0
+attention=0
+skipped=0
+while read -r group line; do
+	[ -n "$line" ] || continue
+	repo_entry "$line"
+	repo=$REPO_ENTRY_NAME
+	shallow=$REPO_ENTRY_SHALLOW
+	dir=$(foundation_expand_path "$REPO_ENTRY_DIR")
+	# Each folder once, as Windows dedupes by LocalPath: a repository listed in two groups is
+	# updated once, two entries that only share a name are not merged. Without a folder on this
+	# machine the name is the key.
+	key=$dir
+	[ -n "$key" ] || key="name:$repo"
+	case $seen in *$'\n'"$key"$'\n'*) continue ;; esac
+	seen="$seen$key"$'\n'
+	url=$(repo_resolve_url "$REPO_ENTRY_SOURCE" "$base")
+	# Printed under the repository's own name, from its URL, like Get-RepositoryName on Windows:
+	# /Owner/My_Repo.git is [My_Repo], whatever the entry is called.
+	name=${url%/}
+	name=${name##*[:/]}
+	name=${name%.git}
+	[ -n "$name" ] || name=$repo
+	# As on Windows: an archive never lands in the configured path (a later normal run expects a
+	# clone there) but on the Desktop, and --in-current-directory puts everything here.
+	if [ "$in_current" -eq 1 ]; then
+		dir=$PWD/$name
+	elif [ "$archive" -eq 1 ]; then
+		dir=$HOME/Desktop/$name
+	fi
+	if [ "$quiet" -eq 1 ] && [ "$distinct_groups" -gt 1 ] && [ "$group" != "$current_group" ]; then
+		current_group=$group
+		log_title "$group"
+		first_after_heading=1
+	fi
+
+	if [ -z "$dir" ]; then
+		repo_result "$name" NotConfigured
+		[ "$quiet" -eq 1 ] || log_warning "Skipping [$name] => no local path on this machine!"
+	elif [ -e "$dir" ] && { [ -n "$(ls -A "$dir" 2>/dev/null)" ] || git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; }; then
+		if [ "$archive" -eq 1 ]; then
+			[ "$quiet" -eq 1 ] || log_warning "Skipping [$name] => already exists at [$dir]"
+			continue
+		fi
+		repo_update "$name" "$dir" "$include_default" "$quiet"
+	elif [ "$no_clone" -eq 1 ]; then
+		repo_result "$name" NotCloned
+		[ "$quiet" -eq 1 ] || log_warning "Repository [$name] not found at [$dir] - not cloned (--no-clone)"
+	else
+		[ "$quiet" -eq 1 ] || log_step "[$name] cloning into $dir..."
+		mkdir -p "$(dirname "$dir")"
+		outcome=Error
+		clone=(git clone)
+		# A shallow entry (the Windows Obsidian rule) keeps its .git: a clone that can commit and push.
+		if [ "$archive" -eq 1 ] || [ "$shallow" -eq 1 ]; then clone+=(--depth 1); fi
+		if [ "$archive" -eq 1 ]; then
+			"${clone[@]}" "$url" "$dir" </dev/null && rm -rf "$dir/.git" && outcome=Cloned
+		elif [ "$quiet" -eq 1 ]; then
+			"${clone[@]}" --quiet "$url" "$dir" </dev/null >/dev/null 2>&1 && outcome=Cloned
+		else
+			"${clone[@]}" "$url" "$dir" </dev/null && outcome=Cloned
+		fi
+		repo_result "$name" "$outcome"
+	fi
+
+	repo_format_result
+	case $REPO_CATEGORY in
+		Updated) updated=$((updated + 1)) ;;
+		UpToDate) up_to_date=$((up_to_date + 1)) ;;
+		Skipped) skipped=$((skipped + 1)) ;;
+		*) attention=$((attention + 1)) ;;
+	esac
+	if [ "$quiet" -eq 1 ]; then
+		# A blank line separates a group heading from its first repository; the rest of the
+		# group's lines follow without one.
+		lead=-n
+		[ "$first_after_heading" -eq 1 ] && lead=''
+		if [ "$REPO_LEVEL" = Success ]; then log_success ${lead:+"$lead"} "$REPO_LINE"; else log_warning ${lead:+"$lead"} "$REPO_LINE"; fi
+	fi
+	first_after_heading=0
+done <<<"$selected"
+
+# Each count in its own color, whatever its value: updated blue, up to date green, need attention
+# red, skipped yellow.
+log_segments '' "=> Repositories => " info "$updated updated" '' ", " success "$up_to_date up to date" '' ", " \
+	error "$attention need attention" '' ", " warning "$skipped skipped"
+[ "$attention" -eq 0 ] || exit 1

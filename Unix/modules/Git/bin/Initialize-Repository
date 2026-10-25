@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Initialize-Repository - clones URL into DIR, or updates DIR safely when it is already a checkout.
+#
+# Usage: Initialize-Repository URL|--repository-url URL DIR|--local-path DIR [--archive] [--token TOKEN]
+#
+# An existing checkout is updated like Update-Repositories does (Unix/lib/repository.sh): local
+# changes stashed and restored exactly, the branch only fast-forwarded, never over an ignored
+# local file, and nothing done that cannot be done without loss. (It used to run a plain `git
+# pull`, which merges and silently overwrites ignored local files upstream starts tracking.)
+# --archive clones without history (shallow clone, .git removed). A URL that a repository line of
+# repositories.conf marks `shallow` is cloned --depth 1 and keeps its .git (the Windows rule for
+# the Obsidian repository, as a setting). Credentials are left to git's
+# credential helper (osxkeychain on macOS); no token is ever written into the remote URL, so
+# --token (the Windows -Token) takes its value, warns that it is not used and goes on. Any other
+# flag, or a third path, is an error before anything is cloned.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config repository
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+url=''
+dir=''
+archive=0
+while [ $# -gt 0 ]; do
+	case $1 in
+		--repository-url)
+			url=$2
+			shift
+			;;
+		--local-path)
+			dir=$2
+			shift
+			;;
+		--archive) archive=1 ;;
+		--token)
+			log_warning "--token is not used on macOS - git's credential helper (osxkeychain, gh) authenticates"
+			shift
+			;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1" ;;
+		*)
+			if [ -z "$url" ]; then
+				url=$1
+			elif [ -z "$dir" ]; then
+				dir=$1
+			else
+				foundation_die "Unknown argument => $1 (URL and DIR are already given)"
+			fi
+			;;
+	esac
+	shift
+done
+[ -n "$url" ] && [ -n "$dir" ] || foundation_die "Usage: Initialize-Repository URL DIR [--archive]"
+dir=$(foundation_expand_path "$dir")
+
+if git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+	log_warning "Repository exists at $dir - updating it"
+	name=${url##*/}
+	repo_update "${name%.git}" "$dir"
+	repo_format_result
+	if [ "$REPO_LEVEL" = Success ]; then log_success "$REPO_LINE"; else foundation_die "$REPO_LINE"; fi
+	exit 0
+fi
+mkdir -p "$(dirname "$dir")"
+if [ "$archive" -eq 1 ]; then
+	git clone --depth 1 "$url" "$dir" && rm -rf "$dir/.git" && log_success "Archived $url into $dir"
+elif file=$(conf_path repositories.conf) && repo_url_shallow "$file" "$url"; then
+	git clone --depth 1 "$url" "$dir" && log_success "Cloned $url into $dir (shallow, as repositories.conf marks it)"
+else
+	git clone "$url" "$dir" && log_success "Cloned $url into $dir"
+fi

@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Invoke-Browser - Google search in the default browser, or the group menu when no query is
+# given. Alias: b
+#
+# Usage: Invoke-Browser [QUERY...]
+#
+# Same contract as on Windows: `b how to x` searches, a bare `b` shows the browser group menu
+# of Open-Browser. To open groups by name use Open-Browser GROUP... directly. A leading -Query
+# (the Windows parameter name, any case or dashes) is dropped: `b -Query how to x` searches
+# `how to x`.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+case ${1:-} in -h | --help)
+	foundation_usage "$0"
+	exit 0
+	;;
+esac
+case ${1:-} in -*) [ "$(foundation__flag_key "$1")" = query ] && shift ;; esac
+if [ $# -eq 0 ]; then
+	exec "${BASH:-bash}" "$(foundation_command_path Open-Browser)"
+fi
+exec "${BASH:-bash}" "$(foundation_command_path Open-Browser)" --search "$@"

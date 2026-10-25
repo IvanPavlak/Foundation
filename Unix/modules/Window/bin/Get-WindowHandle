@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Get-WindowHandle - lists the managed windows, optionally filtered by app and/or title.
+#
+# Usage: Get-WindowHandle [--process-name PATTERN] [--window-title PATTERN]
+#
+# Prints ID, APP, WORKSPACE, TITLE, PID, X, Y, WIDTH and HEIGHT per window (tab separated when
+# piped; the PID and the frame were appended, so the first four columns keep their place). The
+# frame is in points, top-left origin, read from the window server by window id in one read (no
+# permission needed); a window whose frame cannot be read has empty frame columns. The id plays the
+# HWND role: it is what the AeroSpace commands take as --window-id. Patterns follow the Windows
+# rules (exact app name, wildcard, regex; an apps.conf role matches its member apps); with both
+# given a window matches EITHER, as on Windows. Move-, Center- and Resize-Windows select their
+# windows with the same rules (windows_select of lib/windows.sh, which this command does not load:
+# it reads window.conf, which Get-WindowHandle has no use for; keep the two in step).
+# Windows-style names: --all (-All) is accepted and ignored: without a pattern every window is listed.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps drivers/aerospace
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+process=''
+title_pattern=''
+while [ $# -gt 0 ]; do
+	case $1 in
+		--process-name)
+			process=$2
+			shift
+			;;
+		--window-title)
+			title_pattern=$2
+			shift
+			;;
+		--all | -v | --verbose) ;;
+		*) process=$1 ;;
+	esac
+	shift
+done
+
+as_available || as_start || exit 1
+ids=()
+tokens=()
+desktops=()
+titles=()
+pids=()
+while IFS=$'\t' read -r id token _ pid ws name title; do
+	if [ -n "$process" ] || [ -n "$title_pattern" ]; then
+		hit=0
+		[ -n "$process" ] && app_matches "$process" "$token" && hit=1
+		[ -n "$process" ] && [ "$hit" -eq 0 ] && foundation_match_process "$process" "$name" && hit=1
+		[ -n "$title_pattern" ] && foundation_match_title "$title_pattern" "$title" && [ -n "$title" ] && hit=1
+		[ "$hit" -eq 1 ] || continue
+	fi
+	ids+=("$id")
+	tokens+=("$token")
+	desktops+=("$ws")
+	titles+=("$title")
+	pids+=("$pid")
+done < <(as_windows)
+[ ${#ids[@]} -gt 0 ] || exit 0
+declare -A frames=()
+while read -r id x y w h; do frames[$id]="$x $y $w $h"; done < <(as_window_frames "${ids[@]}")
+for ((i = 0; i < ${#ids[@]}; i++)); do
+	id=${ids[i]}
+	read -r x y w h <<<"${frames[$id]:-}"
+	if [ -t 1 ]; then
+		printf '%-6s %-12s %-4s %-8s %-16s %s\n' "$id" "${tokens[i]}" "${desktops[i]}" "${pids[i]}" "${w:+$x,$y ${w}x$h}" "${titles[i]}"
+	else
+		printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "${tokens[i]}" "${desktops[i]}" "${titles[i]}" "${pids[i]}" "$x" "$y" "$w" "$h"
+	fi
+done

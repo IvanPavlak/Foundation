@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# DotnetRun - runs the .NET project in the current directory (dotnet run). Alias: dnr
+#
+# Usage: DotnetRun [ARGUMENTS...]
+#
+# Assumes the project is already built; ARGUMENTS go to dotnet run unchanged. A leading -h or
+# --help prints this header instead (DotnetRun -- --help hands --help to the program).
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+# A leading --help is this header; it never reaches the tool or starts a build.
+case ${1:-} in -h | --help)
+	foundation_usage "$0"
+	exit 0
+	;;
+esac
+command -v dotnet >/dev/null 2>&1 || foundation_die "dotnet is not installed (brew install --cask dotnet-sdk)"
+exec dotnet run "$@"

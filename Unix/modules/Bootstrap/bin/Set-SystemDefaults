@@ -1,0 +1,237 @@
+#!/usr/bin/env bash
+# Set-SystemDefaults - applies the macOS settings of Unix/config/system-defaults.conf (the Unix
+# counterpart of the ExplorerOptions, TaskbarSettings and VisualEffects steps).
+#
+# Usage: Set-SystemDefaults [GROUP...] [--skip GROUP...] [--list] [--dry-run]
+#
+# Each [Section] of system-defaults.conf is a group (Dock, Finder, Keyboard, ...), applied in
+# file order; GROUP runs only the named groups, --skip leaves groups out (comma lists work,
+# names are case-insensitive). system-defaults.local.conf replaces a whole section, so an empty
+# section there turns a group off on that machine. A line may start with @TYPE to apply on one
+# machine type only. Line kinds:
+#
+#   defaults DOMAIN KEY TYPE VALUE...      defaults write (TYPE -bool -boolean -int -integer
+#                                          -float -string -date -data -array -array-add -dict
+#                                          -dict-add; a -string value may contain spaces, an
+#                                          -array or -dict value is split into words, a KEY with
+#                                          spaces goes in double quotes)
+#   currenthost DOMAIN KEY TYPE VALUE...   defaults -currentHost write
+#   delete DOMAIN KEY                      defaults delete (a missing key is not an error)
+#   mkdir PATH                             create a folder a setting points at
+#   command NAME ARGS...                   run another Foundation command (the base [Theme]:
+#                                          Set-SystemTheme --auto --skip SetWallpaper)
+#   restart PROCESS...                     restarted once at the end (Dock, Finder, SystemUIServer,
+#                                          ControlCenter) so the change shows
+#   note TEXT                              printed at the end (log out for keyboard changes)
+#
+# ~ and $VARIABLES expand in -string values and paths. Everything runs as the user, no sudo
+# (power settings: Set-PowerSettings). --list prints the groups and what they would do; --dry-run
+# prints every command and changes nothing (so does the Windows-style -WhatIf). The removed
+# --with-sudo is still accepted and only warns that the power settings moved to Set-PowerSettings;
+# any other flag is an error before anything is applied.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+dry=0
+list_only=0
+wanted=()
+skips=()
+collect=''
+while [ $# -gt 0 ]; do
+	case $1 in
+		--dry-run) dry=1 ;;
+		--list) list_only=1 ;;
+		--skip) collect=skips ;;
+		--with-sudo)
+			log_warning "--with-sudo is gone: the power settings moved to Set-PowerSettings"
+			;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1 - nothing was applied" ;;
+		*)
+			IFS=, read -r -a names <<<"$1"
+			for name in "${names[@]}"; do
+				name=$(foundation_trim "$name")
+				[ -n "$name" ] || continue
+				if [ "$collect" = skips ]; then skips+=("$name"); else wanted+=("$name"); fi
+			done
+			;;
+	esac
+	shift
+done
+
+config=$(conf_path system-defaults.conf) || foundation_die "Missing Unix/config/system-defaults.conf"
+
+in_list() { # NAME ITEM...
+	local name=$1 item
+	shift
+	for item in "$@"; do foundation_ieq "$item" "$name" && return 0; done
+	return 1
+}
+
+# Is GROUP selected for this run?
+group_selected() {
+	in_list "$1" ${skips[@]+"${skips[@]}"} && return 1
+	[ ${#wanted[@]} -eq 0 ] && return 0
+	in_list "$1" "${wanted[@]}"
+}
+
+groups=()
+while IFS= read -r group; do groups+=("$group"); done < <(conf_sections "$config")
+for name in ${wanted[@]+"${wanted[@]}"} ${skips[@]+"${skips[@]}"}; do
+	in_list "$name" ${groups[@]+"${groups[@]}"} || log_warning "No group [$name] in system-defaults.conf"
+done
+
+failures=0
+restarts=()
+notes=()
+
+run() {
+	if [ "$dry" -eq 1 ] || [ "$list_only" -eq 1 ]; then
+		# Arguments with spaces are shown quoted, so the printed line can be pasted as is.
+		local shown='' arg
+		for arg in "$@"; do
+			case $arg in *[[:space:]]*) shown="$shown \"$arg\"" ;; *) shown="$shown $arg" ;; esac
+		done
+		printf '  %s\n' "${shown# }"
+		return 0
+	fi
+	"$@" || {
+		log_warning "failed: $*"
+		failures=$((failures + 1))
+	}
+}
+
+# Splits "DOMAIN KEY REST" into PARSED_DOMAIN, PARSED_KEY and PARSED_REST; a KEY in double
+# quotes may contain spaces ("Quit When Finished"). Fails on an unclosed quote.
+split_domain_key() {
+	local rest
+	read -r PARSED_DOMAIN rest <<<"$1"
+	case $rest in
+		\"*)
+			rest=${rest#\"}
+			case $rest in *\"*) ;; *) return 1 ;; esac
+			PARSED_KEY=${rest%%\"*}
+			rest=${rest#*\"}
+			;;
+		*) read -r PARSED_KEY rest <<<"$rest" ;;
+	esac
+	PARSED_REST=$(foundation_trim "$rest")
+}
+
+# defaults write for the rest of one line; extra arguments go before `write` (-currentHost).
+# Usage: write_default REST [OPTION...]
+write_default() {
+	local rest=$1
+	shift
+	local domain key type value values=()
+	split_domain_key "$rest" || {
+		log_warning "Unclosed quote, skipped => $rest"
+		return 0
+	}
+	domain=$PARSED_DOMAIN
+	key=$PARSED_KEY
+	read -r type value <<<"$PARSED_REST"
+	if [ -z "$domain" ] || [ -z "$key" ] || [ -z "$type" ]; then
+		log_warning "Incomplete line, skipped => $rest"
+		return 0
+	fi
+	case $type in
+		-string) values=("$(foundation_expand_path "$value")") ;;
+		-array | -array-add | -dict | -dict-add) read -r -a values <<<"$value" ;;
+		-bool | -boolean | -int | -integer | -float | -date | -data) values=("$value") ;;
+		*)
+			log_warning "Unknown type [$type], skipped => $rest"
+			return 0
+			;;
+	esac
+	run defaults "$@" write "$domain" "$key" "$type" ${values[@]+"${values[@]}"}
+}
+
+apply_line() {
+	local line=$1 kind rest
+	read -r kind rest <<<"$line"
+	case $kind in
+		defaults) write_default "$rest" ;;
+		currenthost) write_default "$rest" -currentHost ;;
+		delete)
+			local domain key
+			split_domain_key "$rest" || {
+				log_warning "Unclosed quote, skipped => $rest"
+				return 0
+			}
+			domain=$PARSED_DOMAIN
+			key=$PARSED_KEY
+			if [ "$dry" -eq 1 ] || [ "$list_only" -eq 1 ]; then
+				run defaults delete "$domain" "$key"
+			else
+				defaults delete "$domain" "$key" >/dev/null 2>&1 || log_debug "[Set-SystemDefaults] $domain $key was not set"
+			fi
+			;;
+		mkdir) run mkdir -p "$(foundation_expand_path "$rest")" ;;
+		command)
+			local name args=()
+			read -r name rest <<<"$rest"
+			read -r -a args <<<"$rest"
+			if foundation_has_command "$name"; then
+				run foundation_run "$name" ${args[@]+"${args[@]}"}
+			else
+				log_warning "Unknown Foundation command [$name], skipped"
+			fi
+			;;
+		restart)
+			local process
+			for process in $rest; do in_list "$process" ${restarts[@]+"${restarts[@]}"} || restarts+=("$process"); done
+			;;
+		note) notes+=("$rest") ;;
+		*) log_warning "Unknown line kind [$kind], skipped => $line" ;;
+	esac
+}
+
+machine=$(foundation_machine_type)
+if [ "$list_only" -eq 1 ]; then
+	log_title "Set-SystemDefaults groups ($machine)"
+else
+	log_title "Set-SystemDefaults ($machine)"
+fi
+for group in ${groups[@]+"${groups[@]}"}; do
+	if ! group_selected "$group"; then
+		[ "$list_only" -eq 1 ] && log_step "$group (skipped)"
+		log_debug "[Set-SystemDefaults] $group skipped"
+		continue
+	fi
+	lines=()
+	while IFS= read -r line; do [ -n "$line" ] && lines+=("$line"); done < <(conf_section "$config" "$group")
+	if [ ${#lines[@]} -eq 0 ]; then
+		log_step "$group (nothing for this machine)"
+		continue
+	fi
+	log_step "$group"
+	for line in "${lines[@]}"; do apply_line "$line"; done
+done
+
+if [ ${#restarts[@]} -gt 0 ]; then
+	if [ "$dry" -eq 1 ] || [ "$list_only" -eq 1 ]; then
+		printf '  killall %s\n' "${restarts[*]}"
+	else
+		killall "${restarts[@]}" >/dev/null 2>&1
+	fi
+fi
+for note in ${notes[@]+"${notes[@]}"}; do log_step "$note"; done
+
+[ "$dry" -eq 1 ] || [ "$list_only" -eq 1 ] && exit 0
+if [ "$failures" -eq 0 ]; then
+	log_success "System defaults applied!"
+else
+	log_error "System defaults applied with $failures failure(s)"
+	exit 1
+fi

@@ -1,0 +1,279 @@
+#!/usr/bin/env bash
+# Invoke-Fastfetch - displays the fastfetch system info panel, shrinking the WezTerm font or dropping the logo until it fits.
+#
+# Usage: Invoke-Fastfetch [--no-resize] [--settle] [--extra-rows N] [--prompt-reserve N]
+#                         [--max-shrink-steps N] [--reflow-timeout-milliseconds N] [--always]
+#
+# The second step of Show-TerminalGreeting (alias c): it does NOT clear the screen, Invoke-Clear
+# is the step that does, so each part of the greeting can be switched off on its own. Silent, one
+# debug line saying why, when greeting.conf has `fastfetch off` or fastfetch is not installed.
+# --always draws even with `fastfetch off`: the bare `fastfetch` shell function passes it, since
+# typing the tool asks for the panel.
+#
+# The panel is measured first by running fastfetch in pipe mode (which renders nothing), so
+# fastfetch runs twice when auto-fit is active. The panel overflows when it is wider than the
+# window, or taller than the window rows minus one (the command line) minus
+# fastfetch-prompt-reserve (greeting.conf) minus --extra-rows (the rows printed below it:
+# Show-TerminalGreeting passes onefetch's height). --no-resize, or `fastfetch-auto-fit off`,
+# skips measuring and renders once.
+#
+# In WezTerm the font is fitted, as Windows Terminal's is on Windows: the font is reset to the
+# default first (every time, so a manual zoom is undone and the result is the same on every call),
+# then shrunk one step at a time while the panel overflows, waiting after each step until the
+# window reflows or fastfetch-reflow-timeout-ms passes. It stops when the panel fits, after
+# fastfetch-max-shrink-steps steps, or when a step leaves the window unchanged (the smallest font).
+# --prompt-reserve (0-20), --max-shrink-steps (0-50; 0 resets the font and never shrinks) and
+# --reflow-timeout-milliseconds (1-10000) override the greeting.conf value for one call; a
+# greeting.conf value out of its range is warned about and replaced by the default (1, 10, 10).
+# The steps go through wt_font_step (Unix/lib/drivers/wezterm.sh) to the user-var-changed handler of
+# WezTerm/wezterm.lua; the size is per window, so every tab of the window follows. A panel that
+# still overflows, and an overflowing panel in any other terminal, is drawn without its logo.
+#
+# The image logo: the image-logo line of greeting.conf for this machine type, drawn instead of
+# the text logo of FastFetch/Unix/config_<Type>.jsonc in the terminals that show images (WezTerm,
+# Ghostty, kitty) when the file exists. FOUNDATION_STARTUP_SKIP naming FastfetchImageLogo (or All)
+# keeps the text logo, so Measure-ShellStartup can time the image logo apart from the panel.
+#
+# --settle waits (up to ~1.5 s) until the terminal stops changing size before drawing. A
+# brand-new window is tiled by AeroSpace a moment after it appears; a panel drawn before that
+# resize reflows and leaves image fragments behind. The startup greeting passes it; `c` does not.
+#
+# Unix port of WinuX's Windows/PowerShell/Modules/System/Functions/Invoke-Fastfetch.ps1.
+# Part of every greeting, so it keeps no session log of its own.
+export FOUNDATION_LOGGING=off
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config drivers/wezterm
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+# Stops the command unless VALUE is a whole number within MIN-MAX. Usage: require_number FLAG VALUE MIN MAX
+require_number() {
+	if ! [[ $2 =~ ^[0-9]{1,5}$ ]] || [ "$2" -lt "$3" ] || [ "$2" -gt "$4" ]; then
+		foundation_die "$1 takes a whole number from $3 to $4 => $2"
+	fi
+}
+
+no_resize=0
+settle=0
+extra_rows=0
+always=0
+prompt_reserve=''
+max_shrink_steps=''
+reflow_timeout_ms=''
+while [ $# -gt 0 ]; do
+	case $1 in
+		--no-resize) no_resize=1 ;;
+		--settle) settle=1 ;;
+		--always) always=1 ;;
+		--extra-rows)
+			case ${2:-} in
+				'' | *[!0-9]*) foundation_die "--extra-rows takes a whole number of rows => ${2:-}" ;;
+			esac
+			extra_rows=$2
+			shift
+			;;
+		--prompt-reserve)
+			require_number "$1" "${2:-}" 0 20
+			prompt_reserve=$2
+			shift
+			;;
+		--max-shrink-steps)
+			require_number "$1" "${2:-}" 0 50
+			max_shrink_steps=$2
+			shift
+			;;
+		--reflow-timeout-milliseconds)
+			require_number "$1" "${2:-}" 1 10000
+			reflow_timeout_ms=$2
+			shift
+			;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument => $1" ;;
+	esac
+	shift
+done
+
+file=$(conf_path greeting.conf) || file=''
+setting() { [ -n "$file" ] && conf_value "$file" "$1" 2>/dev/null; }
+
+# FOUNDATION_FASTFETCH, when set, is the only fastfetch looked for (the test suite's seam: Foundation
+# puts Homebrew's bin on PATH, so a stand-in PATH cannot hide an installed fastfetch).
+fastfetch=${FOUNDATION_FASTFETCH:-fastfetch}
+if [ "$always" -eq 0 ] && [ "$(setting fastfetch)" = off ]; then
+	log_debug "[Invoke-Fastfetch] off (greeting.conf fastfetch)"
+	exit 0
+fi
+if ! command -v "$fastfetch" >/dev/null 2>&1; then
+	log_debug "[Invoke-Fastfetch] fastfetch is not installed => brew install fastfetch"
+	exit 0
+fi
+if [ "$(setting fastfetch-auto-fit)" = off ]; then
+	log_debug "[Invoke-Fastfetch] not measured (greeting.conf fastfetch-auto-fit off)"
+	no_resize=1
+fi
+# A whole-number setting within MIN-MAX, else DEFAULT with a warning, as Resolve-TerminalGreetingSettings
+# warns on Windows. Usage: number_setting KEY MIN MAX DEFAULT
+number_setting() {
+	local value
+	value=$(setting "$1") || value=$4
+	if ! [[ $value =~ ^[0-9]{1,5}$ ]] || [ "$value" -lt "$2" ] || [ "$value" -gt "$3" ]; then
+		log_warning "greeting.conf $1 must be a whole number from $2 to $3 => $value. Using the default $4" >&2
+		value=$4
+	fi
+	printf '%s' "$value"
+}
+# Rows kept free below the panel for the next prompt (PromptReserve), the cap on font steps below
+# the default (MaxShrinkSteps) and the wait for a window to reflow after one (ReflowTimeoutMilliseconds);
+# a flag of this call wins over the file.
+[ -n "$prompt_reserve" ] || prompt_reserve=$(number_setting fastfetch-prompt-reserve 0 20 1)
+[ -n "$max_shrink_steps" ] || max_shrink_steps=$(number_setting fastfetch-max-shrink-steps 0 50 10)
+[ -n "$reflow_timeout_ms" ] || reflow_timeout_ms=$(number_setting fastfetch-reflow-timeout-ms 1 10000 10)
+
+# FOUNDATION_STARTUP_SKIP lists NAME (or All), read as the shell rc reads it: case-insensitive,
+# split on commas, semicolons and spaces. Usage: startup_skipped NAME
+startup_skipped() {
+	local list=${FOUNDATION_STARTUP_SKIP:-}
+	list=",${list,,},"
+	list=${list//[;[:space:]]/,}
+	[[ $list == *",${1,,},"* || $list == *,all,* ]]
+}
+
+# The image logo, only in a terminal that shows images and only when the file exists: sets
+# image_path and image_size (WxH, default 30x14) or leaves them empty.
+image_path=''
+image_size=''
+startup_skipped FastfetchImageLogo || case "${TERM_PROGRAM:-}:${TERM:-}" in
+	WezTerm:* | ghostty:* | *:xterm-kitty | *:xterm-ghostty)
+		if value=$(setting image-logo) && [ -n "$value" ]; then
+			size=30x14
+			case ${value##* } in [0-9]*x[0-9]*) size=${value##* } && value=${value% *} ;; esac
+			path=$(foundation_expand_path "$value")
+			case $path in /*) ;; *) path=$DOTFILES_ROOT/$path ;; esac
+			if [ -f "$path" ]; then
+				image_size=$size
+				image_path=$path
+			else
+				log_debug "[Invoke-Fastfetch] image-logo not found => $path, keeping the text logo"
+			fi
+		fi
+		;;
+esac
+
+# fastfetch with the image logo when there is one (two rows from the top, so a 14-row image sits
+# centred beside the 18-row module list, as the Windows image block keeps a fixed geometry).
+logo_arguments=()
+if [ -n "$image_path" ]; then
+	logo_arguments=(--logo "$image_path" --logo-type kitty-direct --logo-width "${image_size%x*}" --logo-height "${image_size#*x}" --logo-padding-top 2)
+fi
+
+# Rows and columns of the terminal. stty reads the terminal, not stdin, so this still works with
+# input redirected; FOUNDATION_TTY stands in for it in the suites. The redirection is inside the group
+# so 2>/dev/null also swallows the shell's own error when there is no controlling terminal.
+read_terminal_size() {
+	{ stty size <"${FOUNDATION_TTY:-/dev/tty}"; } 2>/dev/null
+}
+
+# --settle: wait until the size has held for three consecutive readings 100 ms apart (about
+# 200 ms on a window that is already stable), bounded to 1.5 s so a terminal that never settles
+# still gets its panel.
+if [ "$settle" -eq 1 ]; then
+	previous_size=''
+	stable_readings=0
+	for ((attempt = 0; attempt < 15; attempt++)); do
+		current_size=$(read_terminal_size)
+		if [ -n "$current_size" ] && [ "$current_size" = "$previous_size" ]; then
+			stable_readings=$((stable_readings + 1))
+			[ "$stable_readings" -ge 2 ] && break
+		else
+			stable_readings=0
+		fi
+		previous_size=$current_size
+		sleep 0.1
+	done
+fi
+
+# The window size into terminal_rows and terminal_columns; fails, leaving them alone, when the
+# terminal does not answer.
+read_window() {
+	local rows columns
+	read -r rows columns <<<"$(read_terminal_size)"
+	[[ $rows =~ ^[0-9]+$ && $columns =~ ^[0-9]+$ ]] && [ "$rows" -gt 0 ] && [ "$columns" -gt 0 ] || return 1
+	terminal_rows=$rows
+	terminal_columns=$columns
+}
+
+# Test-FastfetchPanelOverflow: wider than the window, or taller than the rows left once the command
+# line, the prompt reserve and the extra rows are taken.
+panel_overflows() {
+	[ "$panel_height" -gt $((terminal_rows - 1 - prompt_reserve - extra_rows)) ] || [ "$panel_width" -gt "$terminal_columns" ]
+}
+
+# Wait-ConsoleReflow: poll the window every 10 ms until its size changes, for at most
+# reflow_timeout_ms; fails when it did not change.
+wait_reflow() {
+	local before="$terminal_rows $terminal_columns" poll polls=$(((reflow_timeout_ms + 9) / 10))
+	for ((poll = 0; poll < polls; poll++)); do
+		sleep 0.01
+		read_window || continue
+		[ "$terminal_rows $terminal_columns" != "$before" ] && return 0
+	done
+	return 1
+}
+
+# The WezTerm font fit: reset, then shrink while the panel overflows (see the header).
+fit_font() {
+	local steps=0 default_window
+	wt_font_step 0 || return 0
+	wait_reflow || true
+	default_window="${terminal_columns}x$terminal_rows"
+	while [ "$steps" -lt "$max_shrink_steps" ] && panel_overflows; do
+		steps=$((steps + 1))
+		wt_font_step "$steps" || break
+		if ! wait_reflow; then
+			log_debug "[Invoke-Fastfetch] window still ${terminal_columns}x$terminal_rows after a font step, the terminal cannot shrink further"
+			break
+		fi
+	done
+	log_debug "[Invoke-Fastfetch] default window $default_window, $steps of $max_shrink_steps font step(s) => window ${terminal_columns}x$terminal_rows"
+}
+
+overflows=0
+terminal_rows=0
+terminal_columns=0
+# Without a terminal the size stays unknown and nothing is judged: tput would answer the terminfo
+# default of 80x24, a made-up screen the panel could be measured against.
+if [ "$no_resize" -eq 0 ] && read_window; then
+	# --pipe renders one line per visual row with no colour or cursor escapes, so the line count is
+	# the panel height and the longest line is its width. The panel size does not depend on the
+	# font, so it is measured once, before any font step.
+	panel=$("$fastfetch" "${logo_arguments[@]}" --pipe 2>/dev/null) || panel=''
+	if [ -n "$panel" ]; then
+		panel_height=$(printf '%s\n' "$panel" | wc -l | tr -d ' ')
+		# Width in CHARACTERS, not bytes: the box-drawing borders are 3-byte UTF-8. Neither BSD wc -L
+		# nor macOS awk is multibyte-aware, so strip the UTF-8 continuation bytes (0x80-0xBF) first
+		# and count bytes in the C locale.
+		panel_width=$(printf '%s\n' "$panel" | LC_ALL=C awk '
+			{ line = $0; gsub(/[\200-\277]/, "", line); if (length(line) > width) width = length(line) }
+			END { print width + 0 }
+		')
+		[ "${TERM_PROGRAM:-}" = WezTerm ] && fit_font
+		panel_overflows && overflows=1
+		log_debug "[Invoke-Fastfetch] panel ${panel_width}x${panel_height} (+$extra_rows extra, $prompt_reserve reserved), window ${terminal_columns}x${terminal_rows}, overflows=$overflows"
+	fi
+fi
+
+# exec, not a plain call: fastfetch reports the shell by inspecting its PARENT process, so running
+# it as a child of this script would make the Shell module say "bash". exec replaces this process,
+# so its parent is the interactive shell that ran the greeting. Nothing may follow these lines.
+if [ "$overflows" -eq 1 ]; then
+	exec "$fastfetch" --logo none
+fi
+exec "$fastfetch" "${logo_arguments[@]}"

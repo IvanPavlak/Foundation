@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# Open-Obsidian - opens Obsidian on the vault and loads a saved Obsidian workspace through the CLI.
+#
+# Usage: Open-Obsidian [NAME] [--workspace NAME] [--default] [--vault NAME] [--current-workspace NAME] [--load-only]
+#
+# The Windows Open-Obsidian on the official Obsidian CLI. The workspace (the core Workspaces
+# plugin, .obsidian/workspaces.json) comes from --workspace or a bare NAME (Windows' positional
+# -Workspace); else, during a workspace open, from the Foundation workspace's own name when the
+# vault has an Obsidian workspace of that name (w Server lands on Server): Open-Workspace hands it
+# over in FOUNDATION_CURRENT_WORKSPACE, and --current-workspace NAME (Windows' -CurrentWorkspace)
+# gives it by hand, beating the variable and, as on Windows, suppressing the menu; else, on a bare
+# call from a terminal without --default, from a menu of the saved workspaces (Enter skips); else
+# from default-workspace of Unix/config/obsidian.conf on a cold start only. A cold start launches Obsidian detached (open -g) and polls the CLI for up to
+# 10 s before loading; with Obsidian already running the workspace switches in place, and without
+# a workspace a running Obsidian is left alone. Every CLI call is killed after 5 s, so a CLI that
+# never hears back cannot stall a workspace open. A refusal of the CLI (switched off: run
+# Enable-ObsidianCli) is reported, never claimed as a loaded workspace; without the CLI at all the
+# registration hint is printed and Obsidian still counts as opened. No vault configured (neither
+# `directory` nor `vault` in obsidian.conf, nor --vault) is an error. A flag it does not know is
+# an error, never taken for the workspace. --vault NAME opens that vault instead of the `vault`
+# of obsidian.conf. During a workspace open the load is deferred, as Windows' -Deferred: Obsidian
+# is started, the load is queued (foundation_defer) and the open goes on to the next action
+# instead of waiting for Obsidian's CLI; Open-Workspace runs the queued load just before its
+# layout. --load-only is that queued step: wait for the CLI and load the workspace, nothing else.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps obsidian
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+workspace=''
+use_default=0
+load_only=0
+current=${FOUNDATION_CURRENT_WORKSPACE:-}
+vault=$(obsidian_vault)
+while [ $# -gt 0 ]; do
+	case $1 in
+		--workspace)
+			workspace=$2
+			shift
+			;;
+		--vault)
+			vault=$2
+			shift
+			;;
+		--default) use_default=1 ;;
+		--current-workspace)
+			current=$2
+			shift
+			;;
+		--load-only) load_only=1 ;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1" ;;
+		*) workspace=$1 ;;
+	esac
+	shift
+done
+[ -n "$vault" ] || foundation_die "No Obsidian vault configured - set directory (or vault) in Unix/config/obsidian.conf, or pass --vault NAME"
+wait_seconds=$(obsidian_cli_wait)
+
+names=$(obsidian_workspace_names)
+has_name() { printf '%s\n' "$names" | grep -qixF -- "$1"; }
+canonical() { printf '%s\n' "$names" | awk -v n="$(foundation_lower "$1")" 'tolower($0) == n { print; exit }'; }
+
+# Without the CLI there is nothing to load through: the registration hint, as Windows warns.
+cli_missing() {
+	obsidian_cli >/dev/null && return 1
+	log_warning "The Obsidian CLI was not found - workspace [$workspace] not loaded; register it in Obsidian (Settings > General > Advanced > Command line interface, Obsidian 1.12.4+)"
+}
+
+# The queued tail of a deferred open: the CLI wait and the load (Complete-ObsidianWorkspaceLoad).
+load_workspace() {
+	cli_missing && exit 0
+	if ! obsidian_wait_cli "$vault" "$wait_seconds"; then
+		log_warning "The Obsidian CLI did not answer within $wait_seconds s - workspace [$workspace] not loaded (Enable-ObsidianCli?)"
+		exit 1
+	fi
+	if refusal=$(obsidian_load_workspace "$vault" "$workspace"); then
+		log_success "Obsidian workspace [$workspace] loaded!"
+	else
+		log_warning "Workspace [$workspace] not loaded => $refusal"
+		exit 1
+	fi
+	exit 0
+}
+if [ "$load_only" -eq 1 ]; then
+	[ -n "$workspace" ] || foundation_die "--load-only needs a workspace (--workspace NAME)"
+	load_workspace
+fi
+
+running=0
+obsidian_running && running=1
+if [ -z "$workspace" ] && [ -n "$current" ] && has_name "$current"; then
+	workspace=$(canonical "$current")
+	log_debug "[Open-Obsidian] workspace [$workspace] matches the Foundation workspace being opened"
+fi
+if [ -z "$workspace" ] && [ -z "$current" ] && [ -z "${FOUNDATION_WORKSPACE_OPEN:-}" ] && [ "$use_default" -eq 0 ] && [ -n "$names" ] && foundation_has_terminal; then
+	mapfile -t options <<<"$names"
+	workspace=$(foundation_resolve_selection "[Obsidian Workspaces]" "Enter a workspace, or press [Enter] to skip" 1 0 "${options[@]}") || workspace=''
+fi
+if [ -z "$workspace" ] && [ "$running" -eq 0 ]; then
+	workspace=$(obsidian_setting default-workspace '')
+fi
+if [ -n "$workspace" ] && [ -n "$names" ] && ! has_name "$workspace"; then
+	log_warning "Obsidian has no saved workspace [$workspace] - trying the load anyway"
+fi
+
+log_step "Opening Obsidian..."
+if [ "$running" -eq 0 ]; then
+	obsidian_start "$vault" || app_launch Obsidian || foundation_die "Obsidian could not be started"
+elif [ -z "$workspace" ]; then
+	log_warning "Obsidian is already running!"
+	exit 0
+fi
+if [ -z "$workspace" ] || cli_missing; then
+	log_success "Obsidian opened!"
+	exit 0
+fi
+
+# Register-DeferredAction: inside a workspace open the load waits in the queue, not here.
+if [ -n "${FOUNDATION_WORKSPACE_OPEN:-}" ] && [ -n "${FOUNDATION_RUN_DIR:-}" ]; then
+	foundation_defer "Obsidian workspace $workspace" Open-Obsidian --load-only --workspace "$workspace" --vault "$vault"
+	log_success "Obsidian opened - workspace [$workspace] loads before the layout"
+	exit 0
+fi
+load_workspace

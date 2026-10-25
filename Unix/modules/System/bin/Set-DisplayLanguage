@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Set-DisplayLanguage - sets the macOS display language from Unix/config/language.conf.
+#
+# Usage: Set-DisplayLanguage [NAME | --language NAME]
+#
+# The Unix twin of the Windows Set-DisplayLanguage. NAME is a `display-language` name of
+# language.conf; without it a menu of them is shown, where Enter picks `default-display-language`.
+# AppleLanguages becomes that language followed by the other configured display languages (the
+# fallbacks apps use when they lack the first), and the language part of AppleLocale follows it
+# while the region stays. Nothing changes when the language is already the first one, or when
+# language.conf has no display languages. Takes full effect after logging out and back in.
+# Windows-style names: --language (-Language) NAME is the same as a bare NAME.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config language
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+name=''
+for argument in "$@"; do
+	case $argument in
+		--language | -v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $argument" ;;
+		*) name=$argument ;;
+	esac
+done
+
+if [ -z "$(lang_entries display-language)" ]; then
+	log_warning "No display-language lines in language.conf - leaving the display language as it is!"
+	exit 0
+fi
+entry=$(lang_choose display-language "[Available Display Languages]" "$name") || exit 1
+IFS=$'\t' read -r target code <<<"$entry"
+
+log_title "Setting the Display Language to [$target]"
+
+current=$(lang_current_languages | head -n 1)
+if foundation_ieq "${current//_/-}" "${code//_/-}"; then
+	log_warning "Display language already set to [$target]!"
+	exit 0
+fi
+
+# The chosen language first, then the other configured ones in file order.
+languages=("$code")
+while IFS=$'\t' read -r _ other; do
+	foundation_ieq "${other//_/-}" "${code//_/-}" || languages+=("$other")
+done < <(lang_entries display-language)
+defaults write -g AppleLanguages -array "${languages[@]}" || foundation_die "Could not write AppleLanguages"
+
+locale=$(lang_current_locale)
+if [ -n "$locale" ]; then
+	new_locale=$(lang_build_locale "$code" "$(lang_locale_region "$locale")")
+	if [ "$new_locale" != "$locale" ]; then
+		defaults write -g AppleLocale -string "$new_locale" || foundation_die "Could not write AppleLocale"
+		log_step "AppleLocale => $new_locale"
+	fi
+fi
+
+current=$(lang_current_languages | head -n 1)
+foundation_ieq "${current//_/-}" "${code//_/-}" || foundation_die "Display language was attempted to be set but verification failed!"
+log_success "Display language successfully set to [$target]!"
+log_warning "You must log out and back in for this change to take full effect!"

@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# Open-Terminal - opens WezTerm tabs, optionally titled and running a command each. Alias: t
+#
+# Usage: Open-Terminal [COMMAND...] [--title T]... [--cwd DIR]... [--in-same-shell] [--window-id ID]
+#
+# One tab per COMMAND (a single quoted argument each, e.g. t 'npm run dev' 'lazygit'); at least
+# one tab. The n-th --title and --cwd apply to the n-th tab. Tabs open in a new window like the
+# Windows original, or in the window this shell runs in with --in-same-shell. The shell stays
+# open after the command finishes. A tab without --cwd starts on the Desktop, as on Windows. A flag
+# it does not know is an error, never typed into a tab.
+# --window-id ID chooses the window, as Windows Terminal's -WindowId: 0 is the window this shell
+# runs in (--in-same-shell), a number is the WezTerm window with that id (`wezterm cli list` shows
+# it), and any other value names a window: the first call opens a new window and remembers it
+# under that name ($FOUNDATION_STATE_DIR/terminal-windows), later calls with the name join it
+# while it is open.
+# Windows-style names: --tab-titles (-TabTitles) is --title for one tab each (A,B and "A", "B"
+# both name two tabs), --command (-Command) adds a tab per value ("a", "b"), --working-directory
+# (-WorkingDirectory) is --cwd, and --administrator (-Administrator) is ignored.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps drivers/wezterm terminal
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+commands=()
+titles=()
+dirs=()
+target=new
+window_name=''
+while [ $# -gt 0 ]; do
+	case $1 in
+		--title)
+			titles+=("$2")
+			shift
+			;;
+		--tab-titles | --command)
+			# The Windows arrays: -TabTitles A,B names two tabs, and -TabTitles "A", "B" reaches
+			# bash as `A,` `B`, so a value ending in a comma goes on with the next word. Commands
+			# split only there: a comma inside one quoted command stays part of it.
+			list=$1
+			while [ $# -gt 1 ]; do
+				shift
+				if [ "$list" = --tab-titles ]; then
+					foundation_split_list titles "$1"
+				else
+					commands+=("$(foundation_trim "${1%,}")")
+				fi
+				case $1 in *,) ;; *) break ;; esac
+			done
+			;;
+		--cwd | --working-directory)
+			dirs+=("$2")
+			shift
+			;;
+		--in-same-shell) target=same ;;
+		--window-id)
+			case ${2:-} in
+				'') foundation_die "--window-id needs an ID or a name" ;;
+				0) target=same ;;
+				*[!0-9]*) window_name=$2 ;;
+				*) target=$2 ;;
+			esac
+			shift
+			;;
+		--administrator) log_debug "[Open-Terminal] --administrator has no meaning on macOS - ignored" ;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1 - no tab was opened (a command goes in quotes: t 'ls -la')" ;;
+		*) commands+=("$1") ;;
+	esac
+	shift
+done
+
+count=${#commands[@]}
+[ ${#titles[@]} -gt "$count" ] && count=${#titles[@]}
+[ ${#dirs[@]} -gt "$count" ] && count=${#dirs[@]}
+[ "$count" -ge 1 ] || count=1
+
+# A tab without --cwd starts on the Desktop, as Windows Terminal's startingDirectory (the home
+# folder when there is no Desktop).
+start_dir=$HOME/Desktop
+[ -d "$start_dir" ] || start_dir=$HOME
+specs=''
+for ((i = 0; i < count; i++)); do
+	specs+="${titles[i]:-}"$'\t'"${dirs[i]:-$start_dir}"$'\t'"${commands[i]:-}"$'\n'
+done
+if [ -n "$window_name" ]; then
+	target=$(term_named_window "$window_name") || target=new
+	log_debug "[Open-Terminal] window [$window_name] => ${target}"
+fi
+panes=$(printf '%s' "$specs" | term_open_tabs "$target" 0) || exit 1
+if [ -n "$window_name" ] && [ "$target" = new ]; then
+	window=$(wt_pane_window "$(printf '%s\n' "$panes" | head -n 1)")
+	[ -z "$window" ] || term_remember_window "$window_name" "$window" || log_warning "Could not remember window [$window_name]"
+fi
+log_success "Opened $count terminal tab(s)!"

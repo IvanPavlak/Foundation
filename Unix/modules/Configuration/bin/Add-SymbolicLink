@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# Add-SymbolicLink - adds a dotfile link to the chezmoi source tree (Unix/home): a one-line
+# symlink template that makes ~/HOME-PATH a link to TARGET in this repository.
+#
+# Usage: Add-SymbolicLink HOME-PATH TARGET | --path HOME-PATH --target TARGET
+#
+# HOME-PATH is where the link goes, relative to the home folder (~/ and $HOME/ are dropped):
+# .config/app/file.toml. TARGET is the repository file or folder it points at, relative to the
+# repository root, which must exist. The template lands under chezmoi's naming
+# (.config/app/file.toml -> dot_config/app/symlink_file.toml.tmpl), reusing a folder that is
+# already there under a private_ name (Library -> private_Library). A HOME-PATH that already has a
+# template is left alone. `chezmoi apply` then creates the link. The named form binds by flag in
+# any order, as the Windows -Path and -Target do; --name (-Name) is accepted and ignored (a chezmoi
+# template carries no name). A flag it does not know is an error and nothing is written.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+link=''
+target=''
+while [ $# -gt 0 ]; do
+	case $1 in
+		--path)
+			link=${2:-}
+			shift
+			;;
+		--target)
+			target=${2:-}
+			shift
+			;;
+		--name) shift ;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1 - nothing was written" ;;
+		*) if [ -z "$link" ]; then link=$1; elif [ -z "$target" ]; then target=$1; else foundation_die "Too many arguments => $1"; fi ;;
+	esac
+	shift
+done
+[ -n "$link" ] && [ -n "$target" ] || foundation_die "Usage: Add-SymbolicLink HOME-PATH TARGET"
+target=${target#"$DOTFILES_ROOT"/}
+[ -e "$DOTFILES_ROOT/$target" ] || foundation_die "Target not found in the repository => $target"
+case $link in \~/*) link=${link#\~/} ;; "$HOME"/*) link=${link#"$HOME"/} ;; esac
+link=${link%/}
+case /$link/ in */../* | */./* | //) foundation_die "HOME-PATH must be a plain path below the home folder => $link" ;; esac
+case $link in /*) foundation_die "HOME-PATH must be inside the home folder => $link" ;; esac
+
+# The chezmoi spelling of one path component: a leading dot becomes dot_.
+source_name() { # COMPONENT
+	case $1 in .*) printf 'dot_%s' "${1#.}" ;; *) printf '%s' "$1" ;; esac
+}
+
+# The source folder of a home folder component inside PARENT: an existing private_ spelling
+# wins, so a folder chezmoi keeps at 0700 stays that way.
+source_folder() { # PARENT COMPONENT
+	local name
+	name=$(source_name "$2")
+	if [ -d "$1/private_$name" ]; then
+		printf '%s' "private_$name"
+	else
+		printf '%s' "$name"
+	fi
+}
+
+root=${FOUNDATION_CHEZMOI_SOURCE:-$FOUNDATION_UNIX/home}
+[ -d "$root" ] || foundation_die "chezmoi source tree not found => $root"
+folder=$root
+rest=$link
+while [ "${rest#*/}" != "$rest" ]; do
+	component=${rest%%/*}
+	rest=${rest#*/}
+	folder=$folder/$(source_folder "$folder" "$component")
+done
+template=$folder/symlink_$(source_name "$rest").tmpl
+if [ -e "$template" ] || [ -e "${template%.tmpl}" ]; then
+	foundation_die "The home path ~/$link already has a link template => ${template#"$FOUNDATION_UNIX"/}"
+fi
+
+mkdir -p "$folder" || foundation_die "Could not create $folder"
+printf '{{ .chezmoi.workingTree }}/%s\n' "$target" >"$template" || foundation_die "Could not write $template"
+log_success "Added ~/$link => $target (${template#"$FOUNDATION_UNIX"/}) - run chezmoi apply to link it"

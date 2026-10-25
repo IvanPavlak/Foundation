@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+# Set-SpecialFolders - redirects Downloads and the screenshot folder as Unix/config/special-folders.conf says.
+#
+# Usage: Set-SpecialFolders [--dry-run]
+#
+# The Unix twin of the Windows Set-SpecialFolders (which writes the User Shell Folders registry
+# key). `folder Downloads PATH`: ~/Downloads becomes a link to PATH, so every app that saves to
+# Downloads saves there. Before that, everything ~/Downloads holds moves to PATH; a name PATH already
+# has is never overwritten, the moved item is kept beside it as "NAME (Downloads)" (then
+# "NAME (Downloads 2)", ...). macOS guards ~/Downloads with a `group:everyone deny delete` rule
+# (as it does ~/Desktop and ~/Documents); once the folder is empty that rule is removed from it
+# (chmod -N), so the empty folder can go and the link take its place. A link already pointing at
+# PATH is left alone; a link elsewhere is replaced. The first run asks for the terminal's access to
+# the Downloads folder (a macOS prompt). To undo: rm ~/Downloads && mkdir ~/Downloads &&
+# chmod +a "group:everyone deny delete" ~/Downloads, and drop the `folder Downloads` line.
+# `folder Screenshots PATH`: com.apple.screencapture location, the folder is created when missing.
+# Nothing is redirected without a line (the base config ships none), and nothing is undone when a
+# line is removed. --dry-run prints what would change and changes nothing. Bootstrap runs it as
+# the SpecialFolders step.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+dry=0
+for argument in "$@"; do
+	case $argument in
+		--dry-run) dry=1 ;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument => $argument" ;;
+	esac
+done
+
+# The configured folders as NAME<TAB>PATH, the last line of a name winning.
+folders=''
+if file=$(conf_path special-folders.conf); then
+	folders=$(conf_lines "$file" | awk '$1 == "folder" && NF >= 3 { name = $2; $1 = ""; $2 = ""; sub(/^  */, ""); path[name] = $0; if (!(name in seen)) { seen[name] = 1; order[++n] = name } }
+		END { for (i = 1; i <= n; i++) printf "%s\t%s\n", order[i], path[order[i]] }')
+fi
+log_title "Setting Special Folders"
+if [ -z "$folders" ]; then
+	log_warning "No folder lines in special-folders.conf - nothing redirected!"
+	exit 0
+fi
+
+# A free name in DIR for NAME: NAME, else "STEM (Downloads)", "STEM (Downloads 2)", ... with the
+# extension kept. Usage: free_name DIR NAME
+free_name() {
+	local dir=$1 name=$2 stem extension candidate n=1
+	[ -e "$dir/$name" ] || [ -L "$dir/$name" ] || {
+		printf '%s' "$name"
+		return 0
+	}
+	stem=$name
+	extension=''
+	case $name in ?*.*) stem=${name%.*} extension=.${name##*.} ;; esac
+	while :; do
+		if [ "$n" -eq 1 ]; then candidate="$stem (Downloads)$extension"; else candidate="$stem (Downloads $n)$extension"; fi
+		[ -e "$dir/$candidate" ] || [ -L "$dir/$candidate" ] || break
+		n=$((n + 1))
+	done
+	printf '%s' "$candidate"
+}
+
+# ~/Downloads as a link to TARGET. Usage: redirect_downloads TARGET
+redirect_downloads() {
+	local target=$1 downloads=$HOME/Downloads entry name destination moved=0
+	if [ -L "$downloads" ] && [ "$(readlink "$downloads")" = "$target" ]; then
+		log_step "Downloads already goes to [$target]"
+		return 0
+	fi
+	if [ "$dry" -eq 1 ]; then
+		printf '  would move the contents of %s to %s and link %s => %s\n' "$downloads" "$target" "$downloads" "$target"
+		return 0
+	fi
+	mkdir -p "$target" || {
+		log_error "Could not create [$target]"
+		return 1
+	}
+	if [ -d "$downloads" ] && [ ! -L "$downloads" ]; then
+		# Reading it is what triggers the macOS prompt; a refusal stops before anything moves.
+		ls -A "$downloads" >/dev/null 2>&1 || {
+			log_error "No access to $downloads - allow the terminal in System Settings > Privacy & Security > Files and Folders (Downloads Folder), then run Set-SpecialFolders again"
+			return 1
+		}
+		for entry in "$downloads"/* "$downloads"/.[!.]* "$downloads"/..?*; do
+			[ -e "$entry" ] || [ -L "$entry" ] || continue
+			name=${entry##*/}
+			# Finder's own bookkeeping stays behind with the folder.
+			case $name in .DS_Store | .localized) continue ;; esac
+			destination=$(free_name "$target" "$name")
+			mv "$entry" "$target/$destination" || {
+				log_error "Could not move [$entry] - Downloads left as it is"
+				return 1
+			}
+			[ "$destination" = "$name" ] || log_warning "[$name] already on the target - kept as [$destination]"
+			moved=$((moved + 1))
+		done
+		rm -f "$downloads/.DS_Store" "$downloads/.localized"
+		# The deny-delete rule macOS puts on ~/Downloads; only this folder, only now that it is empty.
+		chmod -N "$downloads" 2>/dev/null || true
+		rmdir "$downloads" || {
+			log_error "Could not remove the emptied $downloads"
+			return 1
+		}
+		log_step "Moved $moved item(s) from Downloads to [$target]"
+	elif [ -L "$downloads" ]; then
+		rm -f "$downloads" || return 1
+	fi
+	ln -s "$target" "$downloads" || {
+		log_error "Could not link $downloads => [$target]"
+		return 1
+	}
+	log_success "Downloads => [$target]"
+}
+
+# The screenshot folder. Usage: redirect_screenshots TARGET
+redirect_screenshots() {
+	local target=$1 current
+	current=$(defaults read com.apple.screencapture location 2>/dev/null) || current=''
+	if [ "$(foundation_expand_path "$current")" = "$target" ]; then
+		log_step "Screenshots already go to [$target]"
+		return 0
+	fi
+	if [ "$dry" -eq 1 ]; then
+		printf '  would run: defaults write com.apple.screencapture location -string %s\n' "$target"
+		return 0
+	fi
+	mkdir -p "$target" && defaults write com.apple.screencapture location -string "$target" || {
+		log_error "Could not set the screenshot folder to [$target]"
+		return 1
+	}
+	log_success "Screenshots => [$target]"
+}
+
+failed=0
+while IFS=$'\t' read -r name path; do
+	target=$(foundation_expand_path "$path")
+	target=${target%/}
+	case $(foundation_lower "$name") in
+		downloads) redirect_downloads "$target" || failed=1 ;;
+		screenshots) redirect_screenshots "$target" || failed=1 ;;
+		*) log_warning "Unknown special folder [$name] (expected Downloads or Screenshots) - skipped" ;;
+	esac
+done <<<"$folders"
+exit "$failed"

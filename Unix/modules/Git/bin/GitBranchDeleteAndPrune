@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# GitBranchDeleteAndPrune - force-deletes a local branch and prunes stale origin refs. Alias: gbd
+#
+# Usage: GitBranchDeleteAndPrune BRANCH | --branch-name BRANCH
+#
+# BRANCH may also be given as --branch-name BRANCH (the Windows -BranchName); a flag it does not
+# know is an error, never a branch name.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+branch=''
+while [ $# -gt 0 ]; do
+	case $1 in
+		--branch-name | -v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1" ;;
+		*)
+			[ -z "$branch" ] || foundation_die "One branch at a time - got [$branch] and [$1]"
+			branch=$1
+			;;
+	esac
+	shift
+done
+
+[ -n "$branch" ] || foundation_die "Usage: GitBranchDeleteAndPrune BRANCH"
+git branch -D "$branch" || exit 1
+git remote prune origin

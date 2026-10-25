@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# foundation-shell-settings - prints the settings a new interactive shell applies, for Unix/shell/shellrc.sh.
+#
+# Usage: foundation-shell-settings [--prompt-theme]
+#
+# One `KEY VALUE` line each: prompt-theme (the Oh My Posh theme, see foundation-prompt-theme), the
+# line-editing settings of Unix/config/shell.conf - history-size, history-file (expanded),
+# edit-mode, list-lines - for this machine type, the .local overlay applied (a setting without a
+# line is left out, so the shell keeps its own default), and one `app TOKEN` line per apps.conf
+# token, for the Open-<TOKEN> aliases. One process for both startup stages: each
+# helper run costs a new shell about a tenth of a second. --prompt-theme prints the theme path
+# alone. Keeps no session log of its own (one per terminal would push the real command logs out).
+export FOUNDATION_LOGGING=off
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps
+
+# The prompt-theme line of theme.conf, {MachineType} replaced; the shipped theme without one.
+theme=''
+file=$(conf_path theme.conf) && theme=$(conf_value "$file" prompt-theme 2>/dev/null)
+[ -n "$theme" ] || theme='$DOTFILES_ROOT/Oh-My-Posh/WinuX_Test.omp.json'
+theme=${theme//\{MachineType\}/$(foundation_machine_type)}
+theme=$(foundation_expand_path "$theme")
+if [ "${1:-}" = --prompt-theme ]; then
+	printf '%s\n' "$theme"
+	exit 0
+fi
+printf 'prompt-theme %s\n' "$theme"
+
+while IFS= read -r token; do
+	[ -n "$token" ] && printf 'app %s\n' "$token"
+done < <(apps_list | cut -f1)
+
+file=$(conf_path shell.conf) || exit 0
+for key in history-size history-file edit-mode list-lines; do
+	value=$(conf_value "$file" "$key" 2>/dev/null) || continue
+	case $key in
+		history-size | list-lines) case $value in '' | *[!0-9]*) continue ;; esac ;;
+		history-file) value=$(foundation_expand_path "$value") ;;
+		edit-mode)
+			value=$(foundation_lower "$value")
+			case $value in emacs | vi) ;; *) continue ;; esac
+			;;
+	esac
+	[ -n "$value" ] && printf '%s %s\n' "$key" "$value"
+done
+exit 0

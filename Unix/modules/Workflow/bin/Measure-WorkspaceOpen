@@ -1,0 +1,380 @@
+#!/usr/bin/env bash
+# Measure-WorkspaceOpen - opens one workspace many times under alternating settings and compares them.
+#
+# Usage: Measure-WorkspaceOpen [WORKSPACE] [PROJECT...] [--runs N] [--warm-up N] [--settle-seconds N]
+#                              [--setting KEY...] [--full-factorial] [--variant "NAME:KEY=VALUE,..."...]
+#                              [--order interleaved|shuffled|sequential] [--seed N] [--teardown "CMD"]
+#                              [--max-minutes N] [--reference NAME] [--dry-run] [-v] [-- OPEN-WORKSPACE-ARGS...]
+#        Measure-WorkspaceOpen --report [SESSION] [--reference NAME]
+#        Measure-WorkspaceOpen --list-sessions
+#
+# The controlled experiment behind the Open-Workspace speed work (the Windows Measure-WorkspaceOpen).
+# One benchmark row cannot say whether a setting made an open faster: two opens of the same
+# configuration (a cold browser start against a warm one) differ by more than a setting does.
+# So every run tears the machine down (--teardown, default `Kill-All --skip Docker`), waits
+# --settle-seconds (5), opens WORKSPACE (default Example) through the real Open-Workspace with the
+# variant's settings (FOUNDATION_SETTING_OVERRIDES - no config file is edited, nothing to restore) and
+# takes the benchmark row that open wrote, stamped Source "Measure-WorkspaceOpen <session>" so the
+# everyday Get-WorkspaceBenchmark history leaves it out.
+#
+# Variants: without --variant, the current settings as Baseline plus one variant per --setting
+# with only that setting flipped (default settings: layout-early-move, layout-stable-ms; a setting
+# without a line in workspaces.conf counts as the shipped base value, off and 500);
+# --full-factorial runs every combination instead; --variant runs exactly the ones given. Known
+# settings and their values: layout-early-move off|on, layout-stable-ms 500|1000. Every open
+# records its benchmark row, even with `benchmark off` in workspaces.conf.
+# Runs are interleaved by default (round 1 of every variant, then round 2), so a slow minute hits
+# every variant alike; --warm-up opens (1) run first under the baseline and are recorded but not
+# counted. --runs (5) per variant. --max-minutes stops starting opens once the budget is spent.
+#
+# The summary per variant: measured and clean runs (Outcome Applied at the first layout attempt),
+# the layout retries (Attempts - 1 of each run) and the runs not applied, median/min/max total, the
+# median clean total, median actions/layout/wait, and against the reference variant (the first,
+# or --reference NAME) Effect (seconds, negative is faster), Spread (the variant's own clean-run
+# range) and a Verdict - Noise when the effect is inside half the larger spread, Faster or Slower
+# otherwise. Every open is appended to $XDG_STATE_HOME/foundation/WorkspaceOpenMeasurements.csv;
+# --report [SESSION] prints a summary again (the last session by default), --list-sessions lists
+# the recorded sessions (id, workspace, start, opens, measured opens, variants).
+# Refuses a workspace whose actions close the calling terminal tab (Terminate-WindowsTerminalTabs
+# --only-current / --include-current) and one whose Open-Project needs a project none was given
+# for. Kill-All quits every app, the Claude app included: run it from a terminal you can leave.
+# The Windows spellings (-Runs 3, -WarmUp 0, -DryRun, -WhatIf) work for the words before `--`;
+# what follows `--` reaches Open-Workspace untouched.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config benchmark workspace
+
+# Windows-style flags are converted only before `--`: the Open-Workspace arguments after it pass
+# untouched.
+own_args=()
+open_args=()
+split=0
+for argument in "$@"; do
+	if [ "$split" -eq 1 ]; then
+		open_args+=("$argument")
+	elif [ "$argument" = -- ]; then
+		split=1
+	else
+		own_args+=("$argument")
+	fi
+done
+foundation_normalize_args ${own_args[@]+"${own_args[@]}"}
+set -- ${FOUNDATION_ARGS[@]+"${FOUNDATION_ARGS[@]}"}
+[ "$split" -eq 0 ] || set -- "$@" -- "${open_args[@]}"
+
+workspace=''
+projects=()
+runs=5
+warmup=1
+settle=5
+settings=()
+factorial=0
+variant_specs=()
+order=interleaved
+seed=''
+teardown='Kill-All --skip Docker'
+max_minutes=0
+dry=0
+report=''
+reporting=0
+listing=0
+reference=''
+passthrough=()
+while [ $# -gt 0 ]; do
+	case $1 in
+		--runs)
+			runs=$2
+			shift
+			;;
+		--warm-up | --warmup)
+			warmup=$2
+			shift
+			;;
+		--settle-seconds)
+			settle=$2
+			shift
+			;;
+		--setting)
+			settings+=("$2")
+			shift
+			;;
+		--full-factorial) factorial=1 ;;
+		--variant)
+			variant_specs+=("$2")
+			shift
+			;;
+		--order)
+			order=$(foundation_lower "$2")
+			shift
+			;;
+		--seed)
+			seed=$2
+			shift
+			;;
+		--teardown)
+			teardown=$2
+			shift
+			;;
+		--max-minutes)
+			max_minutes=$2
+			shift
+			;;
+		--dry-run) dry=1 ;;
+		--list-sessions) listing=1 ;;
+		--reference)
+			[ $# -gt 1 ] || foundation_die "--reference needs a variant name"
+			reference=$2
+			shift
+			;;
+		--report)
+			reporting=1
+			if [ $# -gt 1 ] && [ "${2#-}" = "$2" ]; then
+				report=$2
+				shift
+			fi
+			;;
+		-h | --help)
+			foundation_usage "$0"
+			exit 0
+			;;
+		-v | --verbose) export FOUNDATION_LOG_LEVEL=verbose ;;
+		--)
+			shift
+			passthrough=("$@")
+			break
+			;;
+		-*) foundation_die "Unknown option => $1 (Open-Workspace arguments go after --)" ;;
+		*) if [ -z "$workspace" ]; then workspace=$1; else projects+=("$1"); fi ;;
+	esac
+	shift
+done
+for n in "$runs" "$warmup" "$settle" "$max_minutes"; do case $n in '' | *[!0-9]*) foundation_die "Counts must be whole numbers" ;; esac done
+case $order in interleaved | shuffled | sequential) ;; *) foundation_die "--order is interleaved, shuffled or sequential" ;; esac
+
+measurements=$FOUNDATION_STATE_DIR/WorkspaceOpenMeasurements.csv
+header='Session,Variant,Round,Kind,Workspace,Settings,Timestamp,TotalSeconds,ActionsSeconds,LayoutSeconds,WaitSeconds,ArrangeSeconds,Found,Expected,Outcome,Attempts'
+
+# Summary of one session's rows (Variant order = first appearance). REFERENCE is the variant the
+# others are compared with; empty, or one the session does not have, is the first.
+summarize() { # SESSION [REFERENCE]
+	if [ -n "${2:-}" ] && ! awk -F, -v s="$1" -v r="$2" '$1 == s && $2 == r { f = 1 } END { exit !f }' "$measurements"; then
+		log_warning "No variant [$2] in session $1 - comparing with its first variant"
+	fi
+	awk -F, -v s="$1" -v r="${2:-}" '
+		function median(list,   n, v, i, j, t) {
+			n = split(list, v, " "); if (n == 0) return ""
+			for (i = 1; i <= n; i++) for (j = i + 1; j <= n; j++) if (v[j] + 0 < v[i] + 0) { t = v[i]; v[i] = v[j]; v[j] = t }
+			return n % 2 ? v[(n + 1) / 2] : (v[n / 2] + v[n / 2 + 1]) / 2
+		}
+		function extreme(list, max,   n, v, i, r) { n = split(list, v, " "); r = v[1]; for (i = 2; i <= n; i++) if ((max && v[i] + 0 > r + 0) || (!max && v[i] + 0 < r + 0)) r = v[i]; return r }
+		$1 == s && $4 == "Measured" {
+			v = $2; if (!(v in seen)) { seen[v] = 1; names[++nv] = v }
+			runs[v]++
+			if ($15 == "NoRow" || $15 == "Error") { failed[v]++; next }
+			total[v] = total[v] " " $8; actions[v] = actions[v] " " $9; layout[v] = layout[v] " " $10; wait[v] = wait[v] " " $11
+			# Attempts (column 16; empty in a row from before it) beyond the first are retries; a
+			# clean run is Applied at the first attempt, as ConvertTo-WorkspaceOpenSummary counts.
+			if ($16 + 0 > 1) retries[v] += $16 - 1
+			if ($15 == "Applied" && $16 + 0 <= 1) { clean[v]++; ctotal[v] = ctotal[v] " " $8 }
+			if ($15 != "Applied") notapplied[v]++
+		}
+		END {
+			if (nv == 0) { print "  (no measured runs in session " s " - Measure-WorkspaceOpen --list-sessions shows the recorded ones)"; exit }
+			printf "  %-44s %4s %5s %7s %10s %8s %8s %8s %8s %8s %8s %7s %7s %7s  %s\n", "Variant", "Runs", "Clean", "Retries", "NotApplied", "Median", "Min", "Max", "Clean", "Actions", "Layout", "Wait", "Effect", "Spread", "Verdict"
+			for (i = 1; i <= nv; i++) {
+				v = names[i]
+				src = (ctotal[v] != "") ? ctotal[v] : total[v]
+				spread[v] = (src != "") ? extreme(src, 1) - extreme(src, 0) : 0
+				cm[v] = (ctotal[v] != "") ? median(ctotal[v]) : median(total[v])
+			}
+			ref = (r != "" && (r in seen)) ? r : names[1]; faster = 0; noise = 0
+			for (i = 1; i <= nv; i++) {
+				v = names[i]
+				if (v == ref) { eff = "-"; verdict = "Reference" }
+				else {
+					e = cm[v] - cm[ref]; eff = sprintf("%+.1f", e)
+					floor = (spread[v] > spread[ref] ? spread[v] : spread[ref]) / 2
+					verdict = ((e < 0 ? -e : e) <= floor) ? "Noise" : (e < 0 ? "Faster" : "Slower")
+					if (verdict == "Noise") noise++
+				}
+				printf "  %-44s %4d %5d %7d %10d %7.1fs %7.1fs %7.1fs %7.1fs %7.1fs %7.1fs %6.1fs %7s %6.1fs  %s\n", substr(v, 1, 44), runs[v], clean[v] + 0, retries[v] + 0, notapplied[v] + failed[v], median(total[v]), extreme(total[v], 0), extreme(total[v], 1), cm[v], median(actions[v]), median(layout[v]), median(wait[v]), eff, spread[v], verdict
+			}
+			if (nv > 1) printf "\n  %d of %d variant(s) within the noise of %s; read Clean before the seconds.\n", noise, nv - 1, ref
+		}' "$measurements"
+}
+
+# Get-WorkspaceOpenMeasurement -ListSessions: one line per session, in the order they ran.
+if [ "$listing" -eq 1 ]; then
+	[ -s "$measurements" ] || foundation_die "No measurements yet"
+	log_title "Measure-WorkspaceOpen sessions"
+	tail -n +2 "$measurements" | awk -F, '
+		BEGIN { printf "  %-16s %-20s %-19s %6s %9s %9s\n", "Session", "Workspace", "Started", "Opens", "Measured", "Variants" }
+		{
+			s = $1; if (!(s in opens)) { order[++n] = s; ws[s] = $5; started[s] = $7 }
+			opens[s]++
+			if ($4 == "Measured") { measured[s]++; if (!((s, $2) in seen)) { seen[s, $2] = 1; variants[s]++ } }
+		}
+		END { for (i = 1; i <= n; i++) { s = order[i]; printf "  %-16s %-20s %-19s %6d %9d %9d\n", s, substr(ws[s], 1, 20), started[s], opens[s], measured[s] + 0, variants[s] + 0 } }'
+	exit 0
+fi
+
+if [ "$reporting" -eq 1 ]; then
+	[ -s "$measurements" ] || foundation_die "No measurements yet"
+	[ -n "$report" ] || report=$(tail -n 1 "$measurements" | cut -d, -f1)
+	log_title "Measure-WorkspaceOpen session $report"
+	summarize "$report" "$reference"
+	exit 0
+fi
+
+[ -n "$workspace" ] || workspace=Example
+file=$(conf_path workspaces.conf) || foundation_die "Missing Unix/config/workspaces.conf"
+name=$(conf_section_name "$file" "$workspace") || foundation_die "No workspace [$workspace] in workspaces.conf"
+# The actions as Open-Workspace runs them: the template expanded, the project scopes applied.
+actions=$(workspace_lines "$file" "$name" 2>&1) || foundation_die "[$name] does not resolve: $actions"
+# A %SET layout-set scope is dropped, not applied: the checks below hold for every layout set.
+actions=$(printf '%s\n' "$actions" | sed -E 's/^%[^[:space:]]*[[:space:]]+//' | workspace_for_projects ${projects[@]+"${projects[@]}"})
+if printf '%s\n' "$actions" | grep -qE '^Terminate-WindowsTerminalTabs.*--(only|include)-current'; then
+	foundation_die "[$name] closes the calling terminal tab (Terminate-WindowsTerminalTabs --only-current/--include-current), which would end the experiment"
+fi
+if [ ${#projects[@]} -eq 0 ] && printf '%s\n' "$actions" | grep -qxE 'Open-Project[[:space:]]*'; then
+	foundation_die "[$name] opens a project it takes from the command line - pass one (Measure-WorkspaceOpen $name PROJECT)"
+fi
+
+# Known settings: KEY BASE-VALUE OTHER-VALUE. The current value comes from workspaces.conf; without
+# a line it is the shipped base file's value (the first one), which is what the open then uses.
+known_values() { case $1 in layout-early-move) echo "off on" ;; layout-stable-ms) echo "500 1000" ;; *) return 1 ;; esac }
+current_value() {
+	local v
+	v=$(conf_value "$file" "$1" 2>/dev/null) || v=''
+	[ -n "$v" ] || v=$(known_values "$1" | cut -d' ' -f1)
+	printf '%s' "$v"
+}
+[ ${#settings[@]} -gt 0 ] || settings=(layout-early-move layout-stable-ms)
+for s in "${settings[@]}"; do known_values "$s" >/dev/null || foundation_die "Unknown setting [$s] (known: layout-early-move, layout-stable-ms)"; done
+
+# Variants: NAME<TAB>OVERRIDES (newline-joined key=value, written with \n escapes here).
+variants=()
+if [ ${#variant_specs[@]} -gt 0 ]; then
+	for spec in "${variant_specs[@]}"; do
+		vname=${spec%%:*}
+		body=${spec#*:}
+		[ "$vname" = "$spec" ] && {
+			body=$spec
+			vname=$spec
+		}
+		variants+=("$vname"$'\t'"$(printf '%s' "$body" | tr ',' ' ')")
+	done
+elif [ "$factorial" -eq 1 ]; then
+	combos=('')
+	for s in "${settings[@]}"; do
+		next=()
+		for c in "${combos[@]}"; do for value in $(known_values "$s"); do next+=("${c:+$c }$s=$value"); done; done
+		combos=("${next[@]}")
+	done
+	for c in "${combos[@]}"; do variants+=("$c"$'\t'"$c"); done
+else
+	base=''
+	for s in "${settings[@]}"; do base="${base:+$base }$s=$(current_value "$s")"; done
+	variants+=("Baseline ($base)"$'\t'"$base")
+	for s in "${settings[@]}"; do
+		cur=$(current_value "$s")
+		for value in $(known_values "$s"); do [ "$value" = "$cur" ] || flipped=$value; done
+		variants+=("$s=$flipped"$'\t'"$(printf '%s' "$base" | tr ' ' '\n' | sed "s/^$s=.*/$s=$flipped/" | paste -sd' ' -)")
+	done
+fi
+
+# The run plan: KIND<TAB>ROUND<TAB>VARIANT-INDEX
+plan=()
+for ((w = 1; w <= warmup; w++)); do plan+=("WarmUp"$'\t'"$w"$'\t'"0"); done
+case $order in
+	sequential) for i in "${!variants[@]}"; do for ((r = 1; r <= runs; r++)); do plan+=("Measured"$'\t'"$r"$'\t'"$i"); done; done ;;
+	*)
+		[ -n "$seed" ] && RANDOM=$seed
+		for ((r = 1; r <= runs; r++)); do
+			round=()
+			for i in "${!variants[@]}"; do round+=("$i"); done
+			if [ "$order" = shuffled ]; then
+				for ((i = ${#round[@]} - 1; i > 0; i--)); do
+					j=$((RANDOM % (i + 1)))
+					t=${round[i]}
+					round[i]=${round[j]}
+					round[j]=$t
+				done
+			fi
+			for i in "${round[@]}"; do plan+=("Measured"$'\t'"$r"$'\t'"$i"); done
+		done
+		;;
+esac
+
+session=$(date +%Y%m%d-%H%M%S)
+log_title "Measure-WorkspaceOpen [$name] session $session"
+log_step "${#variants[@]} variant(s) x $runs run(s) + $warmup warm-up, order $order, teardown [$teardown], settle ${settle}s"
+for v in "${variants[@]}"; do log_step "  variant ${v%%$'\t'*}"; done
+if [ "$dry" -eq 1 ]; then
+	log_step "Plan:"
+	for p in "${plan[@]}"; do
+		IFS=$'\t' read -r kind round index <<<"$p"
+		log_step "  $kind round $round => ${variants[index]%%$'\t'*}"
+	done
+	log_success "Dry run - nothing opened ($((${#plan[@]})) open(s) planned)"
+	exit 0
+fi
+log_warning "Every run tears everything down with [$teardown] - the Claude app and the browsers quit too. Ctrl+C stops."
+foundation_run Countdown 5 --message "Starting the experiment" || exit 130
+
+mkdir -p "$FOUNDATION_STATE_DIR"
+[ -s "$measurements" ] || echo "$header" >"$measurements"
+# A file from before the Attempts column gets it added to the header once; its rows read it empty.
+head -n 1 "$measurements" | tr ',' '\n' | grep -qx Attempts || { sed -i.bak '1s/$/,Attempts/' "$measurements" && rm -f "$measurements.bak"; }
+bench=$(benchmark_file)
+# The --max-minutes clock, in seconds. FOUNDATION_MEASURE_CLOCK (a command printing seconds)
+# stands in for it in the tests, so a budget can run out without waiting.
+measure_clock() {
+	if [ -n "${FOUNDATION_MEASURE_CLOCK:-}" ]; then "$FOUNDATION_MEASURE_CLOCK"; else printf '%s' "$SECONDS"; fi
+}
+start=$(measure_clock)
+done_count=0
+for p in "${plan[@]}"; do
+	IFS=$'\t' read -r kind round index <<<"$p"
+	vname=${variants[index]%%$'\t'*}
+	overrides=$(printf '%s' "${variants[index]#*$'\t'}" | tr ' ' '\n')
+	if [ "$max_minutes" -gt 0 ] && [ $(($(measure_clock) - start)) -ge $((max_minutes * 60)) ]; then
+		log_warning "--max-minutes $max_minutes reached - no further opens"
+		break
+	fi
+	log_title "$kind round $round - $vname"
+	bash -c "$teardown" >/dev/null 2>&1 </dev/null || log_warning "Teardown reported a failure"
+	sleep "$settle"
+	before=$([ -f "$bench" ] && wc -l <"$bench" | tr -d ' ' || echo 0)
+	status=0
+	# benchmark=on and benchmark-display=none, as Windows sets WorkspaceBenchmark Enabled and
+	# Display None: the row is the measurement, so `benchmark off` in workspaces.conf does not turn
+	# every run into a NoRow, and no open prints its table.
+	FOUNDATION_SETTING_OVERRIDES=$overrides$'\n'benchmark=on$'\n'benchmark-display=none FOUNDATION_BENCHMARK_SOURCE="Measure-WorkspaceOpen $session" \
+		foundation_run Open-Workspace "$name" "${projects[@]}" "${passthrough[@]}" </dev/null || status=$?
+	row=''
+	[ -f "$bench" ] && row=$(tail -n +$((before + 1)) "$bench" | awk -F, -v w="$(foundation_lower "$name")" 'tolower($2) == w' | tail -n 1)
+	settings_text=$(printf '%s' "$overrides" | paste -sd' ' -)
+	if [ -n "$row" ]; then
+		attempts=''
+		IFS=, read -r ts _ _ _ total act lay wt arr found expected outcome _ _ _ attempts _ <<<"$row"
+		line="$session,$vname,$round,$kind,$name,$settings_text,$ts,$total,$act,$lay,$wt,$arr,$found,$expected,$outcome,$attempts"
+		log_step "=> $total s, $outcome $found/$expected${attempts:+, attempts $attempts}"
+	else
+		outcome=NoRow
+		[ "$status" -ne 0 ] && outcome=Error
+		line="$session,$vname,$round,$kind,$name,$settings_text,$(date +%Y-%m-%dT%H:%M:%S),,,,,,,,$outcome,"
+		log_warning "No benchmark row ($outcome)"
+	fi
+	printf '%s\n' "$line" >>"$measurements"
+	done_count=$((done_count + 1))
+done
+bash -c "$teardown" >/dev/null 2>&1 </dev/null
+log_title "Summary - session $session ($done_count open(s))"
+summarize "$session" "$reference"
+log_step "Replay any time => Measure-WorkspaceOpen --report $session"

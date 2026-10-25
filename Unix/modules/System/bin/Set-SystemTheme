@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# Set-SystemTheme - switches macOS to Dark or Light appearance, then sets the matching wallpaper.
+#
+# Usage: Set-SystemTheme [Dark|Light|Toggle] [--auto] [--skip STEP...] [--include STEP...]
+#
+# Sets the System Settings appearance through System Events (first use asks to allow the
+# terminal to control it). Without a theme (and without --auto) it applies Dark, as on Windows.
+# Toggle flips the current appearance. --auto takes the theme of this machine type from
+# Unix/config/theme.conf and leaves the system as it is when there is none.
+# Then runs the steps of theme.conf: SetWallpaper (Set-Wallpaper --theme THEME, on by default).
+# --skip turns a step off and --include on for this run; --skip wins. Both take comma lists, and
+# a step name other than SetWallpaper, or a flag it does not know, stops it before anything changes.
+# Windows-style names: --theme (-Theme) THEME is the same as a bare THEME; --keep-terminal-open
+# (-KeepTerminalOpen) is accepted and ignored.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config steps
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+theme=''
+auto=0
+skips=()
+includes=()
+list=''
+while [ $# -gt 0 ]; do
+	case $1 in
+		--auto)
+			auto=1
+			list=''
+			;;
+		--theme)
+			theme=$2
+			shift
+			list=''
+			;;
+		--skip) list=skips ;;
+		--include) list=includes ;;
+		--keep-terminal-open | -v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1 - the theme was not changed" ;;
+		*)
+			case $list in
+				skips) steps_add skips "$1" ;;
+				includes) steps_add includes "$1" ;;
+				*) theme=$1 ;;
+			esac
+			;;
+	esac
+	shift
+done
+
+config=$(conf_path theme.conf) || config=''
+machine=$(foundation_machine_type)
+if [ "$auto" -eq 1 ] && [ -z "$theme" ]; then
+	[ -n "$config" ] && theme=$(conf_lines "$config" | awk -v m="$(foundation_lower "$machine")" '$1 == "theme" && tolower($2) == m { t = $3 } END { print t }')
+	if [ -z "$theme" ]; then
+		log_warning "No theme configured for [$machine] in theme.conf - leaving the system theme as it is"
+		exit 0
+	fi
+fi
+# Neither a theme nor --auto: Dark, as on Windows.
+[ -n "$theme" ] || theme=Dark
+
+current=Light
+[ "$(defaults read -g AppleInterfaceStyle 2>/dev/null)" = Dark ] && current=Dark
+case $(foundation_lower "$theme") in
+	dark) theme=Dark ;;
+	light) theme=Light ;;
+	toggle) if [ "$current" = Dark ]; then theme=Light; else theme=Dark; fi ;;
+	*) foundation_die "Unknown theme [$theme] (expected Dark, Light or Toggle)" ;;
+esac
+
+# Step toggles (lib/steps.sh): theme.conf, then --include, then --skip, which wins.
+# shellcheck disable=SC2034 # read by step_on
+{
+	STEP_CONFIG=$config
+	STEP_SKIPS=(${skips[@]+"${skips[@]}"})
+	STEP_INCLUDES=(${includes[@]+"${includes[@]}"})
+}
+steps_validate SetWallpaper
+
+log_title "Setting $theme Theme"
+if [ "$theme" = "$current" ]; then
+	log_step "The system already uses the $theme appearance"
+else
+	dark=false
+	[ "$theme" = Dark ] && dark=true
+	osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $dark" </dev/null >/dev/null ||
+		foundation_die "Could not change the appearance (allow the terminal to control System Events in System Settings > Privacy & Security > Automation)"
+	log_step "Appearance => $theme"
+fi
+
+if step_on SetWallpaper on; then
+	foundation_run Set-Wallpaper --theme "$theme" || log_warning "The wallpaper step failed"
+else
+	log_debug "[Set-SystemTheme] SetWallpaper skipped"
+fi
+log_success "$theme theme applied!"

@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Loading-Spinner - runs a command while a spinner shows that it is still working.
+#
+# Usage: Loading-Spinner [--label TEXT] [--style STYLE] -- COMMAND [ARGS...]
+#        Loading-Spinner --preview
+#
+# The -Function mode of Windows: COMMAND runs with its output passed through, the spinner
+# (Unix/config/spinners.conf, --style picks one) redraws "FRAME TEXT" on stderr until it ends -
+# " ✓ TEXT" when it succeeded, the line erased when it failed - and its exit status is returned. --preview animates every style for two seconds
+# (Preview-LoadingSpinners). The waits of other commands (Docker start/stop, the layout's wait
+# for windows) use the same spinner through lib/spinner.sh.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config spinner
+
+label='Working...'
+style=''
+preview=0
+while [ $# -gt 0 ]; do
+	case $1 in
+		--label)
+			label=$2
+			shift
+			;;
+		--style)
+			style=$2
+			shift
+			;;
+		--preview) preview=1 ;;
+		-h | --help)
+			foundation_usage "$0"
+			exit 0
+			;;
+		--)
+			shift
+			break
+			;;
+		*) break ;;
+	esac
+	shift
+done
+
+if [ "$preview" -eq 1 ]; then
+	file=$(conf_path spinners.conf) || foundation_die "Missing Unix/config/spinners.conf"
+	# Each name once, in file order; spinner_style draws its last line (an overlay's override).
+	while read -r name; do
+		spinner_start "$name" "$name"
+		sleep 2
+		spinner_stop
+	done < <(conf_lines "$file" | awk '$2 ~ /^[0-9]+$/ && !seen[tolower($1)]++ { print $1 }')
+	exit 0
+fi
+[ $# -gt 0 ] || foundation_die "Usage: Loading-Spinner [--label TEXT] [--style STYLE] -- COMMAND [ARGS...]"
+spinner_start "$label" "$style"
+"$@"
+status=$?
+if [ "$status" -eq 0 ]; then spinner_stop; else spinner_stop --discard; fi
+exit $status

@@ -1,0 +1,95 @@
+# Ghostty configuration - macOS and Linux.
+#
+# Deployed to ~/.config/ghostty/config on both platforms as the identical file.
+#
+# Appearance is a deliberate port of WinuX's Windows/WindowsTerminal/settings_Laptop.json
+# so a terminal on this machine looks the same as one on the Windows machines:
+# same font, same opacity, same 16-colour palette. That matters beyond taste -
+# `ls`, `git diff` and every other tool that paints with ANSI colours resolves
+# those colours through the palette below, so an identical palette is what makes
+# output identical across the two operating systems.
+#
+# Syntax is `key = value`, one per line. Repeatable keys may appear many times.
+
+# --- Font -------------------------------------------------------------------
+# Matches profiles.defaults.font.face in settings_Laptop.json.
+#
+# The Oh My Posh theme is dense with Nerd Font glyphs (powerline separators,
+# diamonds, language icons). Without a Nerd Font the prompt renders as tofu.
+font-family = JetBrainsMono Nerd Font
+font-style = Regular
+
+# The one deliberate deviation from Windows Terminal, which uses its default
+# size of 12. Windows and macOS do not agree on what a "point" is, so 12 on
+# macOS renders visibly smaller than 12 on Windows. 13 is the size that matches
+# physically; drop it to 12 if you would rather have the numbers agree.
+font-size = 13
+
+# --- Colours: Windows Terminal "Campbell" -----------------------------------
+# The PowerShell profile in settings_Laptop.json sets no colorScheme, so it uses
+# Windows Terminal's built-in default, Campbell. Reproduced here explicitly
+# rather than via `theme = Campbell`, so the config does not depend on which
+# themes a given Ghostty build happens to bundle.
+background = #0C0C0C
+foreground = #CCCCCC
+
+palette = 0=#0C0C0C
+palette = 1=#C50F1F
+palette = 2=#13A10E
+palette = 3=#C19C00
+palette = 4=#0037DA
+palette = 5=#881798
+palette = 6=#3A96DD
+palette = 7=#CCCCCC
+palette = 8=#767676
+palette = 9=#E74856
+palette = 10=#16C60C
+palette = 11=#F9F1A5
+palette = 12=#3B78FF
+palette = 13=#B4009E
+palette = 14=#61D6D6
+palette = 15=#F2F2F2
+
+cursor-color = #FFFFFF
+cursor-style = bar
+
+# Windows Terminal sets selectionBackground #FFFFFF and inverts the text on top.
+selection-background = #FFFFFF
+selection-foreground = #0C0C0C
+
+# settings_Laptop.json sets "adjustIndistinguishableColors": "never". 1 is
+# Ghostty's no-adjustment value, stated explicitly so the intent survives.
+minimum-contrast = 1
+
+# --- Window -----------------------------------------------------------------
+# opacity 70 with useAcrylic false: plain transparency, no blur behind it.
+background-opacity = 0.7
+
+# Windows Terminal's default padding.
+window-padding-x = 8
+window-padding-y = 8
+
+# --- macOS ------------------------------------------------------------------
+macos-titlebar-style = tabs
+
+# Option must send Esc-prefixed sequences for readline word motion (alt-b,
+# alt-f). AeroSpace claims its own alt bindings before Ghostty ever sees them,
+# so the two do not fight over the key.
+macos-option-as-alt = true
+
+# --- Behaviour --------------------------------------------------------------
+shell-integration = detect
+confirm-close-surface = false
+window-save-state = always
+mouse-hide-while-typing = true
+
+# --- Start folder -----------------------------------------------------------
+# A new window starts on the Desktop, as Windows Terminal's startingDirectory
+# (profiles.defaults in settings_*.json).
+working-directory = ~/Desktop
+
+# --- Local overrides --------------------------------------------------------
+# A fork's own settings go in Unix/ghostty/config.local, never in this shared file; chezmoi links
+# it next to this one (~/.config/ghostty/config.local) when the repository has it. Loaded last, so
+# its values win; the leading ? makes a missing file no error.
+config-file = ?config.local

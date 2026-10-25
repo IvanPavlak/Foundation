@@ -1,0 +1,868 @@
+#!/usr/bin/env bash
+# Bootstrap - provisions this Mac: packages, dotfiles, system settings and the opt-in extras, in
+# a fixed order, the Unix counterpart of the Windows Bootstrap.
+#
+# Usage: Bootstrap [--list] [--dry-run] [--with-initial-setup] [--skip STEP...] [--include STEP...] [--only STEP...]
+#
+# Every step is idempotent and individually toggled: its built-in default, then the `step NAME
+# on|off` lines of Unix/config/bootstrap.conf and bootstrap.local.conf, then --include, then
+# --skip, which wins (a step in both is skipped with a warning). --only runs just the named steps,
+# whatever their state. Names compare case-insensitively; lists may be comma-separated.
+#
+#   InitializeConfiguration  Initialize-Configuration: this Mac's git identity, name, machine
+#                      type and dev root into the .local overlays, asking only for what is not
+#                      set (initial, interactive; defaults without a terminal); the steps after
+#                      it are resolved again, so the `@TYPE step` lines of the machine type it
+#                      recorded govern the rest of the run
+#   RenameMachine      Rename-Machine (initial, sudo)
+#   Homebrew           install Homebrew when missing (a dry run names the installer, no download)
+#   HomebrewBash       Homebrew bash (every Unix command needs bash 4.4+)
+#   Packages           trust the [Packages] taps, get App Store apps once, brew bundle each
+#                      `brewfile` of [Packages] (default Unix/Brewfile, then Unix/Brewfile.local;
+#                      a failed bundle is retried once; pkg installers use the one password
+#                      prompt)
+#   Dotfiles           chezmoi init --source Unix + chezmoi apply (the links of Unix/home); a real
+#                      file a link replaces is backed up first, a failed copy applies nothing;
+#                      reports links left by the old stow layer; skipped when chezmoi itself runs
+#                      Bootstrap (CHEZMOI=1)
+#   GitIdentity        set an unset global git user.name/user.email from git.local.conf, else
+#                      from Git/.gitconfig; run alone (--only GitIdentity) it also replaces a
+#                      set one that differs from git.local.conf (the Install-Git analog)
+#   MachineType        report the machine type of this host (machines.conf)
+#   Permissions        open the Accessibility, Privacy & Security and Automation panes and wait
+#                      for Enter (initial, interactive)
+#   RepositoryUpdate   Update-Repositories over the repository-scope of bootstrap.conf: --all for
+#                      All (the default), the named groups otherwise; a name that is no group
+#                      updates nothing and fails the step (off)
+#   ObsidianSettings   link the Obsidian vault's .obsidian to the `settings` folder of
+#                      obsidian.conf (the Obsidian link of SymbolicLinkMaker; a real folder there
+#                      is backed up first; nothing without a settings line, skipped with a warning
+#                      while the vault is not cloned yet)
+#   SystemDefaults     Set-SystemDefaults
+#   SpecialFolders     Set-SpecialFolders (Downloads and the screenshot folder; nothing without a
+#                      special-folders.conf line)
+#   Power              Set-PowerSettings (off, sudo)
+#   Spotlight          the [Spotlight] indexing switches (off, sudo)
+#   Firewall           the [Firewall] switches (off, sudo)
+#   SoftwareUpdate     the [SoftwareUpdate] preferences (off, sudo)
+#   Rosetta            install Rosetta 2 on Apple silicon; asks to agree to its licence (off, sudo)
+#   SystemTheme        Set-SystemTheme --auto
+#   Locale             Set-Locale with default-locale of language.conf (nothing without one)
+#   DisplayLanguage    Set-DisplayLanguage with default-display-language (takes effect after
+#                      logging out)
+#   KeyboardLayouts    Set-KeyboardLayouts with default-keyboard-set; after the language steps,
+#                      when any of them ran, Display-SystemLanguageSettings reads them back
+#   DockPins           Set-DockPins
+#   LoginItems         Set-LoginItems
+#   FirefoxProfile     Deploy-FirefoxProfile (off)
+#   VSCodeProfiles     Deploy-VSCodeProfiles (off)
+#   AiArtifacts        Deploy-AiArtifacts: the skills, mods, rules, prompts and agents into the
+#                      harnesses of the deploy line of ai-artifacts.conf (off; a +managed-settings
+#                      destination needs root)
+#   AiMarketplaces     Deploy-AiMarketplaces (off)
+#   AiMcpServers       Deploy-AiMcpServers: the servers of ai-mcp-servers.conf into Claude Code and
+#                      Codex (off)
+#   ObsidianCli        Enable-ObsidianCli --create-if-missing (off)
+#   DotnetEf           Install-DotnetEf
+#   DotnetSdks         Install-DotnetSdks: the sdk-channel lines of dotnet.conf (off, sudo)
+#   CondaEnvironments  Install-CondaEnvironments
+#   NuGetConfig        Configure-NuGetConfig (off, interactive)
+#   UpgradeAll         Upgrade-All (off)
+#   PersonalSteps      the [PersonalSteps] lines of bootstrap.conf, a fork's own commands (empty
+#                      in the base, so nothing to do)
+#   AeroSpace          start AeroSpace and check its config
+#   Logout             ask to log out so keyboard and trackpad settings apply (off, interactive;
+#                      when off, a reminder is printed)
+#
+# The administrator password is asked once, before the first step (or after InitializeConfiguration
+# when a step it turned on needs root), and only when an enabled step needs root; a refused
+# password skips the steps that cannot run without it. A failed step does not stop the run: the
+# summary lists the failed steps and the exit status is 1. The exit status is also 1 when steps
+# were skipped for lack of administrator rights, even with no failed step, so a script sees the
+# run as incomplete. --list prints every step with its default and its state for this run; --dry-run prints or previews what each step would do,
+# never asks for the password and changes nothing.
+#
+# Like the Windows Start-Logging / Stop-Logging, a run (not --list, not a dry run) keeps a
+# transcript of everything it prints, the tools' own output included, in
+# ~/Desktop/BootstrapLog_<yyyy-MM-dd_HH-mm-ss>.log (colour codes left out), outside the session-log
+# retention, and ends with the transcript's path and the total duration.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config steps
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+# The catalog in execution order: NAME DEFAULT [ATTRIBUTES]. initial = only with
+# --with-initial-setup, sudo = needs root (skipped without it), sudo-optional = parts need root
+# (shares the one prompt, runs without it too), interactive = asks on the terminal.
+CATALOG=(
+	"InitializeConfiguration on initial,interactive"
+	"RenameMachine on initial,sudo"
+	"Homebrew on"
+	"HomebrewBash on"
+	"Packages on sudo-optional"
+	"Dotfiles on"
+	"GitIdentity on"
+	"MachineType on"
+	"Permissions on initial,interactive"
+	"RepositoryUpdate off"
+	"ObsidianSettings on"
+	"SystemDefaults on"
+	"SpecialFolders on"
+	"Power off sudo"
+	"Spotlight off sudo"
+	"Firewall off sudo"
+	"SoftwareUpdate off sudo"
+	"Rosetta off sudo"
+	"SystemTheme on"
+	"Locale on"
+	"DisplayLanguage on"
+	"KeyboardLayouts on"
+	"DockPins on"
+	"LoginItems on"
+	"FirefoxProfile off"
+	"VSCodeProfiles off"
+	"AiArtifacts off sudo-optional"
+	"AiMarketplaces off"
+	"AiMcpServers off"
+	"ObsidianCli off"
+	"DotnetEf on"
+	"DotnetSdks off sudo"
+	"CondaEnvironments on"
+	"NuGetConfig off interactive"
+	"UpgradeAll off"
+	"PersonalSteps on"
+	"AeroSpace on"
+	"Logout off interactive"
+)
+
+dry=0
+list_only=0
+initial=0
+skips=()
+includes=()
+onlys=()
+list=''
+for argument in "$@"; do
+	case $argument in
+		--dry-run) dry=1 ;;
+		--list) list_only=1 ;;
+		--with-initial-setup) initial=1 ;;
+		--skip) list=skips ;;
+		--include) list=includes ;;
+		--only) list=onlys ;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument [$argument] - see Bootstrap --help" ;;
+		*)
+			case $list in
+				skips) steps_add skips "$argument" ;;
+				includes) steps_add includes "$argument" ;;
+				onlys) steps_add onlys "$argument" ;;
+				*) foundation_die "Unknown argument [$argument] - see Bootstrap --help" ;;
+			esac
+			;;
+	esac
+done
+
+config=$(conf_path bootstrap.conf) || config=''
+# shellcheck disable=SC2034 # read by step_on
+{
+	STEP_CONFIG=$config
+	STEP_SKIPS=(${skips[@]+"${skips[@]}"})
+	STEP_INCLUDES=(${includes[@]+"${includes[@]}"})
+}
+
+# Every name given on the command line must be a step.
+known_step() {
+	local entry name
+	for entry in "${CATALOG[@]}"; do
+		read -r name _ <<<"$entry"
+		foundation_ieq "$name" "$1" && return 0
+	done
+	return 1
+}
+for name in ${skips[@]+"${skips[@]}"} ${includes[@]+"${includes[@]}"} ${onlys[@]+"${onlys[@]}"}; do
+	known_step "$name" || foundation_die "Unknown step [$name] - Bootstrap --list shows the steps"
+done
+
+# Does this run execute the step? Usage: wanted NAME DEFAULT ATTRIBUTES
+wanted() {
+	local name=$1 default=$2 attributes=$3 item
+	if [ ${#onlys[@]} -gt 0 ]; then
+		for item in "${onlys[@]}"; do foundation_ieq "$item" "$name" && return 0; done
+		return 1
+	fi
+	case ",$attributes," in *,initial,*) [ "$initial" -eq 1 ] || return 1 ;; esac
+	step_on "$name" "$default"
+}
+
+# The lines of a bootstrap.conf section for this machine type (empty when there is none).
+section() {
+	[ -n "$config" ] || return 0
+	conf_section "$config" "$1" 2>/dev/null || true
+}
+
+# Prints the command under --dry-run, runs it otherwise. Usage: act COMMAND [ARGS...]
+act() {
+	if [ "$dry" -eq 1 ]; then
+		printf '  would run: %s\n' "$*"
+		return 0
+	fi
+	"$@"
+}
+
+# Runs a Foundation command. BOOTSTRAP_COMMAND_DIR, when set, holds executables that stand in for
+# commands of the same name (the test suite's seam; nothing else sets it).
+command_run() {
+	local name=$1
+	shift
+	if [ -n "${BOOTSTRAP_COMMAND_DIR:-}" ] && [ -x "$BOOTSTRAP_COMMAND_DIR/$name" ]; then
+		"$BOOTSTRAP_COMMAND_DIR/$name" "$@"
+		return
+	fi
+	foundation_run "$name" "$@"
+}
+
+# A Foundation command that has its own dry run: DRY-FLAG is passed under --dry-run, '' means the
+# command is only named. Usage: run_command DRY-FLAG NAME [ARGS...]
+run_command() {
+	local dry_flag=$1
+	shift
+	if [ "$dry" -eq 1 ]; then
+		if [ -n "$dry_flag" ]; then
+			command_run "$1" "$dry_flag"
+		else
+			printf '  would run: %s\n' "$*"
+		fi
+		return 0
+	fi
+	command_run "$@"
+}
+
+# Homebrew's brew. BOOTSTRAP_BREW, when set, is the only candidate (the test suite's seam, as
+# Homebrew's own prefix cannot be hidden from a suite on a Mac that has it; nothing else sets it).
+brew_path() {
+	local candidate
+	if [ -n "${BOOTSTRAP_BREW:-}" ]; then
+		[ -x "$BOOTSTRAP_BREW" ] && printf '%s' "$BOOTSTRAP_BREW"
+		return
+	fi
+	candidate=$(command -v brew 2>/dev/null) && {
+		printf '%s' "$candidate"
+		return 0
+	}
+	for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+		[ -x "$candidate" ] && {
+			printf '%s' "$candidate"
+			return 0
+		}
+	done
+	return 1
+}
+
+# The firewall tool lives outside PATH; a copy on PATH wins (the test suite's stand-in).
+firewall_tool() {
+	command -v socketfilterfw 2>/dev/null || printf '%s' /usr/libexec/ApplicationFirewall/socketfilterfw
+}
+
+# Reads one line from the terminal; fails without one.
+ask_tty() { # PROMPT
+	[ -r "${FOUNDATION_TTY:-/dev/tty}" ] && { : <"${FOUNDATION_TTY:-/dev/tty}"; } 2>/dev/null || return 1
+	printf '%s' "$1" >&2
+	IFS= read -r REPLY <"${FOUNDATION_TTY:-/dev/tty}"
+}
+
+# The dry run names the installer without downloading it.
+step_homebrew() {
+	local installer=https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh
+	if brew_path >/dev/null; then
+		log_step "Homebrew present => $(brew_path)"
+	elif [ "$dry" -eq 1 ]; then
+		printf '  would run: /bin/bash -c "$(curl -fsSL %s)"\n' "$installer"
+	else
+		/bin/bash -c "$(curl -fsSL "$installer")" || return 1
+	fi
+	local brew
+	brew=$(brew_path) && [ "$dry" -eq 0 ] && eval "$("$brew" shellenv)"
+	return 0
+}
+
+step_homebrew_bash() {
+	local brew prefix
+	brew=$(brew_path) || {
+		log_error "Homebrew is missing - run the Homebrew step first"
+		return 1
+	}
+	prefix=$("$brew" --prefix)
+	if [ -x "$prefix/bin/bash" ]; then
+		log_step "$("$prefix/bin/bash" --version | head -1)"
+	else
+		act "$brew" install bash
+	fi
+}
+
+step_packages() {
+	local brew line kind type name rest brewfile id mas_skip failed=0 brewfiles=()
+	brew=$(brew_path) || {
+		log_error "Homebrew is missing - run the Homebrew step first"
+		return 1
+	}
+	# Homebrew keeps trusted taps in $XDG_CONFIG_HOME/homebrew/trust.json when XDG_CONFIG_HOME is
+	# set (the shared rc sets it) and in ~/.homebrew/trust.json otherwise: trust in both.
+	while IFS= read -r line; do
+		read -r kind rest <<<"$line"
+		read -r type name <<<"$rest"
+		case $kind in
+			brewfile)
+				rest=$(foundation_expand_path "$rest")
+				case $rest in /*) ;; *) rest=$DOTFILES_ROOT/$rest ;; esac
+				brewfiles+=("$rest")
+				;;
+			trust)
+				if [ -z "$name" ]; then
+					log_warning "Incomplete [Packages] line, skipped => $line"
+					continue
+				fi
+				act env -u XDG_CONFIG_HOME "$brew" trust --"$type" "$name" || failed=1
+				act env XDG_CONFIG_HOME="$HOME/.config" "$brew" trust --"$type" "$name" || failed=1
+				;;
+			*) log_warning "Unknown [Packages] line, skipped => $line" ;;
+		esac
+	done < <(section Packages)
+	[ ${#brewfiles[@]} -gt 0 ] || brewfiles=("$FOUNDATION_UNIX/Brewfile" "$FOUNDATION_UNIX/Brewfile.local")
+	for brewfile in "${brewfiles[@]}"; do
+		[ -r "$brewfile" ] || continue
+		# `mas install` (what brew bundle runs) installs only apps this Apple ID already got, so a
+		# free app is got first. Both need the App Store app signed in, which no script can do; an
+		# app that cannot be got is left out of the bundle instead of failing it.
+		mas_skip=''
+		for id in $(sed -n 's/^mas .*id: *\([0-9][0-9]*\).*/\1/p' "$brewfile"); do
+			command -v mas >/dev/null 2>&1 || act "$brew" install mas || break
+			mas list 2>/dev/null | awk '{ print $1 }' | grep -qx "$id" && continue
+			act mas get "$id" && continue
+			mas_skip="$mas_skip $id"
+			log_warning "App Store app $id skipped - sign in to the App Store app (App Store > Sign In), then rerun Bootstrap --only Packages"
+		done
+		# A download or disk image mount can fail for a moment (hdiutil: Resource busy); brew
+		# bundle installs only what is missing, so one more pass retries just those.
+		act env HOMEBREW_BUNDLE_MAS_SKIP="${mas_skip# }" "$brew" bundle --file "$brewfile" || {
+			log_warning "brew bundle failed for ${brewfile##*/} - retrying once"
+			act env HOMEBREW_BUNDLE_MAS_SKIP="${mas_skip# }" "$brew" bundle --file "$brewfile" || failed=1
+		}
+	done
+	return "$failed"
+}
+
+step_dotfiles() {
+	if [ -n "${CHEZMOI:-}" ]; then
+		log_step "Run by chezmoi (CHEZMOI=1) - chezmoi applies the dotfiles itself"
+		return 0
+	fi
+	stow_era_links
+	if ! command -v chezmoi >/dev/null 2>&1; then
+		log_error "chezmoi is not installed - the Packages step installs it (Unix/Brewfile)"
+		return 1
+	fi
+	foundation_load backup || return 1
+	# init renders chezmoi's config from Unix/home/.chezmoi.toml.tmpl; its questions are asked once
+	# per machine, so a rerun only refreshes the config. A real file where a link goes is copied
+	# into the sink before apply replaces it, as bootstrap.sh does; a failed copy applies nothing.
+	if [ "$dry" -eq 1 ]; then
+		printf '  would run: chezmoi init --source %s\n  would back up the real files the links replace\n  would run: chezmoi apply\n' "$FOUNDATION_UNIX"
+		if [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/chezmoi/chezmoi.toml" ]; then
+			backup_chezmoi_targets chezmoi 1
+			chezmoi diff
+		fi
+		return 0
+	fi
+	chezmoi init --source "$FOUNDATION_UNIX" || return 1
+	backup_chezmoi_targets chezmoi || {
+		log_error "A backup failed - chezmoi apply skipped, the original is untouched"
+		return 1
+	}
+	chezmoi apply
+}
+
+# Links the old GNU stow layer left in the home folder (they point into Unix/stow, which is gone);
+# chezmoi replaces the ones it manages, the rest are reported.
+stow_era_links() {
+	local link
+	while IFS= read -r link; do
+		log_warning "Stow-era link, points into the removed Unix/stow => $link - delete it, or add it back with Add-SymbolicLink"
+	done < <({
+		find "$HOME" -maxdepth 1 -type l
+		find "$HOME/.config" -maxdepth 3 -type l
+		find "$HOME/Library/Application Support/Code/User" -maxdepth 1 -type l
+	} 2>/dev/null | while IFS= read -r link; do
+		case $(readlink "$link") in *Unix/stow/*) printf '%s\n' "$link" ;; esac
+	done)
+}
+
+# GitIdentity: an unset global user.name/user.email is filled from git.local.conf, else from
+# Git/.gitconfig. Run on its own (--only GitIdentity, the Install-Git analog), a set one that
+# differs from git.local.conf is replaced too, so a changed identity reaches git; the full run
+# leaves a set identity alone, as the Windows Bootstrap does.
+step_git_identity() {
+	local file=$DOTFILES_ROOT/Git/.gitconfig git_conf key current value source failed=0
+	git_conf=$(conf_path git.conf) || git_conf=''
+	for key in user.name user.email; do
+		current=$(git config --global "$key" 2>/dev/null || true)
+		value=''
+		source=git.local.conf
+		[ -n "$git_conf" ] && value=$(conf_value "$git_conf" "${key#user.}" 2>/dev/null || true)
+		if [ -n "$current" ]; then
+			if [ ${#onlys[@]} -gt 0 ] && [ -n "$value" ] && [ "$value" != "$current" ]; then
+				act git config --global "$key" "$value" || failed=1
+				log_warning "Global git $key differed from git.local.conf - replaced => $current -> $value"
+			else
+				log_step "$key => $current"
+			fi
+			continue
+		fi
+		if [ -z "$value" ]; then
+			value=$(git config -f "$file" "$key" 2>/dev/null || true)
+			source=Git/.gitconfig
+		fi
+		if [ -z "$value" ]; then
+			log_warning "Global git $key is not set and neither git.local.conf nor $file has one - Initialize-Configuration asks for it"
+			continue
+		fi
+		act git config --global "$key" "$value" || failed=1
+		log_warning "Global git $key was not set - restored from $source => $value"
+	done
+	return "$failed"
+}
+
+step_machine_type() {
+	local host machines type types
+	host=$(foundation_hostname)
+	machines=$(conf_path machines.conf) || machines=''
+	type=$(foundation_machine_type)
+	if [ -n "$machines" ] && conf_lines "$machines" | awk -v h="$(foundation_lower "$host")" 'tolower($1) == "host" && tolower($2) == h { found = 1 } END { exit !found }'; then
+		log_step "Host [$host] => $type"
+	else
+		types=$(foundation_machine_types | paste -sd '|' -)
+		log_warning "Host [$host] is not in Unix/config/machines.conf (machine type $type) - add: host $host <${types:-Test}>"
+	fi
+	[ -e "$HOME/.shellrc.local" ] || log_step "Optional per-machine overrides: ~/.shellrc.local (exports and aliases of this machine only)"
+	return 0
+}
+
+step_permissions() {
+	log_step "AeroSpace and the terminal need Accessibility (Center-Windows, Resize-Windows). Opening the pane - enable both, then press Enter; restart the terminal afterwards."
+	if [ "$dry" -eq 0 ]; then
+		open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+		ask_tty "Press Enter when done: " || log_warning "No terminal to wait on - grant Accessibility, then rerun Bootstrap --only Permissions"
+	fi
+	log_step "A cask with a kernel extension (macFUSE) waits for approval under Privacy & Security > Security. Opening the pane - allow it if listed, then press Enter."
+	if [ "$dry" -eq 0 ]; then
+		open "x-apple.systempreferences:com.apple.preference.security?General"
+		ask_tty "Press Enter when done: " || true
+	fi
+	log_step "Safari and Chrome tabs are opened, read and closed through Automation; macOS asks the first time a command scripts each browser. Opening the Automation pane - allow the terminal for each browser listed, then press Enter."
+	if [ "$dry" -eq 0 ]; then
+		open "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
+		ask_tty "Press Enter when done: " || true
+	fi
+	return 0
+}
+
+# RepositoryUpdate (Resolve-RepositoryUpdateScope): the last `repository-scope` line for this
+# machine type names the repository groups to update; All, or no line, updates every repository.
+# Groups may be space- or comma-separated. Group names only, as on Windows: a name that is no
+# group of repositories.conf (a repository's included) is reported with the configured groups,
+# nothing is updated and the step fails.
+step_repository_update() {
+	local scope='' repositories group words=() groups=()
+	if [ -n "$config" ]; then
+		scope=$(conf_value "$config" repository-scope 2>/dev/null) || scope=''
+	fi
+	read -r -a words <<<"${scope//,/ }"
+	if [ ${#words[@]} -eq 0 ] || { [ ${#words[@]} -eq 1 ] && foundation_ieq "${words[0]}" All; }; then
+		run_command '' Update-Repositories --all
+		return
+	fi
+	foundation_load repository || return 1
+	repositories=$(conf_path repositories.conf) || repositories=''
+	while IFS= read -r group; do groups+=("$group"); done < <(repo_scope_groups "$repositories" repository-scope "${words[@]}")
+	[ ${#groups[@]} -gt 0 ] || return 1
+	run_command '' Update-Repositories "${groups[@]}"
+}
+
+# ObsidianSettings (the Obsidian link of SymbolicLinkMaker): the vault's .obsidian becomes a link
+# to the `settings` folder of obsidian.conf, so the hotkeys, plugins and saved workspaces come from
+# the repository on every machine. A real .obsidian there goes into the backup sink first and is
+# kept when that fails; a link elsewhere is replaced. Nothing to do without a settings line; a
+# vault that is not cloned yet is skipped with a warning (cloning into a folder that already holds
+# .obsidian would fail), so the link follows on the next run.
+step_obsidian_settings() {
+	local settings vault='' target
+	foundation_load obsidian backup || return 1
+	settings=$(obsidian_settings) || {
+		log_step "No settings line in obsidian.conf - nothing to link"
+		return 0
+	}
+	[ -d "$settings" ] || {
+		log_error "The Obsidian settings folder of obsidian.conf is missing => $settings"
+		return 1
+	}
+	if ! vault=$(obsidian_directory) || [ ! -d "$vault" ]; then
+		log_warning "Obsidian vault not found${vault:+ => $vault} - clone it (RepositoryUpdate), then rerun Bootstrap --only ObsidianSettings"
+		return 0
+	fi
+	target=$vault/.obsidian
+	if [ -L "$target" ] && [ -d "$target" ] && [ "$(cd "$target" && pwd -P)" = "$(cd "$settings" && pwd -P)" ]; then
+		log_step "ok      $target -> $settings"
+		return 0
+	fi
+	if [ "$dry" -eq 1 ]; then
+		if [ -L "$target" ]; then
+			printf '  would replace the link: %s\n' "$target"
+		elif [ -e "$target" ]; then
+			printf '  would back up and replace: %s\n' "$target"
+		fi
+		printf '  would link: %s -> %s\n' "$target" "$settings"
+		return 0
+	fi
+	if [ -L "$target" ]; then
+		rm -f "$target" || return 1
+	elif [ -e "$target" ]; then
+		backup_item SymbolicLinks Obsidian "$target" >/dev/null || return 1
+		rm -rf "$target" || return 1
+		log_step "moved   the vault's own .obsidian into Backups/Unix/SymbolicLinks/Obsidian"
+	fi
+	ln -s "$settings" "$target" && log_step "linked  $target -> $settings"
+}
+
+step_spotlight() {
+	local line kind volume state failed=0
+	while IFS= read -r line; do
+		read -r kind volume state <<<"$line"
+		if [ "$kind" != index ] || [ -z "$state" ]; then
+			log_warning "Unknown [Spotlight] line, skipped => $line"
+			continue
+		fi
+		act sudo mdutil -i "$state" "$(foundation_expand_path "$volume")" || failed=1
+	done < <(section Spotlight)
+	return "$failed"
+}
+
+step_firewall() {
+	local tool line key state failed=0
+	tool=$(firewall_tool)
+	while IFS= read -r line; do
+		read -r key state <<<"$line"
+		case $(foundation_lower "$key") in
+			globalstate | stealthmode | allowsigned | allowsignedapp)
+				act sudo "$tool" --set"$(foundation_lower "$key")" "$state" || failed=1
+				;;
+			*) log_warning "Unknown [Firewall] key, skipped => $line" ;;
+		esac
+	done < <(section Firewall)
+	return "$failed"
+}
+
+step_software_update() {
+	local line kind domain key type value failed=0
+	while IFS= read -r line; do
+		read -r kind domain key type value <<<"$line"
+		if [ "$kind" != defaults ] || [ -z "$value" ]; then
+			log_warning "Unknown [SoftwareUpdate] line, skipped => $line"
+			continue
+		fi
+		act sudo defaults write "$domain" "$key" "$type" "$value" || failed=1
+	done < <(section SoftwareUpdate)
+	return "$failed"
+}
+
+step_rosetta() {
+	if [ "$(uname -m)" != arm64 ]; then
+		log_step "Not Apple silicon - Rosetta is not needed"
+		return 0
+	fi
+	if arch -x86_64 /usr/bin/true 2>/dev/null; then
+		log_step "Rosetta 2 is installed"
+		return 0
+	fi
+	# Without --agree-to-license softwareupdate shows the licence and asks; agreeing stays yours.
+	act sudo softwareupdate --install-rosetta
+}
+
+# PersonalSteps (Invoke-PersonalSteps): the [PersonalSteps] lines for this machine type, in order.
+# Each is COMMAND [ARG...], split into words and run as it is (no shell: no quoting, pipes or &&);
+# COMMAND is a Foundation command or any command on PATH. An unknown command is skipped with a warning,
+# a failing line does not stop the others but fails the step, and with no line that applies the
+# step says so.
+step_personal() {
+	local line words failed=0 any=0
+	while IFS= read -r line; do
+		read -r -a words <<<"$line"
+		[ ${#words[@]} -gt 0 ] || continue
+		any=1
+		if ! foundation_has_command "${words[0]}" && ! command -v "${words[0]}" >/dev/null 2>&1; then
+			log_warning "Personal step [${words[0]}] not found - skipping"
+			continue
+		fi
+		if [ "$dry" -eq 1 ]; then
+			printf '  would run: %s\n' "${words[*]}"
+			continue
+		fi
+		log_step "Personal step => ${words[*]}"
+		if foundation_has_command "${words[0]}"; then
+			command_run "${words[@]}" && continue
+		else
+			"${words[@]}" && continue
+		fi
+		log_error "Personal step [${words[*]}] failed"
+		failed=1
+	done < <(section PersonalSteps)
+	[ "$any" -eq 1 ] || log_warning "No personal steps configured for this [$(foundation_machine_type)] machine!"
+	return "$failed"
+}
+
+step_aerospace() {
+	if [ "$dry" -eq 1 ]; then
+		printf '  would start AeroSpace and check its config\n'
+		return 0
+	fi
+	foundation_load drivers/aerospace || return 1
+	as_start || return 1
+	local path
+	if path=$(as_config_check); then
+		log_step "AeroSpace config valid => $path"
+	else
+		log_error "AeroSpace rejected its config (or did not answer) - fix aerospace.toml, then rerun Bootstrap --only AeroSpace"
+		return 1
+	fi
+}
+
+# Locale, DisplayLanguage, KeyboardLayouts: COMMAND with the default-KIND name of language.conf,
+# as Windows passes DefaultLocale and its siblings, so no menu is shown; nothing to do without
+# one. Usage: step_language COMMAND KIND
+step_language() {
+	local name
+	foundation_load language || return 1
+	name=$(lang_default "$2")
+	if [ -z "$name" ]; then
+		log_step "No default-$2 in language.conf - nothing to apply"
+		return 0
+	fi
+	run_command '' "$1" "$name"
+}
+
+step_logout() {
+	if [ "$dry" -eq 1 ]; then
+		printf '  would ask: log out now?\n'
+		return 0
+	fi
+	if ask_tty "Log out now so keyboard and trackpad settings apply? [y/N] " && foundation_ieq "$REPLY" y; then
+		osascript -e 'tell application "System Events" to log out' </dev/null
+		return
+	fi
+	log_step "Log out and back in later so keyboard and trackpad settings apply"
+}
+
+# Runs the step NAME and reports its result. Usage: run_step NAME
+run_step() {
+	case $1 in
+		InitializeConfiguration) run_command --dry-run Initialize-Configuration ;;
+		RenameMachine) run_command '' Rename-Machine ;;
+		Permissions) step_permissions ;;
+		Homebrew) step_homebrew ;;
+		HomebrewBash) step_homebrew_bash ;;
+		Packages) step_packages ;;
+		Dotfiles) step_dotfiles ;;
+		GitIdentity) step_git_identity ;;
+		MachineType) step_machine_type ;;
+		RepositoryUpdate) step_repository_update ;;
+		ObsidianSettings) step_obsidian_settings ;;
+		SystemDefaults) run_command --dry-run Set-SystemDefaults ;;
+		SpecialFolders) run_command --dry-run Set-SpecialFolders ;;
+		Power) run_command --dry-run Set-PowerSettings ;;
+		Spotlight) step_spotlight ;;
+		Firewall) step_firewall ;;
+		SoftwareUpdate) step_software_update ;;
+		Rosetta) step_rosetta ;;
+		SystemTheme) run_command '' Set-SystemTheme --auto ;;
+		Locale) step_language Set-Locale locale ;;
+		DisplayLanguage) step_language Set-DisplayLanguage display-language ;;
+		KeyboardLayouts) step_language Set-KeyboardLayouts keyboard-set ;;
+		DockPins) run_command --dry-run Set-DockPins ;;
+		LoginItems) run_command --dry-run Set-LoginItems ;;
+		FirefoxProfile) run_command --check Deploy-FirefoxProfile ;;
+		VSCodeProfiles) run_command --check Deploy-VSCodeProfiles ;;
+		AiArtifacts) run_command --check Deploy-AiArtifacts ;;
+		AiMarketplaces) run_command --check Deploy-AiMarketplaces ;;
+		AiMcpServers) run_command --check Deploy-AiMcpServers ;;
+		ObsidianCli) run_command --check Enable-ObsidianCli --create-if-missing ;;
+		DotnetEf) run_command --dry-run Install-DotnetEf ;;
+		DotnetSdks) run_command --dry-run Install-DotnetSdks ;;
+		CondaEnvironments) run_command --dry-run Install-CondaEnvironments ;;
+		NuGetConfig) run_command --dry-run Configure-NuGetConfig ;;
+		UpgradeAll) run_command '' Upgrade-All ;;
+		PersonalSteps) step_personal ;;
+		AeroSpace) step_aerospace ;;
+		Logout) step_logout ;;
+	esac
+}
+
+# Resolves the on/off state of every step from index FROM on, in order, and whether one of them
+# needs root (needs_sudo). Run once before the first step and again after InitializeConfiguration,
+# which may have just recorded this Mac's machine type: its `@TYPE step` lines then govern the rest
+# of the run, as Windows re-resolves BootstrapConfig.Steps there. Usage: resolve_states FROM
+resolve_states() {
+	local i name default attrs
+	needs_sudo=0
+	for ((i = $1; i < ${#CATALOG[@]}; i++)); do
+		read -r name default attrs <<<"${CATALOG[$i]}"
+		names[i]=$name
+		attributes[i]=$attrs
+		if wanted "$name" "$default" "$attrs"; then
+			states[i]=on
+			case ",$attrs," in *,sudo,* | *,sudo-optional,*) needs_sudo=1 ;; esac
+		else
+			states[i]=off
+		fi
+	done
+}
+
+names=()
+states=()
+attributes=()
+resolve_states 0
+
+if [ "$list_only" -eq 1 ]; then
+	printf '  %-24s %-8s %-6s %s\n' STEP DEFAULT RUNS ATTRIBUTES
+	for i in "${!CATALOG[@]}"; do
+		read -r name default attrs <<<"${CATALOG[$i]}"
+		printf '  %-24s %-8s %-6s %s\n' "$name" "$default" "${states[$i]}" "$attrs"
+	done
+	exit 0
+fi
+
+if [ "$(uname -s)" != Darwin ]; then
+	foundation_die "Bootstrap supports macOS only"
+fi
+
+# The transcript (Start-Logging): stdout and stderr through tee into the file, colour codes
+# stripped there; the console keeps its colours (LOG_FORCE_COLOR) though stdout is now a pipe.
+transcript=''
+tee_pid=''
+if [ "$dry" -eq 0 ] && mkdir -p "$HOME/Desktop" 2>/dev/null; then
+	transcript=$HOME/Desktop/BootstrapLog_$(date +%Y-%m-%d_%H-%M-%S).log
+	[ -t 1 ] && export LOG_FORCE_COLOR=1
+	exec > >(tee >(sed "s/$(printf '\033')\[[0-9;]*m//g" >>"$transcript")) 2>&1
+	tee_pid=$!
+fi
+
+# Stop-Logging: the transcript's path and the total duration, then the exit status.
+# Usage: finish STATUS
+finish() {
+	local hours=$((SECONDS / 3600)) minutes=$((SECONDS % 3600 / 60)) seconds=$((SECONDS % 60)) text=''
+	[ "$hours" -eq 0 ] || text+="$hours hour$([ "$hours" -eq 1 ] || echo s) "
+	[ "$minutes" -eq 0 ] || text+="$minutes minute$([ "$minutes" -eq 1 ] || echo s) "
+	[ "$seconds" -eq 0 ] && [ -n "$text" ] || text+="$seconds second$([ "$seconds" -eq 1 ] || echo s)"
+	[ -z "$transcript" ] || log_step "Log file location => $transcript"
+	log_step "Total duration => ${text% }"
+	# The last lines are on the console before the prompt returns. At most two seconds: a process a
+	# step left running with the console inherited would keep tee open.
+	if [ -n "$tee_pid" ]; then
+		exec >&- 2>&-
+		for ((wait_step = 0; wait_step < 40; wait_step++)); do
+			kill -0 "$tee_pid" 2>/dev/null || break
+			sleep 0.05
+		done
+	fi
+	exit "$1"
+}
+
+if [ "$initial" -eq 1 ]; then log_title "Initial Bootstrap"; else log_title "Bootstrap"; fi
+
+# One administrator prompt for the whole run, and only when a root step will run: before the
+# first step, or after InitializeConfiguration when the steps it turned on need root. Never twice.
+sudo_ok=1
+sudo_asked=0
+ask_sudo() {
+	[ "$needs_sudo" -eq 1 ] && [ "$dry" -eq 0 ] && [ "$sudo_asked" -eq 0 ] || return 0
+	sudo_asked=1
+	log_step "Some enabled steps need administrator rights - asking for the password once"
+	if steps_sudo_keepalive; then
+		trap steps_sudo_stop EXIT
+	else
+		sudo_ok=0
+		log_warning "No administrator rights - the steps that need them are skipped"
+	fi
+}
+ask_sudo
+
+# Display-SystemLanguageSettings reads back what the language steps applied, once, after the last
+# of them, when any of them ran (Windows runs it after them on every run; a run without them, such
+# as --only SystemDefaults, has nothing to read back). Usage: language_readback NEXT-STEP
+language_ran=0
+language_readback() {
+	case $1 in Locale | DisplayLanguage | KeyboardLayouts) return 0 ;; esac
+	[ "$language_ran" -eq 1 ] || return 0
+	language_ran=0
+	log_title "Language settings"
+	run_command '' Display-SystemLanguageSettings || log_warning "Display-SystemLanguageSettings failed"
+}
+
+ran=()
+failed=()
+skipped=()
+for i in "${!names[@]}"; do
+	name=${names[$i]}
+	language_readback "$name"
+	if [ "${states[$i]}" != on ]; then
+		[ "$name" = Logout ] && [ "$dry" -eq 0 ] && LOGOUT_HINT=1
+		continue
+	fi
+	case ",${attributes[$i]}," in
+		*,sudo,*)
+			if [ "$sudo_ok" -eq 0 ]; then
+				skipped+=("$name")
+				continue
+			fi
+			;;
+	esac
+	log_title "$((i + 1)) $name"
+	case $name in Locale | DisplayLanguage | KeyboardLayouts) language_ran=1 ;; esac
+	if run_step "$name"; then
+		ran+=("$name")
+		if [ "$name" = InitializeConfiguration ]; then
+			resolve_states $((i + 1))
+			ask_sudo
+		fi
+	else
+		log_error "Step $name failed"
+		failed+=("$name")
+	fi
+done
+language_readback ''
+
+[ -n "${LOGOUT_HINT:-}" ] && log_step "Log out and back in so keyboard and trackpad settings apply"
+
+log_title "Summary"
+log_step "Ran: ${ran[*]:-none}"
+[ ${#skipped[@]} -eq 0 ] || log_warning "Skipped without administrator rights: ${skipped[*]}"
+if [ ${#failed[@]} -gt 0 ]; then
+	log_error "Bootstrap finished with ${#failed[@]} failed step(s): ${failed[*]} - rerun them with Bootstrap --only $(
+		IFS=,
+		printf '%s' "${failed[*]}"
+	)"
+	finish 1
+fi
+[ ${#skipped[@]} -eq 0 ] || finish 1
+if [ "$dry" -eq 1 ]; then
+	log_success "Dry run finished - nothing was changed!"
+else
+	log_success "Bootstrap finished! Open a new terminal and try => w Dotfiles"
+fi
+finish 0

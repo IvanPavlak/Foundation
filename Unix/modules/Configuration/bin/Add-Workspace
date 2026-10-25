@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# Add-Workspace - adds a workspace section to Unix/config/workspaces.local.conf.
+#
+# Usage: Add-Workspace NAME [--action "LINE"...] [--template TEMPLATE [--set NAME=VALUE]...]
+#
+# Appends [NAME] with the given actions, one workspace action line each (a Foundation command and its
+# arguments, e.g. --action "Open-Project MyProject"). Without actions it gets the default
+# `Set-WorkspaceWindowLayout NAME`. With --template it is a template instance instead: a
+# `template TEMPLATE` line (a section of config/workspace-templates.conf) and one `set` line per
+# --set; --action lines are then added with `add`. An unknown template is refused. An existing
+# workspace is left alone; the file is backed up into Backups/Unix/Config first. A flag it does
+# not know or a second NAME is an error and nothing is written.
+# Windows-style names: --name (-Name) NAME is the same as a bare NAME; --actions (-Actions) is
+# --action.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config backup confedit workspace
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+# NAME once: a second plain word is an error, not a silent rename.
+set_name() {
+	[ -z "$name" ] || foundation_die "One workspace at a time - got [$name] and [$1] - nothing was written"
+	name=$1
+}
+name=''
+actions=()
+template=''
+sets=()
+while [ $# -gt 0 ]; do
+	case $1 in
+		--template)
+			template=$2
+			shift
+			;;
+		--set)
+			case $2 in *=*) ;; *) foundation_die "--set takes NAME=VALUE, not [$2]" ;; esac
+			sets+=("$2")
+			shift
+			;;
+		--action | --actions)
+			actions+=("$2")
+			shift
+			;;
+		--name)
+			set_name "${2:-}"
+			shift
+			;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1 - nothing was written" ;;
+		*) set_name "$1" ;;
+	esac
+	shift
+done
+[ -n "$name" ] || foundation_die "Usage: Add-Workspace NAME [--action \"LINE\"...] [--template TEMPLATE [--set NAME=VALUE]...]"
+[ ${#sets[@]} -eq 0 ] || [ -n "$template" ] || foundation_die "--set needs --template"
+file=$(conf_path workspaces.conf) || foundation_die "Missing Unix/config/workspaces.conf"
+if [ -n "$template" ]; then
+	templates=$(workspace_templates_file) || foundation_die "No config/workspace-templates.conf - there is no template [$template]"
+	template=$(conf_section_name "$templates" "$template") ||
+		foundation_die "Unknown template [$template] (workspace-templates.conf defines: $(conf_sections "$templates" | tr '\n' ' '))"
+	{
+		printf 'template %s\n' "$template"
+		for pair in ${sets[@]+"${sets[@]}"}; do printf 'set %s %s\n' "${pair%%=*}" "${pair#*=}"; done
+		for action in ${actions[@]+"${actions[@]}"}; do printf 'add %s\n' "$action"; done
+	} | conf_add_section "$file" "$name"
+	exit
+fi
+[ ${#actions[@]} -gt 0 ] || actions=("Set-WorkspaceWindowLayout $name")
+printf '%s\n' "${actions[@]}" | conf_add_section "$file" "$name"

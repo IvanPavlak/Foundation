@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Show-Image - displays an image file, inline in WezTerm or in a Quick Look window.
+#
+# Usage: Show-Image PATH [--width N|N%|Npx] [--window]
+#
+# Inside WezTerm the image is drawn in the terminal (wezterm imgcat, aspect ratio kept, --width in
+# cells, percent of the terminal or pixels). --window, or any other terminal, opens it in a Quick
+# Look window the size of the image instead - the dialog of the Windows Show-Image. Without
+# qlmanage the image opens in its default app (`open`). Useful for wallpapers and screenshots.
+# The Windows-style --image-path PATH works as well as a bare PATH.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load drivers/wezterm
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+path=''
+width=''
+window=0
+while [ $# -gt 0 ]; do
+	case $1 in
+		--width)
+			width=$2
+			shift
+			;;
+		--window) window=1 ;;
+		--image-path)
+			path=$2
+			shift
+			;;
+		-v | --verbose) ;;
+		*) path=$1 ;;
+	esac
+	shift
+done
+[ -n "$path" ] || foundation_die "Usage: Show-Image PATH [--width N] [--window]"
+path=$(foundation_expand_path "$path")
+[ -f "$path" ] || foundation_die "Image not found => $path"
+
+if [ "$window" -eq 0 ] && [ "${TERM_PROGRAM:-}" = WezTerm ]; then
+	wt_imgcat "$path" "$width" && exit 0
+fi
+command -v qlmanage >/dev/null 2>&1 || {
+	foundation_launch open "$path"
+	exit
+}
+log_step "Opening ${path##*/} in Quick Look (close it with Esc)"
+foundation_launch qlmanage -p "$path" >/dev/null 2>&1 </dev/null &
+disown 2>/dev/null

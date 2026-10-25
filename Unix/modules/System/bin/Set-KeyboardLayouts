@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Set-KeyboardLayouts - applies a keyboard layout set of Unix/config/language.conf.
+#
+# Usage: Set-KeyboardLayouts [SET | --layout-set SET] [--override]
+#
+# The Unix twin of the Windows Set-KeyboardLayouts. SET is a `keyboard-set` name of language.conf
+# (an ordered list of `keyboard-layout` names, each an input-source id); without it a menu of the
+# sets is shown, where Enter picks `default-keyboard-set`. The set's layouts are enabled, the
+# first is selected and every other enabled keyboard layout is disabled, live and with no logout,
+# through the input-source driver; input methods such as the Character Palette stay. Nothing
+# changes when exactly those layouts are enabled with the first selected, unless --override, or
+# when language.conf has no sets.
+# Windows-style names: --layout-set (-LayoutSet) SET is the same as a bare SET.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config language drivers/inputsource
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+name=''
+override=0
+for argument in "$@"; do
+	case $argument in
+		--override) override=1 ;;
+		--layout-set | -v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $argument" ;;
+		*) name=$argument ;;
+	esac
+done
+
+if [ -z "$(lang_entries keyboard-set)" ]; then
+	log_warning "No keyboard-set lines in language.conf - leaving the keyboard layouts as they are!"
+	exit 0
+fi
+entry=$(lang_choose keyboard-set "[Available Keyboard Layout Sets]" "$name") || exit 1
+IFS=$'\t' read -r target members <<<"$entry"
+
+# The set's layouts as input-source ids, in order.
+ids=()
+for member in $members; do
+	layout=$(lang_entry keyboard-layout "$member") || foundation_die "Layout [$member] of set [$target] is not a keyboard-layout in language.conf"
+	ids+=("${layout#*$'\t'}")
+done
+
+log_title "Setting Keyboard Layouts to [$target]"
+
+# Enabled ids, sorted, then the selected one: the state to compare a run with.
+state() {
+	local layouts
+	layouts=$(is_layouts) || return 1
+	printf '%s\n' "$layouts" | awk -F'\t' 'NF { print $1 }' | LC_ALL=C sort | tr '\n' ' '
+	printf '| %s\n' "$(printf '%s\n' "$layouts" | awk -F'\t' '$2 == 1 { print $1; exit }')"
+}
+wanted="$(printf '%s\n' "${ids[@]}" | LC_ALL=C sort -u | tr '\n' ' ')| ${ids[0]}"
+current=$(state) || foundation_die "Could not read the keyboard layouts"
+log_debug "[Set-KeyboardLayouts] current => $current, wanted => $wanted"
+
+if [ "$current" = "$wanted" ] && [ "$override" -eq 0 ]; then
+	log_warning "Keyboard layouts already configured to the [$target] set!"
+	exit 0
+fi
+
+is_apply "${ids[@]}"
+case $? in
+	0) ;;
+	3) foundation_die "Set [$target] names a keyboard layout this Mac does not have - nothing was changed (Display-SystemLanguageSettings lists the enabled ids)" ;;
+	*) log_error "macOS refused part of the change - see the lines above" ;;
+esac
+
+[ "$(state)" = "$wanted" ] || foundation_die "Keyboard layouts were attempted to be set but verification failed!"
+log_success "Keyboard layouts set to [$target] => ${ids[*]}"

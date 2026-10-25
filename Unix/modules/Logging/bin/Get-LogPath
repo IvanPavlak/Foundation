@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Get-LogPath - prints the path of a session log, the error log or the logs folder.
+#
+# Usage: Get-LogPath [COMMAND] [--errors | --error-log] [--directory] [--all]
+#
+# Default: the newest session log (Unix/logs/Session_*.log), or the newest of COMMAND
+# (Get-LogPath Open-Workspace, case-insensitive; the aliases w, cw and rp name their commands).
+# --errors (or --error-log, the Windows -ErrorLog) prints the error log (Errors.log, or the
+# error-file of logging.conf), --directory the folder (the directory of logging.conf),
+# --all every session log oldest first; any other flag is an error, as on Windows. Only the path
+# goes to stdout, so `less "$(Get-LogPath)"` and `tail -f "$(Get-LogPath w)"` work. This command's
+# own run is not a session of its own (it would always be the newest).
+export FOUNDATION_LOGGING=off
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+command_name=''
+mode=latest
+for argument in "$@"; do
+	case $argument in
+		--errors | --error-log) mode=errors ;;
+		--directory) mode=directory ;;
+		--all) mode=all ;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $argument" ;;
+		*) command_name=$argument ;;
+	esac
+done
+dir=$(logfile_dir)
+case $mode in
+	directory)
+		printf '%s\n' "$dir"
+		exit 0
+		;;
+	errors)
+		errors=$dir/$(logfile_error_file)
+		[ -f "$errors" ] || foundation_die "No errors logged yet"
+		printf '%s\n' "$errors"
+		exit 0
+		;;
+esac
+# An alias names its command: w => Open-Workspace, and so on.
+case $(foundation_lower "$command_name") in w) command_name=Open-Workspace ;; cw) command_name=Close-Workspace ;; rp) command_name=Run-Project ;; esac
+logs=$(find "$dir" -maxdepth 1 -name 'Session_*.log' -type f 2>/dev/null | LC_ALL=C sort)
+if [ -n "$command_name" ]; then
+	logs=$(printf '%s\n' "$logs" | awk -v c="$(foundation_lower "$command_name")" '{ f = $0; sub(/.*\/Session_[0-9_-]+_/, "", f); sub(/(_[0-9]+)?\.log$/, "", f); if (tolower(f) == c) print }')
+fi
+[ -n "$logs" ] || foundation_die "No session log${command_name:+ of $command_name} in $dir"
+if [ "$mode" = all ]; then printf '%s\n' "$logs"; else printf '%s\n' "$logs" | tail -n 1; fi

@@ -1,0 +1,241 @@
+#!/usr/bin/env bash
+# List-AiArtifacts - lists the AI skills, mods, rules, prompts and agents the repository carries,
+# grouped by kind and source.
+#
+# Usage: List-AiArtifacts [--kind KIND...] [--source [NAME|NUMBER...]] [--name [PATTERN|NUMBER...]] [--list-discrepancies] [--quiet]
+#
+# The roster comes from disk, as Deploy-AiArtifacts reads it: every <root>/<Kind>/<source>/<item>
+# (`root` of ai-artifacts.conf, default AI) of the sources read (own first, then foundation,
+# example and the vendored sources in name order; the first wins an item name two carry), minus
+# the `exclude` lines, with the description of its frontmatter (a mod's plugin.json). --kind picks
+# kinds (skills, mods, rules, prompts, agents), --source picks sources (own, mattpocock, ...),
+# --name filters item names (wildcards allowed, case-insensitive); --source and --name also take a
+# number (the position in the sorted list), and a bare --source or --name opens a menu. A filter
+# that matches nothing warns. --list-discrepancies compares the roster with what is deployed into
+# the harnesses of the `deploy` line: an item that is not linked (or copied), an entry that shadows
+# one with a real file or points elsewhere, a dangling link into the artifacts root, and an item
+# name two sources carry; exits 1 when there are any (Deploy-AiArtifacts fixes them).
+# --quiet prints names only (with --list-discrepancies: no all-clear banner).
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config skills artifacts
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+# A bare --source or --name (nothing after it, or another flag) opens its menu below.
+source_menu=0
+name_menu=0
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+	case ${args[i]} in
+		--source | --name)
+			case ${args[i + 1]:-} in
+				'' | -*) if [ "${args[i]}" = --source ]; then source_menu=1; else name_menu=1; fi ;;
+			esac
+			;;
+	esac
+done
+
+kinds=()
+sources=()
+items=()
+discrepancies=0
+quiet=0
+list=names
+while [ $# -gt 0 ]; do
+	case $1 in
+		--kind) list=kinds ;;
+		--source) list=sources ;;
+		--name) list=names ;;
+		--list-discrepancies) discrepancies=1 ;;
+		--quiet) quiet=1 ;;
+		-v | --verbose) ;;
+		*)
+			IFS=, read -r -a values <<<"$1"
+			case $list in
+				kinds)
+					for kind in "${values[@]}"; do
+						ai_kind_folder "$kind" >/dev/null || foundation_die "Unknown kind => [$kind] (expected one of: $(ai_kinds))"
+						kinds+=("$(foundation_lower "$kind")")
+					done
+					;;
+				sources) sources+=("${values[@]}") ;;
+				*) items+=("${values[@]}") ;;
+			esac
+			;;
+	esac
+	shift
+done
+[ ${#kinds[@]} -gt 0 ] || read -r -a kinds <<<"$(ai_kinds)"
+
+root=$(ai_root)
+[ -d "$root" ] || foundation_die "Missing artifacts root $root"
+
+matches() { # VALUE PATTERN...
+	local value=$1 pattern
+	shift
+	[ $# -gt 0 ] || return 0
+	for pattern in "$@"; do foundation_match_process "$pattern" "$value" && return 0; done
+	return 1
+}
+
+# Prints ITEM, or the option at that position of OPTIONS (1-based) when ITEM is a number in range.
+# Usage: resolve_number ITEM OPTION...
+resolve_number() {
+	local item=$1
+	shift
+	if [[ $item =~ ^[0-9]+$ ]] && [ "$item" -ge 1 ] && [ "$item" -le $# ]; then
+		printf '%s\n' "${!item}"
+	else
+		printf '%s\n' "$item"
+	fi
+}
+
+# The description of an item: the frontmatter of its portable file (else of its first Markdown
+# file), a mod's plugin.json description. Usage: item_description KIND DIR
+item_description() {
+	local file
+	if [ "$1" = mods ]; then
+		python3 -c '
+import json, sys
+try:
+    print(" ".join(str(json.load(open(sys.argv[1], encoding="utf-8")).get("description", "")).split()))
+except (OSError, ValueError, AttributeError):
+    pass
+' "$2/.claude-plugin/plugin.json" 2>/dev/null
+		return 0
+	fi
+	file=$2/$(ai_kind_file "$1")
+	[ -f "$file" ] || file=$(find "$2" -mindepth 1 -maxdepth 1 -type f -name '*.md' | LC_ALL=C sort | head -n 1)
+	[ -n "$file" ] && skill_description "$file" | sed 's/\\|/|/g'
+}
+
+# The whole roster (KIND<TAB>SOURCE<TAB>ITEM<TAB>DIR, the winners only) and the duplicates dropped.
+all=()
+duplicates=()
+for kind in "${kinds[@]}"; do
+	while IFS=$'\t' read -r source item dir kept; do
+		if [ "$source" = DUPLICATE ]; then
+			duplicates+=("$kind/$item is in [$(basename "$(dirname "$dir")")] and [$kept] - the one from [$kept] is the one deployed")
+		else
+			all+=("$kind"$'\t'"$source"$'\t'"$item"$'\t'"$dir")
+		fi
+	done < <(ai_roster "$kind")
+done
+
+source_options=()
+name_options=()
+if [ ${#all[@]} -gt 0 ]; then
+	mapfile -t source_options < <(printf '%s\n' "${all[@]}" | cut -f2 | LC_ALL=C sort -fu)
+	mapfile -t name_options < <(printf '%s\n' "${all[@]}" | cut -f3 | LC_ALL=C sort -fu)
+fi
+if [ "$source_menu" -eq 1 ]; then
+	picked=$(foundation_resolve_selection "[Available Sources]" "Enter source(s) to list by number or name" 0 1 "${source_options[@]}") || exit 1
+	while IFS= read -r value; do [ -z "$value" ] || sources+=("$value"); done <<<"$picked"
+fi
+if [ "$name_menu" -eq 1 ]; then
+	picked=$(foundation_resolve_selection "[Available Items]" "Enter item(s) to view by number or name" 0 1 "${name_options[@]}") || exit 1
+	while IFS= read -r value; do [ -z "$value" ] || items+=("$value"); done <<<"$picked"
+fi
+for i in "${!sources[@]}"; do sources[i]=$(resolve_number "${sources[i]}" "${source_options[@]}"); done
+for i in "${!items[@]}"; do items[i]=$(resolve_number "${items[i]}" "${name_options[@]}"); done
+
+# The roster the filters keep: KIND<TAB>SOURCE<TAB>ITEM<TAB>DIR
+roster=()
+for entry in "${all[@]}"; do
+	IFS=$'\t' read -r kind source item dir <<<"$entry"
+	matches "$source" "${sources[@]}" || continue
+	matches "$item" "${items[@]}" || continue
+	roster+=("$entry")
+done
+
+if [ "$discrepancies" -eq 1 ]; then
+	found=0
+	problem() {
+		log_warning "$1"
+		found=1
+	}
+	# The plan of Deploy-AiArtifacts, held against what is on disk; only the items the filters keep.
+	keep=$'\n'
+	for entry in "${roster[@]}"; do
+		IFS=$'\t' read -r kind source item dir <<<"$entry"
+		keep+="$kind/$item"$'\n'
+	done
+	placement=''
+	while IFS=$'\t' read -r record a b c d _; do
+		case $record in
+			WARN) problem "$a" ;;
+			DEST)
+				placement=$b
+				label=${d/#$HOME/\~}
+				if [ "$placement" != file ]; then
+					[ -d "$d" ] || problem "$label does not exist - run Deploy-AiArtifacts"
+					[ -d "$d" ] || continue
+					# Links into the artifacts root whose item is gone (links to anything else are not ours).
+					for link in "$d"/* "$d"/.[!.]*; do
+						[ -L "$link" ] && [ ! -e "$link" ] || continue
+						case $(readlink "$link") in "$root"/*) problem "$label/${link##*/} is a dangling link into the artifacts root" ;; esac
+					done
+				fi
+				;;
+			ITEM)
+				case $keep in *$'\n'"$a/$b"$'\n'*) ;; *) continue ;; esac
+				label=${d/#$HOME/\~}
+				if [ "$placement" = copy ]; then
+					if [ ! -e "$d" ]; then
+						problem "[$a] $b is not copied into ${label%/*}"
+					elif ! diff -rq "$c" "$d" >/dev/null 2>&1; then
+						problem "$label differs from the repository's [$a] $b"
+					fi
+				elif [ -L "$d" ]; then
+					resolved=$(readlink "$d")
+					# A folder reached through another spelling of the same path is the same link.
+					physical=$(cd "$d" 2>/dev/null && pwd -P)
+					[ "$resolved" = "$c" ] || { [ -n "$physical" ] && [ "$physical" = "$(cd "$c" 2>/dev/null && pwd -P)" ]; } ||
+						problem "$label points elsewhere => $resolved"
+				elif [ -e "$d" ]; then
+					problem "$label is a real file that shadows [$a] $b"
+				else
+					problem "[$a] $b is not linked as $label"
+				fi
+				;;
+		esac
+	done < <(ai_plan "${kinds[@]}")
+	for line in "${duplicates[@]}"; do problem "Duplicate item name: $line"; done
+	if [ "$found" -eq 0 ] && [ "$quiet" -eq 0 ]; then
+		log_success "No discrepancies between the artifacts root and the harnesses!"
+	fi
+	exit $found
+fi
+
+if [ ${#roster[@]} -eq 0 ]; then
+	[ "$quiet" -eq 1 ] || log_warning "No item matched the filter!"
+	exit 0
+fi
+
+cyan='' green='' dim='' reset=''
+if log_use_color 1; then cyan=$'\033[36m' green=$'\033[32m' dim=$'\033[90m' reset=$'\033[0m'; fi
+current=''
+for entry in "${roster[@]}"; do
+	IFS=$'\t' read -r kind source item dir <<<"$entry"
+	if [ "$quiet" -eq 1 ]; then
+		printf '%s\n' "$item"
+		continue
+	fi
+	if [ "$kind/$source" != "$current" ]; then
+		log_title "$kind - $source"
+		current=$kind/$source
+	fi
+	printf '\n%s%s%s\n' "$green" "$item" "$reset"
+	desc=$(item_description "$kind" "$dir")
+	[ -n "$desc" ] && printf '%s\n' "$desc" | fold -s -w 96 | sed 's/^/  /'
+	printf '  %sPath => %s%s\n' "$cyan" "${dir#"$DOTFILES_ROOT"/}" "$reset"
+done
+[ "$quiet" -eq 1 ] || printf '\n%s%d item(s)%s\n' "$dim" "${#roster[@]}" "$reset"

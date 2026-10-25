@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Open-SecureBrowser - opens Tor Browser, or a private window of the default browser without it.
+#
+# Usage: Open-SecureBrowser [URL...]
+#
+# The SecureBrowser workspace action. Tor Browser (brew install --cask tor-browser) opens with
+# the given URLs; it counts as installed when /Applications/Tor Browser.app exists, else when
+# Spotlight knows an app of its bundle id, org.torproject.torbrowser (installed elsewhere, such as
+# ~/Applications). When it is not installed the default browser opens a
+# private window of the URLs instead and says so, started the way Open-Browser starts it (its
+# browser line of apps.conf: its binary, launch=open or launch=script); Safari (launch=script)
+# has no private window and opens a normal one with a warning. A flag it does not know is an
+# error, never opened as a URL.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps drivers/aerospace drivers/browserscript
+foundation_common_flags "$@"
+urls=()
+for argument in "$@"; do
+	case $argument in
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $argument - nothing was opened" ;;
+		*) urls+=("$argument") ;;
+	esac
+done
+set -- ${urls[@]+"${urls[@]}"}
+
+# FOUNDATION_TOR_APP stands in for the fixed path in the suites.
+if [ -d "${FOUNDATION_TOR_APP:-/Applications/Tor Browser.app}" ] || app_installed org.torproject.torbrowser >/dev/null; then
+	log_step "Opening Tor Browser..."
+	app_launch TorBrowser "$@" && log_success "Tor Browser opened!"
+	exit
+fi
+browser=$(app_default_browser)
+token=$(app_token "$browser") || foundation_die "apps.conf has no entry for browser [$browser]"
+app_browser_prepare "$token" || exit 1
+log_warning "Tor Browser is not installed (brew install --cask tor-browser) - opening a private $token window instead"
+if [ "$BROWSER_LAUNCH_MODE" = script ]; then
+	log_warning "$token cannot open a private window by script - opening a normal one"
+	app_browser_launch '' "$@"
+else
+	app_browser_launch "${BROWSER_PRIVATE_ARG:---private-window}" "$@"
+fi

@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Move-Windows - moves windows to a desktop (an AeroSpace workspace) and focuses it.
+#
+# Usage: Move-Windows [--desktop | --virtual-desktop N | N | --current] [--process | --process-name PATTERN] [--window-title PATTERN] [--monitor M]
+#
+# Every window by default, or the ones whose app (apps.conf token, role or name) or title matches
+# (Windows rules: wildcard, regex, exact; case-insensitive; with both a window matching EITHER),
+# goes to desktop N (1-100, default 1; a bare N is the same); --current targets the desktop that
+# is focused now. Any other flag is an error before a window moves. AeroSpace creates a workspace on first use, as Windows creates a missing desktop.
+# Focus ends on the target. A window AeroSpace refuses to move is counted, and the run then ends
+# with `N window(s) could not be moved to desktop D` and exit status 1 instead of the success
+# line. --monitor M is accepted and ignored with a warning: only one display
+# is managed on macOS yet.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps drivers/aerospace windows
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+desktop=1
+current=0
+process=''
+title=''
+while [ $# -gt 0 ]; do
+	case $1 in
+		--desktop | --virtual-desktop)
+			desktop=$2
+			shift
+			;;
+		--current) current=1 ;;
+		--process | --process-name)
+			process=$2
+			shift
+			;;
+		--window-title)
+			title=$2
+			shift
+			;;
+		--monitor)
+			log_warning "--monitor: only one display is managed on macOS yet - ignored"
+			shift
+			;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1 - no window was moved" ;;
+		*) desktop=$1 ;;
+	esac
+	shift
+done
+# The ValidateRange(1, 100) of Windows, checked before anything moves.
+[ "$current" -eq 1 ] || foundation_whole_number "$desktop" 1 100 || foundation_die "The desktop must be a whole number from 1 to 100 => $desktop"
+as_available || as_start || exit 1
+[ "$current" -eq 1 ] && desktop=$(as_focused_workspace)
+[ -n "$desktop" ] || foundation_die "No target desktop"
+
+moved=0
+failed=0
+while IFS=$'\t' read -r id token _ _ ws _ wtitle; do
+	[ "$ws" = "$desktop" ] && continue
+	if as_move_window "$id" "$desktop"; then
+		moved=$((moved + 1))
+		log_debug "[Move-Windows] $token '$wtitle' $ws => $desktop"
+	else
+		failed=$((failed + 1))
+		log_debug "[Move-Windows] $token '$wtitle' refused to move to $desktop"
+	fi
+done < <(windows_select "$process" "$title")
+as_focus_workspace "$desktop"
+if [ "$failed" -gt 0 ]; then
+	log_warning "Moved $moved window(s); $failed window(s) could not be moved to desktop $desktop"
+	exit 1
+fi
+log_success "Moved $moved window(s) to desktop $desktop!"

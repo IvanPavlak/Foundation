@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# Add-WindowLayout - adds a layout template for a workspace to the layout files.
+#
+# Usage: Add-WindowLayout WORKSPACE|--workspace-name WORKSPACE [--machine-type TYPE...] [--simple]
+#
+# Creates Unix/config/layouts/<TYPE>/<WORKSPACE>_<TYPE>.conf for each TYPE (default: this
+# machine's layout set) with a starting template - desktop 1 on zone set Zero with VS Code full
+# screen - to customise afterwards (Visualize-Layouts draws it). A missing layouts/<TYPE>/ folder
+# is created, as Windows creates Window/Layouts/<MachineType>/. Every word after --machine-type
+# (until the next flag) is a type, so give WORKSPACE first, or as --workspace-name WORKSPACE (the
+# Windows-style flag); `Work,Laptop` works too. An existing layout is left alone and reported
+# (exit 1). Only new files are written, so no backup is taken. --simple also adds WORKSPACE to
+# `simple-layouts` of workspaces.conf (SimpleLayoutWorkspaces: every window full size, none
+# moved), written to workspaces.local.conf after a backup, also when the layout already existed.
+# A flag it does not know is an error and nothing is written.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config backup confedit
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+foundation_load drivers/aerospace layout
+
+workspace=''
+types=()
+list=''
+simple=0
+while [ $# -gt 0 ]; do
+	case $1 in
+		--machine-type) list=types ;;
+		--workspace-name) list='' ;;
+		--simple)
+			simple=1
+			list=''
+			;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1 - nothing was written" ;;
+		*) if [ "$list" = types ]; then
+			foundation_split_list types "$1"
+		else workspace=$1; fi ;;
+	esac
+	shift
+done
+[ -n "$workspace" ] || foundation_die "Usage: Add-WindowLayout WORKSPACE [--machine-type TYPE...] [--simple]"
+[ ${#types[@]} -gt 0 ] || types=("$(layout_type)")
+status=0
+for type in "${types[@]}"; do
+	case $workspace in */* | *[][]*)
+		log_error "Invalid layout name [$workspace]"
+		exit 1
+		;;
+	esac
+	case $type in '' | */* | . | .. | *[][]*)
+		log_error "Invalid machine type [$type]"
+		status=1
+		continue
+		;;
+	esac
+	dir=$(layout_dir "$type") || {
+		dir=$FOUNDATION_CONFIG_DIR/layouts/$type
+		mkdir -p "$dir" || {
+			log_error "Could not create the layout set [$type] (Unix/config/layouts/$type/)"
+			status=1
+			continue
+		}
+		log_step "Created the layout set [$type] (Unix/config/layouts/$type/)"
+	}
+	if existing=$(layout_file "$workspace" "$type"); then
+		log_error "A [$workspace] layout already exists in ${existing#"$DOTFILES_ROOT"/} - edit it there"
+		status=1
+		continue
+	fi
+	file=$dir/${workspace}_$type.conf
+	printf '[%s]\n%s\n%s\n' "$workspace" "layout 1 Zero" "1 Fullscreen   Code" >"$file" || {
+		status=1
+		continue
+	}
+	log_success "Added [$workspace] => ${file#"$DOTFILES_ROOT"/}"
+done
+
+if [ "$simple" -eq 1 ]; then
+	ws_conf=$(conf_path workspaces.conf) || foundation_die "Missing Unix/config/workspaces.conf - [$workspace] was not added to simple-layouts"
+	current=$(conf_value "$ws_conf" simple-layouts 2>/dev/null) || current=''
+	known=0
+	for name in $current; do foundation_ieq "$name" "$workspace" && known=1; done
+	if [ "$known" -eq 1 ]; then
+		log_step "[$workspace] is already a simple layout"
+	else
+		conf_set_value "$ws_conf" simple-layouts "${current:+$current }$workspace" || status=1
+	fi
+fi
+exit $status

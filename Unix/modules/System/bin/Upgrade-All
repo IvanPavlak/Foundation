@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# Upgrade-All - upgrades every package manager in play on this machine.
+#
+# Usage: Upgrade-All [PACKAGE-MANAGER...]
+#
+# PACKAGE-MANAGER is Homebrew, AppStore or MacOS; without one Homebrew and AppStore run, as the
+# Windows Upgrade-All upgrades every manager in use. Homebrew runs `brew update` and `brew upgrade`
+# (formulae and casks; casks that update themselves are left to it); pinned formulae (`brew pin`)
+# are listed first and skipped, the Show-PinnedAppsWarning analog. AppStore upgrades the App Store
+# apps with `mas upgrade`, which needs the administrator password, so it asks only when
+# `mas outdated` lists an app; without mas it is skipped with a warning. MacOS installs pending
+# system updates with `softwareupdate` (administrator password too); it runs only when named,
+# because it may restart the Mac. An unknown manager or flag is an error before anything runs.
+# `Upgrade-All Homebrew,AppStore` names two managers.
+# Windows-style names: --package-manager (-PackageManager) is accepted and ignored: the names
+# after it are managers.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+managers=()
+for argument in "$@"; do
+	case $argument in
+		--package-manager | -v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $argument - nothing was upgraded" ;;
+		*) foundation_split_list managers "$argument" ;;
+	esac
+done
+[ ${#managers[@]} -gt 0 ] || managers=(Homebrew AppStore)
+# Every name is checked before the first manager runs (the ValidateSet of Windows).
+for manager in "${managers[@]}"; do
+	case $(foundation_lower "$manager") in
+		homebrew | brew | appstore | mas | macos | softwareupdate) ;;
+		*) foundation_die "Unknown package manager => $manager (expected Homebrew, AppStore or MacOS) - nothing was upgraded" ;;
+	esac
+done
+
+failures=0
+for manager in "${managers[@]}"; do
+	case $(foundation_lower "$manager") in
+		homebrew | brew)
+			if ! command -v brew >/dev/null 2>&1; then
+				log_warning "[Homebrew] is not installed on this machine - skipping its upgrade"
+				continue
+			fi
+			log_title "Upgrading all Homebrew Software"
+			pinned=$(brew list --pinned 2>/dev/null) || pinned=''
+			if [ -n "$pinned" ]; then
+				log_warning "Skipping version-pinned packages"
+				printf '%s\n' "$pinned" | sed 's/^/  - /'
+			fi
+			brew update && brew upgrade || failures=$((failures + 1))
+			;;
+		appstore | mas)
+			if ! command -v mas >/dev/null 2>&1; then
+				log_warning "[AppStore] mas is not installed on this machine - skipping the App Store upgrade"
+				continue
+			fi
+			log_title "Upgrading all App Store Apps"
+			if ! outdated=$(mas outdated 2>/dev/null); then
+				log_error "mas could not list the outdated App Store apps (signed in to the App Store?)"
+				failures=$((failures + 1))
+				continue
+			fi
+			if [ -z "$outdated" ]; then
+				log_step "Every App Store app is up to date"
+				continue
+			fi
+			printf '%s\n' "$outdated" | sed 's/^/  /'
+			sudo mas upgrade || failures=$((failures + 1))
+			;;
+		macos | softwareupdate)
+			log_title "Upgrading macOS"
+			sudo softwareupdate --install --all || failures=$((failures + 1))
+			;;
+	esac
+done
+[ "$failures" -eq 0 ] || foundation_die "Upgrade finished with $failures failure(s)"
+log_success "All software upgraded!"

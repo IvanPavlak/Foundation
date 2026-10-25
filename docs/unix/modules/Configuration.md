@@ -1,0 +1,39 @@
+<!-- reference: module unix Configuration -->
+
+# Configuration
+
+Adds workspaces, projects, browser groups, layouts and links to the Unix config files and checks them.
+
+Manifest: [`Unix/modules/Configuration/module.conf`](https://github.com/IvanPavlak/Foundation/blob/master/Unix/modules/Configuration/module.conf). One entry per command, alphabetical; the bullet block right under each heading is the parsed part.
+
+Every writer appends a new section (or line) and never edits an existing one: a name that is already there is refused, with the file left untouched. The file is first copied into the backup sink (`Backups/Unix/Config/<file>/<timestamp>/`, see [Backups on a Mac](../backups.md)), and nothing is written when that fails. Add-WindowLayout only creates new files, so it takes no backup.
+
+## [Add-BrowserGroup](https://github.com/IvanPavlak/Foundation/blob/master/Unix/modules/Configuration/bin/Add-BrowserGroup)
+
+- **Description:** Adds a URL group to `Unix/config/browser-groups.local.conf` (the overlay, created when missing; the base file is never written): `LABEL=URL` arguments become labelled lines (the `-Urls` form), bare URLs plain lines (`-SimpleUrls`); a dotted GROUP nests (`GitHub.Personal`). A flag it does not know is an error, never taken for GROUP.
+- **Usage:** `Add-BrowserGroup GROUP URL|LABEL=URL...` (the Windows-style `--group-name`, `--urls` and `--simple-urls` are accepted and ignored)
+
+## [Add-Project](https://github.com/IvanPavlak/Foundation/blob/master/Unix/modules/Configuration/bin/Add-Project)
+
+- **Description:** Adds a project to `Unix/config/projects.local.conf` (the overlay, created when missing; the base file is never written) with its path keys, terminal tabs, Run-Project commands and actions, paths written with `$DEV` under the dev root and `~` under the home folder. Without actions it gets `Open-VSCode NAME` and `Open-ProjectTerminals NAME`; without a path, `path ROOT` is the current directory with one ROOT tab. Give NAME first (or `--name NAME`): a plain word right after `--tab KEY` is that tab's DIR. `--run` and `--action` take one argument each, so quote a command with spaces; an unquoted further word is taken as NAME. `--paths KEY,...` (the Windows `-Paths`) adds a `tab KEY` per key, each key other than ROOT with its `--path`. A flag it does not know or a second NAME stops it and nothing is written; the Windows `-Runnable`, `-TerminalTabs`, `-BasePath` and `-Actions` have no Unix form and stop it with the flag to use instead (`--run`, `--tab`, `--path`, `--action`).
+- **Usage:** `Add-Project NAME|--name NAME [--path KEY DIR]... [--tab KEY [DIR]]... [--paths KEY,...] [--run KEY "COMMAND"]... [--action "LINE"]...`
+
+## [Add-SymbolicLink](https://github.com/IvanPavlak/Foundation/blob/master/Unix/modules/Configuration/bin/Add-SymbolicLink)
+
+- **Description:** Adds a dotfile link to the chezmoi source tree `Unix/home`: a one-line symlink template that makes `~/HOME-PATH` a link to TARGET, a repository file or folder that must exist. HOME-PATH is relative to the home folder (`~/` dropped) and lands under chezmoi's naming (`.config/app/file.toml` -> `dot_config/app/symlink_file.toml.tmpl`), reusing a folder already there under a `private_` name; a path outside the home folder and one that already has a template are refused. `chezmoi apply` (or Bootstrap's Dotfiles step) then creates the link. The named form binds by flag in any order, as the Windows `-Path` and `-Target` do; a flag it does not know is an error and nothing is written.
+- **Usage:** `Add-SymbolicLink HOME-PATH TARGET | --path HOME-PATH --target TARGET` (the Windows-style `--name` is accepted and ignored)
+
+## [Add-WindowLayout](https://github.com/IvanPavlak/Foundation/blob/master/Unix/modules/Configuration/bin/Add-WindowLayout)
+
+- **Description:** Creates a layout template file for a workspace, `Unix/config/layouts/<TYPE>/<WORKSPACE>_<TYPE>.conf`, for each machine type (default: this machine's layout set) - desktop 1 on zone set Zero with VS Code full screen - to customise afterwards. A missing `layouts/<TYPE>/` folder is created, as on Windows; a workspace that already has a layout in a set is reported and skipped (exit 1). Every word after `--machine-type` is a type (or `Work,Laptop`), so WORKSPACE comes first. Only new files are written, so no backup is taken. `--simple` also adds WORKSPACE to `simple-layouts` of `workspaces.conf` (SimpleLayoutWorkspaces), written to `workspaces.local.conf` after a backup, also when the layout already existed. A flag it does not know is an error and nothing is written.
+- **Usage:** `Add-WindowLayout WORKSPACE|--workspace-name WORKSPACE [--machine-type TYPE...] [--simple]`
+
+## [Add-Workspace](https://github.com/IvanPavlak/Foundation/blob/master/Unix/modules/Configuration/bin/Add-Workspace)
+
+- **Description:** Adds a workspace to `Unix/config/workspaces.local.conf` (the overlay, created when missing; the base file is never written) with the given action lines, or the default `Set-WorkspaceWindowLayout NAME`. With `--template TEMPLATE` it writes a template instance instead: `template TEMPLATE`, a `set NAME VALUE` line per `--set NAME=VALUE` and an `add` line per `--action`; a template `workspace-templates.conf` does not define is refused. A flag it does not know or a second NAME is an error and nothing is written.
+- **Usage:** `Add-Workspace NAME [--action "LINE"...] [--template TEMPLATE [--set NAME=VALUE]...]` (the Windows-style `--name NAME` and `--actions` work too)
+
+## [Test-ConfigurationSchema](https://github.com/IvanPavlak/Foundation/blob/master/Unix/modules/Configuration/bin/Test-ConfigurationSchema)
+
+- **Description:** Checks that the Unix config files agree with each other - their failures are broken references, not missing keys: a template workspace resolves with its defaults (known template, every placeholder has a value, `replace`/`drop`/`add` keys match one action, no cycle), a template no workspace uses is reported, `+A,B` scopes name projects, `%SET` layout-set scopes a `type` line or a `layouts/<set>/` folder; workspace actions are commands, `Open-<App>` apps or `Return`, and the projects, browser groups (path, last segment or URL label) and layouts they name exist (a layout in every layout set a machine uses: the sets `machines.conf` maps a host, the default or the small display to); each layout file holds one section named after it; layout zone sets exist and every zone belongs to its desktop's set, every app is an `apps.conf` token or role - for the base layout and for each `project` variant merged over it, whose projects must be `projects.conf` sections; project tab and docker keys resolve and every run key has a tab line (a run key that is only a path runs nothing); `dnd.conf` and `vscode-workspaces.conf` references exist; every machine type `machines.conf` names and every `@TYPE` prefix of any config file is one of the `type` lines of `machines.conf`, while a layout set (a `small-display` or `layout-override` target, a `layouts/<set>/` folder) need not be one, as on Windows: a target only has to be a machine type or an existing `layouts/<set>/` folder, so a `Temp` set for a temporary monitor needs no `type Temp`. `apps.conf`, `docker.conf`, `pdfs.conf`, `zones.conf` and `browser-groups.conf` are read only as reference targets, and every other file (`backups.conf`, `translate.conf`, `spinners.conf`, ...) is checked only for its `@TYPE` prefixes, as Windows checks only framework keys. An unset git identity (no `name` / `email` in `git.conf` or `git.local.conf` and none in the global git config) is a note, as Windows warns about an empty `GitConfig`: not counted as a problem, so `--strict` still passes, and left out by `--quiet`. Warnings and exit 0 by default, exit 1 with `--strict`; `--quiet` prints only the problems
+- **Usage:** `Test-ConfigurationSchema [--strict] [--quiet]`

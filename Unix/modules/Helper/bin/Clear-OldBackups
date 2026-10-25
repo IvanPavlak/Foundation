@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+# Clear-OldBackups - prunes the backup sink Backups/Unix by the limits of backups.conf.
+#
+# Usage: Clear-OldBackups [--dry-run] [--max-age-days N] [--max-backups-per-key N] [--max-total-size-mb N]
+#
+# Three independent limits (Unix/config/backups.conf, each 0 = off, flags override for one run):
+# backups older than max-age-days, more than max-backups-per-key per key (oldest first), and the
+# oldest backups while the sink is larger than max-total-size-mb. The newest backup of every key
+# is never deleted. Only folders named yyyy-MM-dd_HH-mm-ss are backups: anything else in a key
+# folder (a manual copy, an unpacked archive) is ignored, as on Windows. --dry-run (or the
+# Windows-style --what-if) lists what would go and deletes nothing.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config backup
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+dry=0
+age=$(backup_setting max-age-days 0)
+per_key=$(backup_setting max-backups-per-key 10)
+total=$(backup_setting max-total-size-mb 500)
+while [ $# -gt 0 ]; do
+	case $1 in
+		--dry-run | --what-if) dry=1 ;;
+		--max-age-days)
+			age=$2
+			shift
+			;;
+		--max-backups-per-key)
+			per_key=$2
+			shift
+			;;
+		--max-total-size-mb)
+			total=$2
+			shift
+			;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument => $1" ;;
+	esac
+	shift
+done
+for n in "$age" "$per_key" "$total"; do
+	case $n in '' | *[!0-9]*) foundation_die "Limits must be whole numbers (0 = off)" ;; esac
+done
+
+root=$(backup_root)
+log_title "Clearing Old Backups"
+[ -d "$root" ] || {
+	log_success "No backups yet (${root#"$DOTFILES_ROOT"/})"
+	exit 0
+}
+
+# Every backup as EPOCH<TAB>KB<TAB>FOLDER, where FOLDER is <root>/<Category>/<Key>/<timestamp>;
+# the newest of each key is protected. Only timestamp-named folders are backups (backup_folders):
+# anything else in a key folder is left alone and never counts as a key's newest.
+list_backups() {
+	local keydir folder name epoch kb
+	find "$root" -mindepth 2 -maxdepth 2 -type d | while IFS= read -r keydir; do
+		backup_folders "$keydir" | while IFS= read -r folder; do
+			[ -e "$folder" ] || continue
+			name=${folder##*/}
+			# yyyy-MM-dd_HH-mm-ss: BSD date, else GNU date; a name no date accepts is skipped.
+			epoch=$(date -j -f %Y-%m-%d_%H-%M-%S "${name:0:19}" +%s 2>/dev/null || date -d "$(printf '%s' "${name:0:19}" | sed 's/_/ /; s/-\([0-9][0-9]\)-\([0-9][0-9]\)$/:\1:\2/')" +%s 2>/dev/null) || continue
+			kb=$(du -sk "$folder" | cut -f1)
+			printf '%s\t%s\t%s\n' "$epoch" "$kb" "$folder"
+		done
+	done | LC_ALL=C sort -n
+}
+newest_of_key() { # FOLDER
+	backup_folders "$(dirname "$1")" | tail -n 1
+}
+removed=0
+remove() { # FOLDER REASON
+	[ "$(newest_of_key "$1")" = "$1" ] && return 1
+	backup__remove "$1" "$2" "$dry"
+	removed=$((removed + 1))
+	[ "$dry" -eq 1 ] && gone+=("$1")
+	return 0
+}
+gone=()
+is_gone() {
+	local g
+	for g in "${gone[@]}"; do [ "$g" = "$1" ] && return 0; done
+	return 1
+}
+
+if [ "$age" -gt 0 ]; then
+	cutoff=$(($(date +%s) - age * 86400))
+	while IFS=$'\t' read -r epoch _ folder; do
+		[ "$epoch" -lt "$cutoff" ] && remove "$folder" "older than $age days"
+	done < <(list_backups)
+fi
+
+if [ "$per_key" -gt 0 ]; then
+	while IFS= read -r keydir; do
+		folders=()
+		while IFS= read -r f; do is_gone "$f" || folders+=("$f"); done < <(backup_folders "$keydir")
+		excess=$((${#folders[@]} - per_key))
+		for ((i = 0; i < excess; i++)); do remove "${folders[i]}" "more than $per_key backups of this key"; done
+	done < <(find "$root" -mindepth 2 -maxdepth 2 -type d)
+fi
+
+if [ "$total" -gt 0 ]; then
+	limit=$((total * 1024))
+	size=0
+	while IFS=$'\t' read -r _ kb folder; do is_gone "$folder" || size=$((size + kb)); done < <(list_backups)
+	while IFS=$'\t' read -r _ kb folder; do
+		[ "$size" -gt "$limit" ] || break
+		is_gone "$folder" && continue
+		remove "$folder" "sink over $total MB" && size=$((size - kb))
+	done < <(list_backups)
+fi
+
+if [ "$removed" -eq 0 ]; then
+	log_success "Nothing to prune in ${root#"$DOTFILES_ROOT"/}"
+elif [ "$dry" -eq 1 ]; then
+	log_success "$removed backup(s) would be removed (dry run)"
+else
+	log_success "Removed $removed backup(s)!"
+fi

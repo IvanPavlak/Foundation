@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# Install-DotnetSdks - installs the .NET SDK channels Homebrew no longer ships, next to the cask SDKs.
+#
+# Usage: Install-DotnetSdks [--dry-run]
+#
+# Each `sdk-channel CHANNEL` line of Unix/config/dotnet.conf (6.0, ...) whose SDK `dotnet
+# --list-sdks` does not list yet is installed with Microsoft's dotnet-install.sh
+# (https://dot.net/v1/dotnet-install.sh --channel CHANNEL) into the dotnet root of the SDKs the
+# Homebrew casks installed (the folder of the `dotnet` on PATH, /usr/local/share/dotnet), so
+# `dotnet --list-sdks` lists it beside them and global.json can select it. That root belongs to
+# root, so the install runs with sudo (the Bootstrap step DotnetSdks asks for the password
+# once). The cask formulas cover current releases only: the dotnet@6 formula is disabled since
+# 2025-11-12, and no cask carries .NET 6. Without lines it does nothing; without the .NET SDK it
+# warns and does nothing. --dry-run prints what it would install and changes nothing.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+dry=0
+for argument in "$@"; do
+	case $argument in
+		--dry-run) dry=1 ;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument [$argument] - usage: Install-DotnetSdks [--dry-run]" ;;
+	esac
+done
+
+log_title "Install-DotnetSdks"
+
+channels=()
+config=$(conf_path dotnet.conf) &&
+	while read -r channel; do [ -n "$channel" ] && channels+=("$channel"); done < <(conf_lines "$config" | awk '$1 == "sdk-channel" { print $2 }')
+if [ ${#channels[@]} -eq 0 ]; then
+	log_step "No sdk-channel lines in dotnet.conf - nothing to install"
+	exit 0
+fi
+if ! command -v dotnet >/dev/null 2>&1; then
+	log_warning ".NET SDK is not installed - skipping the extra SDK channels!"
+	exit 0
+fi
+
+# The dotnet root of the cask SDKs: the real folder of the dotnet on PATH.
+dotnet_path=$(command -v dotnet)
+while [ -L "$dotnet_path" ]; do
+	link=$(readlink "$dotnet_path")
+	case $link in /*) dotnet_path=$link ;; *) dotnet_path=$(dirname "$dotnet_path")/$link ;; esac
+done
+root=$(cd "$(dirname "$dotnet_path")" && pwd -P)
+installed=$(dotnet --list-sdks 2>/dev/null </dev/null | awk '{ print $1 }')
+
+status=0
+script=''
+for channel in "${channels[@]}"; do
+	case $channel in
+		'' | *[!0-9.]*)
+			log_error "sdk-channel [$channel] is not a channel such as 6.0 - skipped"
+			status=1
+			continue
+			;;
+	esac
+	if printf '%s\n' "$installed" | grep -q "^${channel//./\\.}\."; then
+		log_step ".NET SDK $channel is already installed"
+		continue
+	fi
+	if [ "$dry" -eq 1 ]; then
+		printf '  would run: sudo bash dotnet-install.sh --channel %s --install-dir %s\n' "$channel" "$root"
+		continue
+	fi
+	if [ -z "$script" ]; then
+		script=$(mktemp "${TMPDIR:-/tmp}/dotnet-install.XXXXXX") || foundation_die "Could not create a temporary file"
+		trap 'rm -f "$script"' EXIT
+		curl -fsSL https://dot.net/v1/dotnet-install.sh -o "$script" </dev/null || {
+			log_error "Could not download dotnet-install.sh"
+			exit 1
+		}
+	fi
+	log_step "Installing .NET SDK $channel into $root..."
+	if sudo bash "$script" --channel "$channel" --install-dir "$root" --no-path </dev/null; then
+		log_success ".NET SDK $channel installed!"
+	else
+		log_error "dotnet-install.sh failed for channel $channel"
+		status=1
+	fi
+done
+exit $status

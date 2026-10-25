@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Set-Wallpaper - sets the desktop wallpaper of every display for the current or given theme.
+#
+# Usage: Set-Wallpaper [THEME] [--theme Light|Dark|Auto] [--auto] [--dry-run]
+#
+# Reads Unix/config/wallpapers.conf: the [Dark] or [Light] line of this machine type (else
+# `Default`). Several files on the line go to the displays in order and cycle, like the Windows
+# Monitors array. Auto (the default) follows the system appearance. Every Space (AeroSpace
+# workspace) shows the display's picture, so there is no per-desktop step as on Windows.
+# --dry-run prints which picture each display would get and changes nothing. A bare THEME works
+# as --theme (the first positional parameter on Windows). --auto is accepted and changes nothing:
+# on Windows it skips the interactive wallpaper picker, which Foundation does not have (the
+# wallpaper comes from configuration, System Settings covers a manual pick), so every call already
+# runs the way -Auto does; it does not override --theme.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+theme=Auto
+dry_run=0
+while [ $# -gt 0 ]; do
+	case $1 in
+		--theme)
+			theme=$2
+			shift
+			;;
+		--dry-run) dry_run=1 ;;
+		--auto | -v | --verbose) ;;
+		*) theme=$1 ;;
+	esac
+	shift
+done
+case $(foundation_lower "$theme") in
+	auto)
+		if [ "$(defaults read -g AppleInterfaceStyle 2>/dev/null)" = Dark ]; then theme=Dark; else theme=Light; fi
+		log_debug "[Set-Wallpaper] system appearance => $theme"
+		;;
+	dark) theme=Dark ;;
+	light) theme=Light ;;
+	*) foundation_die "Unknown theme [$theme] (expected Light, Dark or Auto)" ;;
+esac
+
+file=$(conf_path wallpapers.conf) || foundation_die "Missing Unix/config/wallpapers.conf"
+directory=$(conf_value "$file" directory) || directory='$DOTFILES_ROOT/Wallpapers'
+directory=$(foundation_expand_path "$directory")
+machine=$(foundation_machine_type)
+section=$(conf_section "$file" "$theme") || foundation_die "No [$theme] section in wallpapers.conf"
+line=$(printf '%s\n' "$section" | awk -v m="$(foundation_lower "$machine")" 'tolower($1) == m { print; exit }')
+[ -n "$line" ] || line=$(printf '%s\n' "$section" | awk 'tolower($1) == "default" { print; exit }')
+[ -n "$line" ] || {
+	log_warning "No $theme wallpaper for [$machine] and no Default - nothing to set"
+	exit 0
+}
+
+# Fields split like a shell word list, so a path with spaces can be "double-quoted".
+fields=()
+while IFS= read -r field; do fields+=("$field"); done < <(printf '%s\n' "$line" | xargs -n 1 printf '%s\n')
+pictures=()
+for picture in "${fields[@]:1}"; do
+	case $picture in /* | '~'* | '$'*) picture=$(foundation_expand_path "$picture") ;; *) picture=$directory/$picture ;; esac
+	[ -r "$picture" ] || foundation_die "Wallpaper not found => $picture"
+	pictures+=("$picture")
+done
+
+log_title "Setting $theme Wallpaper"
+count=$(osascript -e 'tell application "System Events" to count of desktops' </dev/null 2>/dev/null) || count=1
+[ ${#pictures[@]} -eq 1 ] || [ "$count" -eq ${#pictures[@]} ] ||
+	log_warning "${#pictures[@]} wallpaper(s) for $count display(s) - cycling through them"
+for ((i = 1; i <= count; i++)); do
+	picture=${pictures[$(((i - 1) % ${#pictures[@]}))]}
+	if [ "$dry_run" -eq 1 ]; then
+		log_step "Display $i => ${picture##*/} (dry run)"
+		continue
+	fi
+	osascript - "$i" "$picture" >/dev/null <<'OSA' || foundation_die "Could not set the wallpaper of display $i"
+on run argv
+	tell application "System Events" to set picture of desktop (item 1 of argv as integer) to POSIX file (item 2 of argv)
+end run
+OSA
+	log_step "Display $i => ${picture##*/}"
+done
+[ "$dry_run" -eq 1 ] || log_success "Wallpaper set for $machine ($theme)!"

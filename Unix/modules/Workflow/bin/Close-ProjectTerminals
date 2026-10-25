@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Close-ProjectTerminals - closes a project's WezTerm tabs (titled <Project>.<KEY>).
+#
+# Usage: Close-ProjectTerminals PROJECT...
+#
+# Every pane of a tab whose title starts with "<Project>." is killed (case-insensitive); the tab
+# this shell runs in is kept whole, split panes included, so `Close-ProjectTerminals Dotfiles`
+# typed in Dotfiles.ROOT closes the project's other tabs. A WEZTERM_PANE inherited by a process
+# outside that pane (an app started from WezTerm) does not count. No keystrokes are synthesized -
+# the tabs are found by `wezterm cli list`. A flag it does not know is an error, never a project;
+# `A,B` names both.
+# Windows-style names: --project-name (-ProjectName) and --project are accepted and ignored: the
+# names after them are projects.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps drivers/wezterm
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+projects=()
+for argument in "$@"; do
+	case $argument in
+		--project-name | --project | -v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $argument - no tab was closed" ;;
+		*) foundation_split_list projects "$argument" ;;
+	esac
+done
+[ ${#projects[@]} -gt 0 ] || foundation_die "Usage: Close-ProjectTerminals PROJECT..."
+wt_running || {
+	log_debug "WezTerm is not running - nothing to close"
+	exit 0
+}
+
+own_tab=''
+own=$(wt_own_pane) && own_tab=$(wt_panes | awk -F'\t' -v p="$own" '$3 == p { print $2; exit }')
+closed=0
+for project in "${projects[@]}"; do
+	prefix=$(foundation_lower "$project.")
+	while IFS=$'\t' read -r _ tab pane _ tab_title _; do
+		[ -n "$tab_title" ] || continue
+		case $(foundation_lower "$tab_title") in "$prefix"*) ;; *) continue ;; esac
+		[ -n "$own_tab" ] && [ "$tab" = "$own_tab" ] && continue
+		wt_kill_pane "$pane" && closed=$((closed + 1))
+	done < <(wt_panes)
+done
+log_success "Closed $closed [${projects[*]}] tab(s)!"

@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# GitStatus - git status with the configured arguments (default --short). Alias: gs
+#
+# Usage: GitStatus [GIT-STATUS-ARGUMENTS...]
+#
+# Without arguments it runs `git status` with the `status-arguments` of Unix/config/git.conf
+# (the Windows GitStatusArguments; `--short` when no line is set, a bare `status-arguments` line
+# runs a plain `git status`). Arguments given on the call replace the configured ones entirely,
+# as on Windows: `gs -v -v -u` shows the full diff of staged changes and every untracked file.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config
+case ${1:-} in -h | --help)
+	foundation_usage "$0"
+	exit 0
+	;;
+esac
+
+if [ $# -eq 0 ]; then
+	configured=--short
+	if file=$(conf_path git.conf); then
+		configured=$(conf_value "$file" status-arguments) || configured=--short
+	fi
+	read -r -a arguments <<<"$configured"
+	set -- "${arguments[@]}"
+fi
+exec git status "$@"

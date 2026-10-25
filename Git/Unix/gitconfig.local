@@ -1,0 +1,21 @@
+# ~/.gitconfig.local - Unix overrides of the shared Git/.gitconfig, which includes this file last.
+# A link chezmoi keeps to Git/Unix/gitconfig.local (Unix/home/symlink_dot_gitconfig.local.tmpl).
+#
+# The shared file points GitHub's credential helper at the Windows gh.exe. Here it is reset to
+# the Unix gh, so every git client - the terminal, VS Code, the Obsidian Git plugin - gets a token
+# from `gh auth login` instead of asking for a password GitHub no longer accepts. gh is looked up
+# on PATH first and falls back to the Homebrew path, because GUI apps (Obsidian) start without
+# Homebrew on PATH.
+[credential "https://github.com"]
+	helper =
+	helper = !\"$(command -v gh || echo /opt/homebrew/bin/gh)\" auth git-credential
+[credential "https://gist.github.com"]
+	helper =
+	helper = !\"$(command -v gh || echo /opt/homebrew/bin/gh)\" auth git-credential
+#
+# The "ours" merge driver that .gitattributes names (merge=ours: keep this fork's copy of a payload
+# when upstream changed it too). Git never registers a driver from a cloned repository, so it is
+# set here, where Windows' installer runs `git config --global merge.ours.driver true`. Not with
+# `git config --global` on Unix: ~/.gitconfig is chezmoi's link to the tracked Git/.gitconfig.
+[merge "ours"]
+	driver = true

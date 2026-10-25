@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Add-BrowserGroup - adds a browser URL group to Unix/config/browser-groups.local.conf.
+#
+# Usage: Add-BrowserGroup GROUP URL|LABEL=URL...
+#
+# Appends [GROUP] with one line per URL: `LABEL URL` for a labelled URL (recommended, the -Urls
+# form) or the bare URL (the -SimpleUrls form). GROUP may be dotted to nest (GitHub.Personal).
+# An existing group is left alone; the file is backed up first. A flag it does not know is an
+# error, never taken for the GROUP.
+# Windows-style names: --group-name (-GroupName), --urls (-Urls) and --simple-urls (-SimpleUrls)
+# are accepted and ignored: GROUP and the URLs are told apart by their shape.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config backup confedit
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+group=''
+lines=()
+for argument in "$@"; do
+	case $argument in
+		--group-name | --urls | --simple-urls | -v | --verbose) ;;
+		*=http* | *=file:*) lines+=("${argument%%=*} ${argument#*=}") ;;
+		http* | file:*) lines+=("$argument") ;;
+		-*) foundation_die "Unknown argument => $argument - nothing was written" ;;
+		*) [ -z "$group" ] && group=$argument || foundation_die "Not a URL => $argument" ;;
+	esac
+done
+[ -n "$group" ] && [ ${#lines[@]} -gt 0 ] || foundation_die "Usage: Add-BrowserGroup GROUP URL|LABEL=URL..."
+file=$(conf_path browser-groups.conf) || foundation_die "Missing Unix/config/browser-groups.conf"
+printf '%s\n' "${lines[@]}" | conf_add_section "$file" "$group"

@@ -1,0 +1,20 @@
+{{- /*
+  Targets chezmoi leaves alone. A fork payload the repository does not ship (a generic clone has
+  no .ssh/config, and Foundation ships no Apple logo images: they are trademark images a fork adds
+  under FastFetch/Unix; nor the terminal overrides wezterm.local.lua and ghostty's config.local) is
+  skipped instead of becoming a link to nothing.
+*/ -}}
+{{- if not (stat (joinPath .chezmoi.workingTree ".ssh/config")) }}
+.ssh/config
+{{- end }}
+{{- range list "AppleLogoBlack.png" "AppleLogoOriginal.png" "AppleLogoSilver.png" }}
+{{-   if not (stat (joinPath $.chezmoi.workingTree "FastFetch/Unix" .)) }}
+.config/fastfetch/{{ . }}
+{{-   end }}
+{{- end }}
+{{- if not (stat (joinPath .chezmoi.workingTree "WezTerm/wezterm.local.lua")) }}
+.config/wezterm/wezterm.local.lua
+{{- end }}
+{{- if not (stat (joinPath .chezmoi.workingTree "Unix/ghostty/config.local")) }}
+.config/ghostty/config.local
+{{- end }}

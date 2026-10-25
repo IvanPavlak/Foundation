@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# Open-VSCodeWorkspace - opens VS Code multi-root workspaces (*.code-workspace) by name.
+#
+# Usage: Open-VSCodeWorkspace [NAME...]
+#
+# NAME is a file base name in the `directory` of Unix/config/vscode-workspaces.conf
+# (VSCode/Workspaces: MyProject => MyProject.code-workspace). Without a name a menu of the workspaces is
+# shown. A workspace already open (a VS Code window titled "... NAME (Workspace)", read from
+# AeroSpace, or from System Events when AeroSpace does not answer) is skipped. A `code` launch that
+# fails is reported and makes the exit 1; the other names still open.
+# Open-Workspace routes its Open-VSCode action here when the workspace has a `default` line or
+# --vscode-workspace is given. `A,B` names two workspaces, and a number names that entry of the
+# menu; a flag it does not know is an error.
+# Windows-style names: --vscode-workspace (-VSCodeWorkspace) is accepted and ignored: the names
+# after it are workspaces.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps drivers/aerospace
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+names=()
+while [ $# -gt 0 ]; do
+	case $1 in
+		--vscode-workspace) ;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1 - nothing was opened" ;;
+		*) foundation_split_list names "$1" ;;
+	esac
+	shift
+done
+
+file=$(conf_path vscode-workspaces.conf) || file=''
+directory='$DOTFILES_ROOT/VSCode/Workspaces'
+[ -n "$file" ] && { directory=$(conf_value "$file" directory) || directory='$DOTFILES_ROOT/VSCode/Workspaces'; }
+directory=$(foundation_expand_path "$directory")
+[ -d "$directory" ] || foundation_die "Workspaces folder not found => $directory"
+
+available=()
+for f in "$directory"/*.code-workspace; do
+	[ -f "$f" ] && available+=("$(basename "$f" .code-workspace)")
+done
+[ ${#available[@]} -gt 0 ] || foundation_die "No *.code-workspace files in $directory"
+
+if [ ${#names[@]} -gt 0 ]; then
+	# A number is that entry of the menu, as -VSCodeWorkspace 2 is on Windows.
+	mapfile -t names < <(foundation_resolve_items "${names[@]}" -- "${available[@]}")
+else
+	selection=$(foundation_resolve_selection "[Available VSCode Workspaces]" "" 0 1 "${available[@]}") || exit 1
+	while IFS= read -r name; do [ -n "$name" ] && names+=("$name"); done <<<"$selection"
+fi
+
+code_cli=$(command -v code) || code_cli="/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"
+[ -x "$code_cli" ] || foundation_die "The 'code' command was not found. In VS Code run: Shell Command: Install 'code' command in PATH"
+
+# The VS Code window titles: AeroSpace's window list, else System Events.
+code_titles() {
+	if as_available; then
+		as_windows | awk -F'\t' '$2 == "Code" { print $7 }'
+	else
+		app_window_titles com.microsoft.VSCode
+	fi
+}
+
+status=0
+for name in "${names[@]}"; do
+	match=''
+	for candidate in "${available[@]}"; do foundation_ieq "$candidate" "$name" && match=$candidate; done
+	if [ -z "$match" ]; then
+		log_error "No VS Code workspace [$name] in $directory"
+		status=1
+		continue
+	fi
+	log_step "Opening VSCode workspace [$match]..."
+	open=0
+	while IFS= read -r title; do
+		foundation_title_has_segment "$title" "$match (Workspace)" && open=1
+	done < <(code_titles)
+	if [ "$open" -eq 1 ]; then
+		log_warning "[$match] is already open in VSCode!"
+		continue
+	fi
+	if foundation_launch "$code_cli" -n "$directory/$match.code-workspace" </dev/null >/dev/null 2>&1; then
+		log_success "Opened workspace [$match] in VSCode!"
+	else
+		log_error "VS Code could not open workspace [$match] ($code_cli -n failed)"
+		status=1
+	fi
+done
+exit $status

@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# Open-ProjectSwagger - opens a project's Swagger UI tab unless one is already open.
+#
+# Usage: Open-ProjectSwagger [PROJECT...] [--browser TOKEN]
+#
+# The project's entry is the named URL with the project's name inside the [Swagger] group of
+# Unix/config/browser-groups.conf; the first project is used, as on Windows. Silently does
+# nothing without a project or without an entry, so a workspace can declare
+# `Open-ProjectSwagger {SelectedProjects}` unconditionally. Whether the tab is already open
+# follows the backend (a TCP connect to the entry URL's host and port, as Windows probes): while
+# it answers, Open-Browser's own check decides, which knows this entry's tab (its URL among a
+# Safari or Chromium window's tabs, in Firefox the window Open-Browser recorded for it), so
+# another project's Swagger UI does not count; while it does not, a window of the browser whose
+# title holds the failed-load text (`problem-page-title` of window.conf, "Problem loading page"
+# without a line) counts too, so a rerun does not stack error tabs. The entry's name is handed to
+# Open-Browser, which looks up a section first and a named URL last: name no browser group like a
+# project with a Swagger entry, or that group opens instead of the Swagger tab. `A,B` names two
+# projects (A is used); a flag it does not know is an error.
+#
+#   --browser TOKEN   the browser of apps.conf to check and open in (default-browser without it)
+#
+# Windows-style names: --project (-Project) is accepted and ignored: the names after it are
+# projects.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps drivers/aerospace browser
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+# Does PORT on HOST accept a TCP connection within a second (Test-TcpPortReachable)? A plain
+# connect, no TLS, so a self-signed localhost certificate never fails it. Without nc the answer
+# is yes, so Open-Browser's stricter check decides. Usage: tcp_open HOST PORT
+tcp_open() {
+	command -v nc >/dev/null 2>&1 || return 0
+	if [ "$(uname)" = Darwin ]; then
+		nc -z -G 1 -w 1 "$1" "$2" >/dev/null 2>&1
+	else
+		nc -z -w 1 "$1" "$2" >/dev/null 2>&1
+	fi
+}
+
+projects=()
+browser=''
+while [ $# -gt 0 ]; do
+	case $1 in
+		--browser)
+			browser=${2:-}
+			shift
+			;;
+		--project | -v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1 - nothing was opened" ;;
+		*) foundation_split_list projects "$1" ;;
+	esac
+	shift
+done
+project=''
+for name in ${projects[@]+"${projects[@]}"}; do
+	[ -n "$name" ] && project=$name && break
+done
+[ -n "$project" ] || {
+	log_debug "[Open-ProjectSwagger] no project - nothing to open"
+	exit 0
+}
+
+entry=$(browser_swagger_entry "$project") || {
+	log_debug "[Open-ProjectSwagger] [$project] has no Swagger entry"
+	exit 0
+}
+name=${entry%%$'\t'*}
+url=${entry#*$'\t'}
+browser_args=()
+[ -n "$browser" ] && browser_args=(--browser "$browser")
+
+# Backend down: the tab, if there is one, shows the failed-load page, whose title names no
+# project, so any such window of the browser counts as this tab (Resolve-SwaggerBrowserGroup).
+if target=$(browser_url_host_port "$url") && ! tcp_open "${target%%$'\t'*}" "${target#*$'\t'}"; then
+	log_debug "[Open-ProjectSwagger] backend [${target/$'\t'/:}] of [$name] is down"
+	[ -n "$browser" ] || browser=$(app_default_browser)
+	token=$(app_token "$browser" 2>/dev/null) || token=''
+	file=$(conf_path window.conf) && problem=$(conf_value "$file" problem-page-title 2>/dev/null) || problem=''
+	problem=$(foundation_lower "${problem:-Problem loading page}")
+	if [ -n "$token" ] && as_available && as_windows | awk -F'\t' -v t="$token" -v p="$problem" '
+		$2 == t && index(tolower($NF), p) { found = 1 }
+		END { exit !found }'; then
+		log_step "Swagger for [$project] is already open (its backend is down) - skipped"
+		exit 0
+	fi
+fi
+foundation_run Open-Browser "$name" ${browser_args[@]+"${browser_args[@]}"} </dev/null

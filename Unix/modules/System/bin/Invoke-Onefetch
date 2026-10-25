@@ -1,0 +1,200 @@
+#!/usr/bin/env bash
+# Invoke-Onefetch - shows the onefetch repository panel when the directory is inside a git repository.
+#
+# Usage: Invoke-Onefetch [--measure] [--path DIR] [--always] [--arguments ARGS...]
+#
+# Runs onefetch with the arguments of Unix/config/greeting.conf and restyles its output as it
+# streams (Format-OnefetchPanel): the ANSI indices of onefetch-color become true-color codes and
+# the colon after each field name becomes onefetch-separator, with continuation lines re-padded
+# so values stay aligned; the last onefetch-color line for an index wins. Only `onefetch off`
+# turns the panel off: a missing line keeps it on, as the base file's line does. Silent - one
+# debug line saying why - when onefetch is off, not installed, the directory is not in a
+# repository, or onefetch fails (an empty repository).
+# --measure prints the panel's height in rows instead of drawing it (0 whenever nothing would
+# be drawn, and when onefetch-auto-fit is off), so Show-TerminalGreeting can fit fastfetch to
+# the space left.
+# --arguments replaces the onefetch-arguments line for one call: every word after it is
+# onefetch's (or one quoted string of them), so it comes last. --always is what the bare
+# `onefetch` shell function passes: it runs even with `onefetch off` and outside a repository,
+# and onefetch's own error and exit status come through, as a typed onefetch's would.
+# FOUNDATION_STARTUP_SKIP naming OnefetchStyle (or All) prints onefetch's output unstyled, so
+# Measure-ShellStartup can time the restyle apart from the panel.
+# Part of every greeting (twice per `c`), so it keeps no session log of its own.
+export FOUNDATION_LOGGING=off
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config
+
+# The words after --arguments (-Arguments) are onefetch's: set aside before the Windows-style
+# flags of this command are converted.
+own=()
+override=0
+onefetch_words=()
+while [ $# -gt 0 ]; do
+	case ${1,,} in
+		--arguments | -arguments)
+			override=1
+			shift
+			onefetch_words=("$@")
+			break
+			;;
+	esac
+	own+=("$1")
+	shift
+done
+# One quoted string ("--no-art --no-bold") is split into its words.
+if [ "${#onefetch_words[@]}" -eq 1 ]; then
+	read -r -a onefetch_words <<<"${onefetch_words[0]}"
+fi
+
+foundation_normalize_args "${own[@]}"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+measure=0
+always=0
+path=$PWD
+while [ $# -gt 0 ]; do
+	case $1 in
+		--measure) measure=1 ;;
+		--always) always=1 ;;
+		--path)
+			path=$2
+			shift
+			;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument => $1" ;;
+	esac
+	shift
+done
+
+quiet_exit() {
+	log_debug "[Invoke-Onefetch] $1"
+	[ "$measure" -eq 1 ] && echo 0
+	exit 0
+}
+
+file=$(conf_path greeting.conf) || file=''
+# conf_value, as Invoke-Clear and Invoke-Fastfetch read their lines: keys case-insensitive, the
+# last line wins, and a missing line behaves like the base file's: onefetch off (as WinuX's base
+# Onefetch.Enabled), onefetch-auto-fit on.
+setting() { [ -n "$file" ] && conf_value "$file" "$1" 2>/dev/null; }
+# FOUNDATION_ONEFETCH, when set, is the only onefetch looked for (the test suite's seam: Foundation
+# puts Homebrew's bin on PATH, so a stand-in PATH cannot hide an installed onefetch).
+onefetch=${FOUNDATION_ONEFETCH:-onefetch}
+[ "$always" -eq 1 ] || [ "$(setting onefetch)" = on ] || quiet_exit "off (greeting.conf onefetch)"
+if ! command -v "$onefetch" >/dev/null 2>&1; then
+	[ "$always" -eq 0 ] || foundation_die "onefetch is not installed => brew install onefetch"
+	quiet_exit "onefetch is not installed"
+fi
+[ "$measure" -eq 0 ] || [ "$(setting onefetch-auto-fit)" != off ] || quiet_exit "not counted (greeting.conf onefetch-auto-fit off)"
+
+if [ "$override" -eq 1 ]; then
+	arguments=("${onefetch_words[@]}")
+else
+	read -r -a arguments <<<"$(setting onefetch-arguments)"
+fi
+if [ "$always" -eq 1 ]; then
+	# A typed onefetch: onefetch itself says what is wrong (no repository, a bad argument).
+	cd "$path" || exit 1
+	output=$("$onefetch" "${arguments[@]}") || exit
+else
+	# Test-GitRepository: walk up for a .git entry, without spawning git.
+	dir=$(cd "$path" 2>/dev/null && pwd -P) || quiet_exit "no such directory => $path"
+	while [ ! -e "$dir/.git" ]; do
+		[ "$dir" = / ] && quiet_exit "not inside a git repository"
+		dir=$(dirname "$dir")
+	done
+	output=$(cd "$path" && "$onefetch" "${arguments[@]}" 2>/dev/null) || quiet_exit "onefetch exited non-zero (an empty repository?)"
+fi
+[ -n "$output" ] || quiet_exit "onefetch printed nothing"
+if [ "$measure" -eq 1 ]; then
+	printf '%s\n' "$output" | wc -l | tr -d ' '
+	exit 0
+fi
+# Unstyled when Measure-ShellStartup leaves the OnefetchStyle stage out (case-insensitive, split
+# on commas, semicolons and spaces, as the shell rc reads the list).
+skip=${FOUNDATION_STARTUP_SKIP:-}
+skip=",${skip,,},"
+skip=${skip//[;[:space:]]/,}
+if [[ $skip == *,onefetchstyle,* || $skip == *,all,* ]]; then
+	printf '%s\n' "$output"
+	exit 0
+fi
+
+# Quoted in the file so its spaces survive; without a separator line the colon stays.
+separator=$(setting onefetch-separator)
+case $separator in \"*\") separator=${separator:1:${#separator}-2} ;; esac
+# One INDEX=SGR pair per index: the last onefetch-color line for an index wins, so an overlay line
+# overrides the base line of the same index.
+colors=$([ -n "$file" ] && conf_lines "$file" | awk '
+	tolower($1) == "onefetch-color" && NF >= 3 { if (!($2 in sgr)) order[++n] = $2; sgr[$2] = $3 }
+	END { for (i = 1; i <= n; i++) print order[i] "=" sgr[order[i]] }' | paste -sd' ' -)
+
+# Format-OnefetchPanel, byte-wise (C locale) with UTF-8 continuation bytes counted as zero
+# width, so a column is a visible column.
+printf '%s\n' "$output" | env LC_ALL=C awk -v sep="$separator" -v colors="$colors" '
+	BEGIN {
+		esc = "\033"
+		n = split(colors, pairs, " ")
+		for (i = 1; i <= n; i++) {
+			split(pairs[i], kv, "=")
+			if (kv[1] !~ /^[0-9]+$/ || kv[1] > 15 || kv[2] == "") continue
+			code = (kv[1] < 8) ? 30 + kv[1] : 82 + kv[1]
+			from[++np] = esc "[" code "m"; to[np] = esc "[" kv[2] "m"
+		}
+		padding = length(sep) - 2
+		seen = 0; info = -1
+	}
+	function replace_all(s, a, b,   out, i) {
+		out = ""
+		while ((i = index(s, a)) > 0) { out = out substr(s, 1, i - 1) b; s = substr(s, i + length(a)) }
+		return out s
+	}
+	function strip(s) { gsub(/\033\[[0-9;]*m/, "", s); return s }
+	function vlen(s,   c) { c = s; return length(s) - gsub(/[\200-\277]/, "", c) }
+	# Insert PAD at visible column COL, escape sequences (ESC up to the next m) zero-width.
+	function insert_at(s, col, pad,   i, visible, ch, rest, m) {
+		i = 1; visible = 0
+		while (i <= length(s) && visible < col) {
+			ch = substr(s, i, 1)
+			if (ch == esc) { rest = substr(s, i); m = index(rest, "m"); if (m == 0) break; i += m; continue }
+			i++
+			if (ch !~ /[\200-\277]/) visible++
+			while (i <= length(s) && substr(s, i, 1) ~ /[\200-\277]/) i++
+		}
+		if (visible < col) return s
+		return substr(s, 1, i - 1) pad substr(s, i)
+	}
+	{
+		line = $0
+		if (sep != "") {
+			out = ""; rest = line; changed = 0
+			while (match(rest, /\033\[[0-9;]*m:\033\[0m /)) {
+				hit = substr(rest, RSTART, RLENGTH)
+				c = index(hit, ":")
+				out = out substr(rest, 1, RSTART - 1) substr(hit, 1, c - 1) sep substr(hit, c + 1, RLENGTH - c - 1)
+				rest = substr(rest, RSTART + RLENGTH); changed = 1
+			}
+			if (changed) {
+				line = out rest
+				if (!seen) {
+					plain = strip(line); col = index(plain, sep)
+					gap = 0
+					for (j = col - 1; j >= 1; j--) if (substr(plain, j, 2) == "  ") { gap = j; break }
+					if (gap == 0) info = 0
+					else { tail = substr(plain, gap); sub(/^[[:space:]]+/, "", tail); info = vlen(plain) - vlen(tail) }
+				}
+				seen = 1
+			} else if (seen && padding > 0 && line !~ /\033\[(4[0-7]|10[0-7])m/ && line ~ /[^[:space:]]/) {
+				line = insert_at(line, info, sprintf("%" padding "s", ""))
+			}
+		}
+		for (k = 1; k <= np; k++) line = replace_all(line, from[k], to[k])
+		print line
+	}'

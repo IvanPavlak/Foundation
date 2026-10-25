@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# DockerWizard - starts Docker Desktop and brings up a Compose file or a project folder's, or stops Docker Desktop.
+#
+# Usage: DockerWizard [--compose-file-path FILE | --compose-project-path DIR] [--stop] [--pass-thru]
+#
+# The Windows DockerWizard: starts Docker Desktop with no window and waits for the daemon (up to
+# `timeout start` of Unix/config/docker.conf, 180 s without a line). --compose-file-path FILE then
+# runs `docker compose -f FILE up -d`; --compose-project-path DIR does it for the first of
+# compose.yaml, compose.yml, docker-compose.yaml and docker-compose.yml in DIR, the order
+# `docker compose` itself uses (a file path wins over a project path). `up -d` runs even when the
+# stack is already up, so a half-stopped stack is reconciled. --stop stops the running containers
+# and quits Docker Desktop (Open-Docker --stop); the compose flags are ignored then. Exit status 1
+# when something asked for did not happen: the daemon did not come up, a compose file was asked
+# for but not found, or `up -d` failed. --pass-thru (the Windows status object) is accepted and
+# changes nothing: the exit status is the status.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config docker
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+stop=0
+compose_file=''
+project_path=''
+while [ $# -gt 0 ]; do
+	case $1 in
+		--stop) stop=1 ;;
+		--compose-file-path)
+			compose_file=${2:-}
+			shift
+			;;
+		--compose-project-path)
+			project_path=${2:-}
+			shift
+			;;
+		--pass-thru | -v | --verbose) ;;
+		*) foundation_die "Unknown argument => $1 - Docker was not touched" ;;
+	esac
+	shift
+done
+
+if [ "$stop" -eq 1 ]; then
+	docker_stop && log_success "Docker stopped!"
+	exit
+fi
+
+docker_start || exit 1
+
+# A compose source asked for that does not resolve to a file is a failure, not a no-op.
+file=''
+if [ -n "$compose_file" ]; then
+	file=$(foundation_expand_path "$compose_file")
+	[ -f "$file" ] || {
+		log_warning "Docker Compose file not found => [$compose_file]"
+		exit 1
+	}
+elif [ -n "$project_path" ]; then
+	dir=$(foundation_expand_path "$project_path")
+	for name in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do
+		[ -f "$dir/$name" ] && file=$dir/$name && break
+	done
+	[ -n "$file" ] || {
+		log_warning "No Docker Compose file found in => [$project_path]"
+		exit 1
+	}
+fi
+[ -n "$file" ] || exit 0
+
+log_step "=> Starting Docker Compose services..."
+if docker compose -f "$file" up -d </dev/null; then
+	log_success "Docker Compose services started from => [$file]"
+else
+	log_error "Docker Compose failed to start services from => [$file]"
+	exit 1
+fi

@@ -1,0 +1,232 @@
+#!/usr/bin/env bash
+# Docker-Cleanup - menu of Docker cleanup actions, previewed and guarded by one confirmation.
+#
+# Usage: Docker-Cleanup [ACTION...|All]
+#
+# Actions are the `cleanup` lines of Unix/config/docker.conf; the menu adds All and takes several
+# picks at once (numbers, or a one-word label); All runs every configured `cleanup` line. ACTION
+# arguments are labels, menu numbers or All (--action before them is the Windows -Action); they
+# are checked before Docker is touched, so an unknown one, or a flag this command does not know,
+# starts nothing. Selected actions always run in configuration order.
+# Before anything runs, every selected action prints its label, its `cleanup-description` and
+# what its `cleanup-preview` command lists; an action whose preview lists nothing is skipped, and
+# when nothing is left the command stops without a prompt. When any remaining action has a
+# `:: CONFIRMATION`, one red confirmation covers them all (that action's own message when it is
+# the only one) and only "yes" goes ahead - Enter means no; actions without one run unasked. A
+# failing action is reported and the remaining ones still run.
+#
+# When the Docker daemon is not running, `cleanup-start` decides: ask (default, also for an
+# empty or unknown value; Enter means yes, no terminal means no), always, or never (warn and stop). Docker is started
+# like Open-Docker, and the menu appears only once the daemon answers.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config docker
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+# Every prompt reads the same terminal through one descriptor, so a second prompt continues
+# where the first stopped instead of reopening the terminal (or a test's answers file) at its
+# first line. No terminal reads as an empty answer.
+tty_open=0
+# Never call it in a command substitution: the descriptor would close with the subshell.
+answer=''
+ask() { # MESSAGE COLOR - prints the prompt, sets answer (trimmed, lowercased)
+	local reply=''
+	if [ "$tty_open" -eq 0 ]; then
+		tty_open=2
+		if [ -r "${FOUNDATION_TTY:-/dev/tty}" ] && { : <"${FOUNDATION_TTY:-/dev/tty}"; } 2>/dev/null; then
+			exec 3<"${FOUNDATION_TTY:-/dev/tty}" && tty_open=1
+		fi
+	fi
+	if [ -n "$2" ]; then
+		printf '\n\033[%sm%s\033[0m' "$2" "$1" >&2
+	else
+		printf '\n%s' "$1" >&2
+	fi
+	[ "$tty_open" -eq 1 ] && { IFS= read -r reply <&3 || reply=''; }
+	answer=$(foundation_lower "$(foundation_trim "$reply")")
+}
+
+file=$(conf_path docker.conf) || foundation_die "Missing Unix/config/docker.conf"
+labels=()
+commands=()
+confirmations=()
+descriptions=()
+previews=()
+extras=()
+while IFS= read -r line; do
+	case $line in
+		cleanup\ *) ;;
+		cleanup-description\ * | cleanup-preview\ *)
+			extras+=("$line")
+			continue
+			;;
+		*) continue ;;
+	esac
+	line=${line#cleanup }
+	label=$(foundation_trim "${line%% :: *}")
+	rest=${line#* :: }
+	command=$(foundation_trim "${rest%% :: *}")
+	confirmation=''
+	[ "$rest" != "${rest#* :: }" ] && confirmation=$(foundation_trim "${rest#* :: }")
+	labels+=("$label")
+	commands+=("$command")
+	confirmations+=("$confirmation")
+	descriptions+=('')
+	previews+=('')
+done < <(conf_lines "$file")
+[ ${#labels[@]} -gt 0 ] || foundation_die "No cleanup actions in docker.conf"
+
+# The optional fields are keyed by label, so the plain `cleanup` lines stay as they were.
+for line in ${extras[@]+"${extras[@]}"}; do
+	kind=${line%% *}
+	line=${line#* }
+	label=$(foundation_trim "${line%% :: *}")
+	value=$(foundation_trim "${line#* :: }")
+	for ((i = 0; i < ${#labels[@]}; i++)); do
+		foundation_ieq "${labels[i]}" "$label" || continue
+		case $kind in
+			cleanup-description) descriptions[i]=$value ;;
+			cleanup-preview) previews[i]=$value ;;
+		esac
+	done
+done
+
+# The ACTION arguments, resolved before Docker is touched: an unknown one starts nothing.
+choices=()
+for argument in "$@"; do
+	case $argument in
+		--action | -v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $argument - nothing was touched" ;;
+		*) choices+=("$argument") ;;
+	esac
+done
+# Indexes of the selected actions; All belongs to the menu, not to anybody's docker.conf.
+selected=()
+select_choices() {
+	local choice i index
+	for choice in "${choices[@]}"; do
+		if foundation_ieq "$choice" All || [ "$choice" = "$((${#labels[@]} + 1))" ]; then
+			selected=()
+			for ((i = 0; i < ${#labels[@]}; i++)); do selected+=("$i"); done
+			return 0
+		fi
+		index=-1
+		for ((i = 0; i < ${#labels[@]}; i++)); do
+			if foundation_ieq "${labels[i]}" "$choice" || [ "$choice" = "$((i + 1))" ]; then index=$i; fi
+		done
+		[ "$index" -ge 0 ] || foundation_die "No cleanup action [$choice] - nothing was touched"
+		selected+=("$index")
+	done
+}
+[ ${#choices[@]} -eq 0 ] || select_choices
+
+command -v docker >/dev/null 2>&1 || foundation_die "The docker CLI is not installed => brew install --cask docker-desktop"
+if ! docker_running; then
+	# ask is the default and the fallback for an empty or unknown value, so a typo never
+	# silently starts Docker Desktop nor silently refuses to.
+	mode=$(foundation_lower "$(conf_value "$file" cleanup-start 2>/dev/null)")
+	if [ "$mode" = never ]; then
+		log_warning "Docker is not running!"
+		exit 0
+	fi
+	if [ "$mode" != always ]; then
+		# Starting Docker deletes nothing, so Enter means yes - the red, Enter-means-no
+		# safeguard is kept for the cleanup confirmation further down.
+		ask "Docker is not running - start it? [Yes/no]: " ''
+		# No terminal is no answer, never a yes: a run nobody can see starts nothing.
+		if [ "$tty_open" -ne 1 ]; then
+			printf '\n' >&2
+			log_warning "Docker is not running and there is no terminal to ask - nothing was touched!"
+			exit 0
+		fi
+		case $answer in
+			'' | y | yes) ;;
+			*)
+				log_warning "Docker is not running - nothing was touched!"
+				exit 0
+				;;
+		esac
+	fi
+	docker_start || foundation_die "Docker could not be started - nothing was touched!"
+fi
+
+if [ ${#choices[@]} -eq 0 ]; then
+	selection=$(foundation_resolve_selection "[Docker cleanup actions]" "" 0 1 "${labels[@]}" All) || exit 1
+	while IFS= read -r choice; do [ -n "$choice" ] && choices+=("$choice"); done <<<"$selection"
+	[ ${#choices[@]} -gt 0 ] || exit 0
+	select_choices
+fi
+log_debug "[Docker-Cleanup] selected => $(for i in "${selected[@]}"; do printf '%s ' "${labels[i]}"; done)"
+
+# Configuration order, never selection order: the shipped list stops and deletes containers
+# before the images and volumes they hold, so "All" or "5 2" still runs in an order where every
+# step can succeed. Every preview runs before anything is touched, so the list confirmed is the
+# state Docker is in now, not one an earlier action already changed.
+pending=()
+for ((i = 0; i < ${#labels[@]}; i++)); do
+	case " ${selected[*]} " in *" $i "*) ;; *) continue ;; esac
+	header=${labels[i]}
+	[ -n "${descriptions[i]}" ] && header="${labels[i]} - ${descriptions[i]}"
+	if [ -z "${previews[i]}" ]; then
+		log_step "=> $header"
+		pending+=("$i")
+		continue
+	fi
+	items=$(bash -c "${previews[i]}" </dev/null 2>/dev/null | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v '^$')
+	if [ -z "$items" ]; then
+		log_warning "${labels[i]} - nothing to do, skipped!"
+		continue
+	fi
+	log_step "=> $header"
+	while IFS= read -r item; do log_step -n "  • $item"; done <<<"$items"
+	pending+=("$i")
+done
+
+if [ ${#pending[@]} -eq 0 ]; then
+	log_warning "Nothing to do - nothing was touched!"
+	exit 0
+fi
+
+# One confirmation for the whole batch: asking per action would let a run stop halfway, after
+# the containers are gone but before the volumes meant to go with them.
+message=''
+if [ ${#pending[@]} -eq 1 ]; then
+	message=${confirmations[pending[0]]}
+else
+	for i in "${pending[@]}"; do
+		[ -n "${confirmations[i]}" ] && message="Are you sure you want to run these ${#pending[@]} actions?"
+	done
+fi
+if [ -n "$message" ]; then
+	ask "$message [yes/No]: " 31
+	case $answer in
+		yes | y) ;;
+		*)
+			log_warning "Cancelled - nothing was touched!"
+			exit 0
+			;;
+	esac
+fi
+
+# A failing action does not stop the ones after it: removing images does not need every stop to
+# succeed, and each failure is reported on its own.
+status=0
+for i in "${pending[@]}"; do
+	log_step "=> ${labels[i]}..."
+	bash -c "${commands[i]}" </dev/null
+	rc=$?
+	if [ "$rc" -eq 0 ]; then
+		log_success "${labels[i]} completed!"
+	else
+		log_error "${labels[i]} failed with exit code [$rc]!"
+		status=1
+	fi
+done
+exit "$status"

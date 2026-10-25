@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+# Initialize-Configuration - first-run writer of this Mac's identity and paths into the .local
+# overlays, the Unix twin of the Windows Initialize-Configuration.
+#
+# Usage: Initialize-Configuration [--git-name NAME] [--git-email ADDRESS] [--owner NAME] [--machine-name NAME] [--machine-type TYPE] [--dev-root PATH] [--force] [--dry-run] [-v]
+#
+# A generic clone ships no personal values; this writes the ones that make it this user's Mac,
+# as Windows writes Configuration.local.psd1:
+#   git.local.conf       `name` and `email`, the git identity (GitConfig.UserName / UserEmail);
+#                        the GitIdentity step sets the global git identity from them
+#   machines.local.conf  `host NAME TYPE` for this Mac (HostnameToMachineType; RenameMachine,
+#                        the next Bootstrap step, applies a new name) and `@TYPE dev-root PATH`,
+#                        the dev root that configured paths name as $DEV (BasePaths.<Type>.Dev)
+# Each value comes from its flag, else FOUNDATION_GIT_NAME / FOUNDATION_GIT_EMAIL /
+# FOUNDATION_DEV_ROOT, else a prompt showing the default (Enter keeps it), else - without a
+# terminal - the default, so a scripted run never waits. Defaults: this Mac's current name, the
+# machine type chezmoi asked on the first run (else the detected one), the folder that holds this
+# clone as the dev root; the identity has none and is left out when not given.
+#
+# Only what is not set yet is asked and written: an identity in git.local.conf or the global git
+# config, a host line for this Mac's name, a dev-root line for its machine type. --force asks and
+# writes everything again, replacing those lines. --machine-name or --machine-type replaces the
+# host line and --dev-root (or FOUNDATION_DEV_ROOT) the dev-root line even without --force, while
+# --git-name and --git-email are ignored when an identity is already set, unless --force. An overlay is backed up into
+# Backups/Unix/Config/ before it is changed (nothing is written when that fails), and a missing
+# one is created. --dry-run asks nothing and only says what is missing and would be written.
+# --owner NAME (the GitHub owner, -Owner on Windows) is the default the git name prompt shows, and
+# the git name of a run without a terminal, when no identity is set yet.
+# Windows-style names: --dev-path (-DevPath) is --dev-root, and --what-if (-WhatIf) is --dry-run.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config backup confedit
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+git_name=${FOUNDATION_GIT_NAME:-}
+git_email=${FOUNDATION_GIT_EMAIL:-}
+dev_root=${FOUNDATION_DEV_ROOT:-}
+machine_name=''
+machine_type=''
+owner=''
+force=0
+dry=0
+while [ $# -gt 0 ]; do
+	case $1 in
+		--git-name | --git-email | --owner | --machine-name | --machine-type | --dev-root | --dev-path)
+			[ $# -ge 2 ] || foundation_die "$1 needs a value"
+			case $1 in
+				--git-name) git_name=$2 ;;
+				--git-email) git_email=$2 ;;
+				--owner) owner=$2 ;;
+				--machine-name) machine_name=$2 ;;
+				--machine-type) machine_type=$2 ;;
+				--dev-root | --dev-path) dev_root=$2 ;;
+			esac
+			shift
+			;;
+		--force) force=1 ;;
+		--dry-run | --what-if) dry=1 ;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument [$1] - see Initialize-Configuration --help" ;;
+	esac
+	shift
+done
+
+machines=$(conf_path machines.conf) || foundation_die "Missing Unix/config/machines.conf"
+git_conf=$(conf_path git.conf) || foundation_die "Missing Unix/config/git.conf"
+backed_up=' '
+
+# Asks PROMPT on the terminal with DEFAULT shown; prints the answer, DEFAULT for an empty one.
+# Without a terminal, or under --dry-run, prints DEFAULT without asking.
+ask() { # PROMPT DEFAULT
+	local reply=''
+	if [ "$dry" -eq 0 ] && [ -r "${FOUNDATION_TTY:-/dev/tty}" ] && { : <"${FOUNDATION_TTY:-/dev/tty}"; } 2>/dev/null; then
+		printf '%s%s: ' "$1" "${2:+ [$2]}" >&2
+		IFS= read -r reply <"${FOUNDATION_TTY:-/dev/tty}" || reply=''
+		reply=$(foundation_trim "$reply")
+	fi
+	printf '%s' "${reply:-$2}"
+}
+
+# The machine type chezmoi asked when this Mac was set up (machineType of its config file).
+chezmoi_machine_type() {
+	local file=${XDG_CONFIG_HOME:-$HOME/.config}/chezmoi/chezmoi.toml
+	[ -r "$file" ] || return 1
+	awk -F'"' '/^[[:space:]]*machineType[[:space:]]*=/ { print $2; found = 1; exit } END { exit found ? 0 : 1 }' "$file"
+}
+
+# Writes LINE into the overlay of BASE after dropping the lines whose first fields are the words
+# of MATCH (case-insensitive; an @TYPE prefix counts as a field). The overlay is backed up once
+# per run first, or created with a header. Usage: overlay_set BASE MATCH LINE
+overlay_set() {
+	local base=$1 match=$2 line=$3 target
+	target=$(conf__local_path "$base")
+	if [ "$dry" -eq 1 ]; then
+		log_step "Would write to ${target#"$DOTFILES_ROOT"/} => $line"
+		return 0
+	fi
+	if [ -f "$target" ]; then
+		case $backed_up in
+			*" $target "*) ;;
+			*)
+				backup_item Config "$(conf__backup_key "$target")" "$target" >/dev/null || {
+					log_error "Could not back up ${target#"$DOTFILES_ROOT"/} - nothing written"
+					return 1
+				}
+				backed_up="$backed_up$target "
+				;;
+		esac
+		awk -v pattern="$match" '
+			BEGIN { n = split(tolower(pattern), want, " ") }
+			{
+				split(tolower($0), got, " ")
+				for (i = 1; i <= n; i++) if (got[i] != want[i]) { print; next }
+			}' "$target" >"$target.tmp" && mv "$target.tmp" "$target" || return 1
+	else
+		printf '# Overlay of %s: written by Initialize-Configuration, edited by hand from then on\n# (docs/unix/configuration.md).\n' "${base##*/}" >"$target" || return 1
+	fi
+	[ -z "$(tail -c 1 "$target")" ] || printf '\n' >>"$target"
+	printf '%s\n' "$line" >>"$target"
+	log_success "Wrote to ${target#"$DOTFILES_ROOT"/} => $line"
+}
+
+# A path as the config writes it: ~ for the home folder.
+# shellcheck disable=SC2088 # the ~ is written literally into the config, not expanded
+home_relative() { case $1 in "$HOME") printf '~' ;; "$HOME"/*) printf '~/%s' "${1#"$HOME"/}" ;; *) printf '%s' "$1" ;; esac }
+
+log_title "Initialize Configuration"
+failed=0
+
+# Git identity.
+for key in name email; do
+	current=$(conf_value "$git_conf" "$key" 2>/dev/null || true)
+	[ -n "$current" ] || current=$(git config --global "user.$key" 2>/dev/null || true)
+	if [ -n "$current" ] && [ "$force" -eq 0 ]; then
+		log_step "Git $key already set => $current"
+		continue
+	fi
+	if [ "$key" = name ]; then given=$git_name; else given=$git_email; fi
+	default=$current
+	[ "$key" = name ] && [ -z "$default" ] && default=$owner
+	[ -n "$given" ] || given=$(ask "Git user.$key" "$default")
+	if [ -z "$given" ]; then
+		if [ "$dry" -eq 1 ]; then
+			log_step "Would ask for the git $key"
+		else
+			log_warning "No git $key given - set it later with Initialize-Configuration --git-$key"
+		fi
+		continue
+	fi
+	overlay_set "$git_conf" "$key" "$key $given" || failed=1
+done
+
+# This Mac: its name and machine type.
+types=$(foundation_machine_types)
+[ -n "$types" ] || types=Test
+host=$(foundation_hostname)
+configured=$(conf__lines_raw "$machines" | awk -v h="$(foundation_lower "$host")" '$1 == "host" && tolower($2) == h { print $3; exit }')
+if [ -n "$configured" ] && [ "$force" -eq 0 ] && [ -z "$machine_name$machine_type" ]; then
+	log_step "This Mac is already configured => $host ($configured)"
+	type=$configured
+else
+	name=$machine_name
+	[ -n "$name" ] || name=$(ask "Name of this Mac" "$host")
+	type=$machine_type
+	if [ -z "$type" ]; then
+		default_type=$(chezmoi_machine_type) || default_type=$(foundation_machine_type)
+		type=$(ask "Machine type ($(printf '%s\n' "$types" | paste -sd, - | sed 's/,/, /g'))" "$default_type")
+	fi
+	known=''
+	while IFS= read -r candidate; do
+		foundation_ieq "$candidate" "$type" && known=$candidate
+	done <<<"$types"
+	[ -n "$known" ] || foundation_die "Unknown machine type [$type] - one of: $(printf '%s\n' "$types" | paste -sd' ' -)"
+	type=$known
+	if [ -z "$name" ] || [ "$name" != "${name%[[:space:]]*}" ]; then
+		foundation_die "Invalid machine name [$name] - one word, as LocalHostName has it"
+	fi
+	overlay_set "$machines" "host $name" "host $name $type" || failed=1
+	[ "$name" = "$host" ] || log_step "The RenameMachine step renames this Mac from $host to $name"
+fi
+
+# The dev root of this machine type.
+current=$(CONF_MACHINE_TYPE=$type conf_value "$machines" dev-root 2>/dev/null || true)
+if [ -n "$current" ] && [ "$force" -eq 0 ] && [ -z "$dev_root" ]; then
+	log_step "Dev root already set => $current"
+else
+	[ -n "$dev_root" ] || dev_root=$(ask "Dev root (\$DEV of configured paths)" "$(home_relative "$(dirname "$DOTFILES_ROOT")")")
+	expanded=$(foundation_expand_path "$dev_root")
+	[ -d "$expanded" ] || log_warning "Dev root [$expanded] does not exist yet"
+	overlay_set "$machines" "@$type dev-root" "@$type dev-root $(home_relative "$expanded")" || failed=1
+fi
+
+[ "$failed" -eq 0 ] || foundation_die "Some values could not be written"
+[ "$dry" -eq 1 ] || log_success "Configuration initialized!"

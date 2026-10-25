@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# Deploy-FirefoxProfile - links the repository's Firefox/user.js (Betterfox) into Firefox profiles.
+#
+# Usage: Deploy-FirefoxProfile [--all] [--check]
+#
+# The macOS counterpart of the Firefox user.js SymbolicLinks entries on Windows. The profile
+# folder has a random name, so it cannot be a chezmoi link: the default profile is read from
+# ~/Library/Application Support/Firefox/profiles.ini (Linux: ~/.mozilla/firefox), and its
+# user.js becomes a symlink to Firefox/user.js. --all links every profile listed there. An
+# existing real user.js is copied into Backups/Unix/SymbolicLinks first (a link is just replaced). Firefox applies the file
+# on its next start. An unknown argument is an error.
+#
+# macOS protects other apps' data folders: the first run from a terminal may ask "WezTerm would
+# like to access data from other apps" - allow it, or grant the terminal Full Disk Access.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config backup
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+all=0
+check=0
+for argument in "$@"; do
+	case $argument in
+		--all) all=1 ;;
+		--check) check=1 ;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument [$argument] - usage: Deploy-FirefoxProfile [--all] [--check]" ;;
+	esac
+done
+
+case $(uname -s) in
+	Darwin) root="$HOME/Library/Application Support/Firefox" ;;
+	*) root="$HOME/.mozilla/firefox" ;;
+esac
+source_file=$DOTFILES_ROOT/Firefox/user.js
+[ -r "$source_file" ] || foundation_die "Missing Firefox/user.js in the repository"
+
+log_title "Deploy-FirefoxProfile"
+if ! ls "$root" >/dev/null 2>&1; then
+	if [ -d "$root" ]; then
+		foundation_die "macOS denied access to $root - allow this terminal to access data from other apps (or give it Full Disk Access) and rerun"
+	fi
+	foundation_die "No Firefox profiles at $root - start Firefox once first"
+fi
+ini=$root/profiles.ini
+[ -r "$ini" ] || foundation_die "Missing $ini - start Firefox once first"
+
+# Profile folders: the [Install...] Default= of the running install (the profile Firefox
+# actually opens), else the [Profile] marked Default=1; --all takes every [Profile] Path=.
+profiles=$(awk -F= -v all="$all" '
+	/^\[/ { section = $0; next }
+	section ~ /^\[Install/ && $1 == "Default" { install = $2 }
+	section ~ /^\[Profile/ && $1 == "Path" { path = $2; paths[++n] = $2 }
+	section ~ /^\[Profile/ && $1 == "Default" && $2 == "1" { marked = path }
+	END {
+		if (all == 1) { for (i = 1; i <= n; i++) print paths[i]; exit }
+		if (install != "") print install; else if (marked != "") print marked; else if (n > 0) print paths[1]
+	}' "$ini")
+[ -n "$profiles" ] || foundation_die "No profile found in $ini"
+
+failures=0
+while IFS= read -r profile; do
+	case $profile in /*) dir=$profile ;; *) dir=$root/$profile ;; esac
+	target=$dir/user.js
+	if [ -L "$target" ] && [ "$(readlink "$target")" = "$source_file" ]; then
+		log_step "ok      $target"
+		continue
+	fi
+	if [ "$check" -eq 1 ]; then
+		log_step "MISSING $target"
+		failures=$((failures + 1))
+		continue
+	fi
+	[ -d "$dir" ] || {
+		log_warning "Profile folder missing => $dir"
+		failures=$((failures + 1))
+		continue
+	}
+	if [ -e "$target" ] || [ -L "$target" ]; then
+		# Into the backup sink first; a user.js that could not be saved is not replaced.
+		if [ -L "$target" ]; then
+			rm -f "$target"
+		elif backup_item SymbolicLinks "Firefox.$(basename "$dir").user.js" "$target" >/dev/null; then
+			rm -f "$target" && log_step "moved   existing user.js into Backups/Unix/SymbolicLinks"
+		else
+			failures=$((failures + 1))
+			continue
+		fi
+	fi
+	ln -s "$source_file" "$target" && log_step "linked  $target" || failures=$((failures + 1))
+done <<<"$profiles"
+
+if [ "$check" -eq 1 ]; then
+	[ "$failures" -eq 0 ] && log_success "Firefox user.js deployed!" || log_warning "$failures profile(s) need deployment - run Deploy-FirefoxProfile"
+	exit 0
+fi
+[ "$failures" -eq 0 ] && log_success "Firefox user.js deployed - restart Firefox to apply it!"
+[ "$failures" -eq 0 ] || exit 1

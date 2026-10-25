@@ -1,0 +1,420 @@
+#!/usr/bin/env bash
+# Set-WorkspaceWindowLayout - waits for a workspace's windows and tiles them per desktop.
+#
+# Usage: Set-WorkspaceWindowLayout [WORKSPACE | --workspace-name WORKSPACE | --layout-path FILE] [--project NAME...] [--timeout-seconds N] [--disable-auto-wait] [--layout-type TYPE] [--alongside] [--desktop-offset N] [-v]
+#
+# Reads Unix/config/layouts/<TYPE>/<WORKSPACE>_<TYPE>.conf, where TYPE is the machine's
+# layout set (config/machines.conf: layout-override, then the small-display rule, else the
+# machine type), or the layout file --layout-path names. Each entry claims one window (new windows before pre-existing ones; a title must
+# hold for layout-stable-ms of config/workspaces.conf, 500 in the base and without the line,
+# FOUNDATION_STABLE_MS overriding it); the only untitled entry of an app then takes every
+# remaining window of that app, and an entry without a title never takes a window a titled entry
+# of the same app asks for. Every desktop is arranged on its AeroSpace workspace: stray windows
+# are parked on the parking-workspace of config/zones.conf (P), the layout's windows are tiled
+# left to right and sized to the zone set's column shares (config/zones.conf); a halved column
+# (Top-/Bottom- zones) becomes a vertical container. Windows sharing a zone (a whole desktop, a
+# column or a half) are stacked (accordion), the last entry in front. Each desktop is then read
+# back: every window must be on its desktop and within 50 points of its zone (frames read by
+# window id from the window server, so same-titled windows are told apart); a misplaced window has the desktop arranged again, up to two more times, then the
+# open ends Partial with Expected / Actual per window. Zones follow AeroSpace's gaps, the spacing of
+# the FancyZones layouts on Windows: the column widths and the expected frames come from the gaps
+# of the AeroSpace configuration (gaps.inner.* between windows, gaps.outer.* at the work-area
+# edges), whatever they are.
+# Only the Primary monitor is placed yet; entries for other monitors are skipped with a warning.
+# Focus is left where the workspace's Focus-VirtualDesktop action puts it. Without a WORKSPACE
+# (and without --layout-path) it applies Fullscreen, as on Windows. An Applied layout ends with
+# its Visualize-Layouts drawing, as on Windows.
+#
+# The layout file's `project A,B` variants apply for the projects the open is for (Open-Workspace
+# passes them; several apply in the order given, the later wins on the same desktop). A variant
+# naming a project projects.conf does not have is reported and skipped.
+#
+#   --workspace-name W    the Windows spelling of WORKSPACE
+#   --project NAME...     the projects whose layout variants apply
+#   --timeout-seconds N   how long to wait for windows (default 60 as on Windows, or
+#                         FOUNDATION_LAYOUT_TIMEOUT)
+#   --layout-path FILE    apply this layout file: its only [Workspace] section, or the one
+#                         WORKSPACE names; the layout set recorded is --layout-type, else the
+#                         name of the file's folder
+#   --disable-auto-wait   no waiting: one look at the open windows, and each entry takes what
+#                         matches at once (windows that are not there yet stay unplaced)
+#   --layout-type TYPE    use layouts/TYPE/ instead of the detected set
+#   --alongside           place only the windows this open created (Open-Workspace --alongside)
+#   --desktop-offset N    every desktop of the layout lands N desktops to the right (alongside)
+#   -v                    print the per-desktop detail of the arrangement
+#
+# Any other flag (-SnapDelayMs, -PrepareOnly of Windows) is an error before a window is placed.
+#
+# During a workspace open, the windows of other workspaces the open must leave alone
+# ($FOUNDATION_RUN_DIR/protected, written by Open-Workspace) are never claimed or parked.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps drivers/aerospace layout state spinner project
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+workspace=''
+timeout=${FOUNDATION_LAYOUT_TIMEOUT:-60}
+type=''
+projects=()
+alongside=0
+offset=0
+path=''
+no_wait=0
+while [ $# -gt 0 ]; do
+	case $1 in
+		--project)
+			shift
+			while [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; do
+				IFS=, read -r -a names <<<"$1"
+				projects+=("${names[@]}")
+				shift
+			done
+			continue
+			;;
+		--timeout-seconds)
+			timeout=$2
+			shift
+			;;
+		--layout-type)
+			type=$2
+			shift
+			;;
+		--layout-path)
+			path=$2
+			shift
+			;;
+		--disable-auto-wait) no_wait=1 ;;
+		--workspace-name)
+			workspace=$2
+			shift
+			;;
+		--alongside) alongside=1 ;;
+		--desktop-offset)
+			offset=$2
+			shift
+			;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1 - no window was placed" ;;
+		*) workspace=$1 ;;
+	esac
+	shift
+done
+# No workspace and no file: Fullscreen, as on Windows.
+[ -n "$workspace" ] || [ -n "$path" ] || workspace=Fullscreen
+case $offset in '' | *[!0-9]*) foundation_die "--desktop-offset must be a whole number" ;; esac
+# Read by layout_wait and layout_arrange_desktop (lib/layout.sh).
+# shellcheck disable=SC2034
+{
+	layout_new_only=$alongside
+	layout_no_wait=$no_wait
+	layout_protected=' '
+	[ -n "${FOUNDATION_RUN_DIR:-}" ] && [ -r "$FOUNDATION_RUN_DIR/protected" ] && layout_protected=" $(tr '\n' ' ' <"$FOUNDATION_RUN_DIR/protected") "
+}
+
+# DisableAutoWait: one poll (layout_wait with TIMEOUT 0), every claimed window ready at once.
+[ "$no_wait" -eq 0 ] || timeout=0
+if [ -n "$path" ]; then
+	[ -f "$path" ] && [ -r "$path" ] || foundation_die "Layout file not found => $path"
+	file=$path
+	if [ -n "$workspace" ]; then
+		workspace=$(conf_section_name "$file" "$workspace") || foundation_die "No [$workspace] layout in $path"
+	else
+		mapfile -t sections < <(conf_sections "$file")
+		[ ${#sections[@]} -eq 1 ] || foundation_die "$path holds ${#sections[@]} layouts - name the one to apply (Set-WorkspaceWindowLayout WORKSPACE --layout-path FILE)"
+		workspace=${sections[0]}
+	fi
+	[ -n "$type" ] || type=$(basename "$(dirname "$file")")
+	as_start || exit 1
+else
+	as_start || exit 1
+	[ -n "$type" ] || type=$(layout_type)
+	layout_dir "$type" >/dev/null || foundation_die "Layout set not found => Unix/config/layouts/$type/"
+	file=$(layout_file "$workspace" "$type") || foundation_die "No [$workspace] layout in layouts/$type/"
+fi
+
+log_title "Applying $workspace Workspace Layout"
+log_debug "[Set-WorkspaceWindowLayout] layout set [$type]${projects[0]:+, projects [${projects[*]}]}"
+while IFS= read -r problem; do
+	[ -n "$problem" ] && log_warning "${file##*/}: $problem"
+done < <(layout_variant_problems "$file" "$workspace")
+
+# SimpleLayoutWorkspaces (simple-layouts of workspaces.conf, Fullscreen and Empty): a global
+# gesture, not a placement - every window on every desktop goes full size, and no window changes
+# desktop. The AeroSpace form is one accordion per desktop: each window fills the desktop, the
+# others stacked behind it (alt-h/l cycles them). Reset-Windows or alt-/ tiles a desktop again.
+ws_conf=$(conf_path workspaces.conf) || ws_conf=''
+simple=$([ -n "$ws_conf" ] && conf_value "$ws_conf" simple-layouts 2>/dev/null)
+for name in $simple; do
+	foundation_ieq "$name" "$workspace" || continue
+	start=$(foundation_now_ms)
+	count=0
+	failed=()
+	# AeroSpace refuses `layout --window-id` on a window of a hidden workspace (the driver's
+	# header): each desktop is shown for its accordion, and the one focused before comes back.
+	focused=$(as_focused_workspace)
+	for desktop in $(as_windows | cut -f5 | sort -u); do
+		first=$(as_windows | awk -F'\t' -v d="$desktop" '$5 == d { print $1; exit }')
+		[ -n "$first" ] || continue
+		as_exit_native_fullscreen "$first" 2>/dev/null || true
+		as_focus_workspace "$desktop"
+		as_flatten "$desktop"
+		if ! as_layout "$first" h_accordion; then
+			log_warning "Desktop $desktop => AeroSpace refused the full-size layout"
+			failed+=("$desktop")
+			continue
+		fi
+		n=$(as_windows | awk -F'\t' -v d="$desktop" '$5 == d' | grep -c .)
+		log_debug "[Set-WorkspaceWindowLayout] desktop $desktop => $n window(s) full size"
+		count=$((count + n))
+	done
+	[ -z "$focused" ] || as_focus_workspace "$focused"
+	result=Applied
+	[ ${#failed[@]} -eq 0 ] || result=Partial
+	[ -n "${FOUNDATION_RUN_DIR:-}" ] && printf '0 %s %s %s %s 1\n' $(($(foundation_now_ms) - start)) "$count" "$count" "$result" >"$FOUNDATION_RUN_DIR/layout-timings"
+	[ ${#failed[@]} -eq 0 ] || foundation_die "$count window(s) full size; desktop(s) ${failed[*]} could not be laid out"
+	log_success "Every window is full size ($count)!"
+	exit 0
+done
+
+read -r _ _ work_x work_y work_width work_height <<<"$(as_primary_monitor)"
+[ -n "$work_height" ] || foundation_die "No primary display found - cannot compute zones"
+# The tile area: the work area less AeroSpace's outer gaps, and its inner gaps, read from the
+# AeroSpace configuration (any spacing, 0 included), so the column widths and the frames the
+# verification expects follow the gaps AeroSpace actually draws.
+read -r -a gaps <<<"$(as_gaps)"
+read -r area_x area_y area_width area_height gap_h gap_v <<<"$(layout_tile_area "$work_x" "$work_y" "$work_width" "$work_height" "${gaps[@]}")"
+log_debug "[Set-WorkspaceWindowLayout] tile area ${area_x},${area_y} ${area_width}x${area_height}, inner gaps ${gap_h}/${gap_v}"
+
+# Entries this machine can place.
+desktop_sets=()
+entry_desktop=()
+entry_zone=()
+entry_app=()
+entry_title=()
+ok=0
+while IFS=$'\t' read -r kind desktop monitor zone_or_set app title; do
+	desktop=$((desktop + offset))
+	if [ "$kind" = "L" ]; then
+		[ "$monitor" = "Primary" ] && desktop_sets[desktop]=$zone_or_set
+		continue
+	fi
+	if [ "$monitor" != "Primary" ]; then
+		log_warning "Entry [$app] targets monitor [$monitor] - only Primary is supported on macOS yet"
+		ok=1
+		continue
+	fi
+	entry_desktop+=("$desktop")
+	entry_zone+=("$zone_or_set")
+	entry_app+=("$app")
+	entry_title+=("$title")
+done < <(layout_entries "$file" "$workspace" ${projects[@]+"${projects[@]}"})
+
+if [ ${#entry_app[@]} -eq 0 ]; then
+	log_warning "Layout defines no windows - nothing to arrange"
+	state_set_current_layout "$workspace" "$type"
+	exit 0
+fi
+
+preexisting=''
+[ -n "${FOUNDATION_RUN_DIR:-}" ] && [ -r "$FOUNDATION_RUN_DIR/pre-windows" ] && preexisting=$(tr '\n' ' ' <"$FOUNDATION_RUN_DIR/pre-windows")
+
+# Get-WorkspaceLayoutTimings: the phase record Open-Workspace puts into the benchmark row.
+# WAIT-MS ARRANGE-MS FOUND EXPECTED OUTCOME ATTEMPTS, written only during a workspace open.
+# ATTEMPTS is the Attempts of Windows: the most arrange passes one desktop needed (1 when every
+# desktop verified at once, so ATTEMPTS - 1 are the retries).
+attempts=1
+timings() { # WAIT-MS ARRANGE-MS FOUND OUTCOME
+	[ -n "${FOUNDATION_RUN_DIR:-}" ] && printf '%s %s %s %s %s %s\n' "$1" "$2" "$3" "${#entry_app[@]}" "$4" "$attempts" >"$FOUNDATION_RUN_DIR/layout-timings"
+	return 0
+}
+wait_start=$(foundation_now_ms)
+# layout-early-move (workspaces.conf): each window goes to its desktop as soon as it is claimed.
+# shellcheck disable=SC2034 # read by layout_wait (lib/layout.sh), which inherits the array
+layout_early_desktop=()
+early=off
+ws_conf=$(conf_path workspaces.conf) && early=$(conf_value "$ws_conf" layout-early-move 2>/dev/null) || early=off
+# shellcheck disable=SC2034 # read by layout_wait
+[ "$early" = on ] && layout_early_desktop=("${entry_desktop[@]}")
+[ -n "${FOUNDATION_RUN_DIR:-}" ] && printf '%s\n' "$early" >"$FOUNDATION_RUN_DIR/layout-early-move"
+# Browser first-tab normalization (Set-WorkspaceWindowLayout on Windows): a browser entry whose
+# title matches no live window usually means its window shows another tab than the group's first,
+# whose title the layout matches. Every unprotected browser window that matches no titled browser
+# entry is switched to its first tab before the wait (pre-existing ones only outside an alongside
+# open), and the focus is put back.
+browser_tokens=$(app_role_members Browser)
+is_browser() { printf '%s\n' "$browser_tokens" | grep -qixF -- "$1"; }
+live=$(as_windows)
+unmatched=0
+for i in "${!entry_app[@]}"; do
+	[ -n "${entry_title[i]}" ] || continue
+	matched=0
+	while IFS=$'\t' read -r id token _ _ _ _ title; do
+		[ -n "$id" ] && is_browser "$token" && app_matches "${entry_app[i]}" "$token" && foundation_match_title "${entry_title[i]}" "$title" && matched=1 && break
+	done <<<"$live"
+	if [ "$matched" -eq 0 ]; then
+		while IFS=$'\t' read -r id token _ _ _ _ _; do
+			[ -n "$id" ] && is_browser "$token" && app_matches "${entry_app[i]}" "$token" && unmatched=1
+		done <<<"$live"
+	fi
+done
+if [ "$unmatched" -eq 1 ]; then
+	focused=$(as_focused_window) || focused=''
+	switched=0
+	while IFS=$'\t' read -r id token _ _ _ _ title; do
+		[ -n "$id" ] && is_browser "$token" || continue
+		case ${layout_protected:- } in *" $id "*) continue ;; esac
+		if [ "$alongside" -eq 1 ]; then
+			case " $preexisting " in *" $id "*) continue ;; esac
+		fi
+		# A window already showing what a titled browser entry wants stays as it is.
+		wanted=0
+		for i in "${!entry_app[@]}"; do
+			[ -n "${entry_title[i]}" ] && app_matches "${entry_app[i]}" "$token" && foundation_match_title "${entry_title[i]}" "$title" && wanted=1 && break
+		done
+		[ "$wanted" -eq 0 ] || continue
+		as_select_first_tab "$id" && switched=$((switched + 1))
+	done <<<"$live"
+	[ -z "$focused" ] || as_focus_window "$focused"
+	log_debug "[Set-WorkspaceWindowLayout] switched $switched browser window(s) to their first tab"
+fi
+
+# Remembered-window pins (Get-CurrentLayout): the window each entry held after the last Applied
+# open of this layout reclaims its entry when it is still there, and an entry without one prefers a
+# window already on its desktop, so identical windows keep their zones across reruns.
+# shellcheck disable=SC2034 # read by layout_wait
+{
+	layout_pins=()
+	layout_entry_desktop=("${entry_desktop[@]}")
+}
+# shellcheck disable=SC2034 # read by layout_wait
+while IFS=$'\t' read -r index id; do
+	[ -n "$id" ] && layout_pins[index]=$id
+done < <(state_layout_pins "$workspace" "$type")
+# One spinner over the wait and the arrangement, like Applying layout on Windows. While it draws,
+# what the two phases print is held back and shown once it has stopped: a line written under a
+# redrawn spinner line would be torn by the next frame.
+spinner_start "Applying layout"
+held=''
+verify_file=''
+# The scratch files go on every way out, a timeout or an interrupt too.
+trap 'rm -f ${held:+"$held"} ${verify_file:+"$verify_file"}' EXIT
+[ -n "$SPINNER_PID" ] && held=$(mktemp "${TMPDIR:-/tmp}/foundation-layout.XXXXXX")
+show_held() {
+	[ -n "$held" ] || return 0
+	cat "$held"
+	rm -f "$held"
+	held=''
+}
+if [ -n "$held" ]; then
+	claims=$(LOG_FORCE_COLOR=1 layout_wait "$timeout" "$preexisting" "${entry_app[@]}" -- "${entry_title[@]}" 2>>"$held")
+else
+	claims=$(layout_wait "$timeout" "$preexisting" "${entry_app[@]}" -- "${entry_title[@]}")
+fi
+wait_ms=$(($(foundation_now_ms) - wait_start))
+if [ -z "$claims" ]; then
+	spinner_stop --discard
+	show_held
+	timings "$wait_ms" 0 0 NotFound
+	log_error "None of the layout windows appeared - nothing to arrange"
+	exit 1
+fi
+arrange_start=$(foundation_now_ms)
+# Entry order within each desktop and zone decides the stacking, so a catch-all's extra windows
+# follow its own window, not the later entries.
+claims=$(printf '%s\n' "$claims" | sort -s -t$'\t' -k1,1n)
+verify_file=$(mktemp "${TMPDIR:-/tmp}/foundation-verify.XXXXXX") || foundation_die "Cannot create a scratch file"
+
+# Group claims per desktop as "ID:COLUMN:PERCENT".
+desktops=$(printf '%s\n' "${entry_desktop[@]}" | sort -n -u)
+arrange_desktops() {
+	for desktop in $desktops; do
+		zoneset=${desktop_sets[desktop]:-}
+		if [ -z "$zoneset" ]; then
+			log_warning "Desktop $desktop has no layout line - skipping its windows"
+			ok=1
+			continue
+		fi
+		if ! zone_set_known "$zoneset"; then
+			log_warning "Desktop $desktop uses zone set [$zoneset], which zones.conf does not define - skipping it"
+			ok=1
+			continue
+		fi
+		specs=()
+		while IFS=$'\t' read -r index id; do
+			[ "${entry_desktop[index]}" = "$desktop" ] || continue
+			if ! column=$(zone_column "$zoneset" "${entry_zone[index]}"); then
+				log_warning "Zone [${entry_zone[index]}] of [${entry_app[index]}] is not part of zone set [$zoneset]"
+				ok=1
+				continue
+			fi
+			read -r zone_col zone_pct zone_row <<<"$column"
+			specs+=("$id:$zone_col:$zone_pct:${zone_row:-0}")
+			[ -n "${FOUNDATION_RUN_DIR:-}" ] && printf '%s\n' "$id" >>"$FOUNDATION_RUN_DIR/placed"
+		done <<<"$claims"
+		[ ${#specs[@]} -gt 0 ] || continue
+		log_debug "[Set-WorkspaceWindowLayout] desktop $desktop => zone set [$zoneset], ${#specs[@]} window(s)"
+		# Confirm-WorkspaceWindowPositions: read the windows back (one more read after a short
+		# settle) and arrange the desktop again, up to two more times, while one is misplaced.
+		for ((attempt = 1; ; attempt++)); do
+			arranged=0
+			layout_arrange_desktop "$desktop" "$area_width" "${specs[@]}" || arranged=1
+			verify_desktop >"$verify_file" && verified=1 || verified=0
+			failures=$(cat "$verify_file")
+			[ "$verified" -eq 1 ] && [ "$arranged" -eq 0 ] && break
+			[ "$attempt" -ge 3 ] && break
+			log_debug "[Set-WorkspaceWindowLayout] desktop $desktop not as laid out (attempt $attempt) - arranging it again"
+		done
+		[ "$attempt" -le "$attempts" ] || attempts=$attempt
+		if [ -n "$failures" ]; then
+			log_warning "Layout verification failed on desktop $desktop - $(printf '%s\n' "$failures" | grep -c .)/${#specs[@]} window(s) misplaced:"
+			while IFS=$'\t' read -r id expected actual; do
+				log_step "   [$(as_windows | awk -F'\t' -v id="$id" '$1 == id { print $7; exit }')] (window $id)"
+				log_success "   Expected => $expected"
+				log_warning "   Actual   => $actual"
+			done <<<"$failures"
+			ok=1
+		elif [ "$arranged" -ne 0 ]; then
+			log_warning "Desktop $desktop was only partially arranged"
+			ok=1
+		else
+			log_debug "[Set-WorkspaceWindowLayout] desktop $desktop arranged and verified"
+		fi
+	done
+}
+verify_desktop() {
+	# Only the second read reports, so a misplaced window is listed once.
+	layout_verify_desktop "$desktop" "$area_x" "$area_y" "$area_width" "$area_height" "$gap_h" "$gap_v" "${specs[@]}" >/dev/null && return 0
+	sleep "${FOUNDATION_VERIFY_SETTLE_SECONDS:-0.3}"
+	layout_verify_desktop "$desktop" "$area_x" "$area_y" "$area_width" "$area_height" "$gap_h" "$gap_v" "${specs[@]}"
+}
+if [ -n "$held" ]; then LOG_FORCE_COLOR=1 arrange_desktops >>"$held" 2>&1; else arrange_desktops; fi
+
+rm -f "$verify_file"
+state_set_current_layout "$workspace" "$type"
+found=$(printf '%s\n' "$claims" | cut -f1 | sort -u | grep -c .)
+outcome=Applied
+[ "$found" -lt "${#entry_app[@]}" ] && outcome=Partial
+[ "$ok" -eq 0 ] || outcome=Partial
+# Save-CurrentLayout: only an Applied open's windows become the pins of the next one.
+[ "$outcome" = Applied ] && printf '%s\n' "$claims" | state_save_layout_pins "$workspace" "$type"
+timings "$wait_ms" $(($(foundation_now_ms) - arrange_start)) "$found" "$outcome"
+if [ "$ok" -eq 0 ]; then spinner_stop; else spinner_stop --discard; fi
+show_held
+if [ "$ok" -eq 0 ]; then
+	log_success "Workspace layout applied successfully!"
+	# The drawing of what was applied, as Windows prints Visualize-Layouts -LayoutPath.
+	if [ -n "$path" ]; then
+		foundation_run Visualize-Layouts --layout-path "$file" --layout-type "$type" || true
+	else
+		foundation_run Visualize-Layouts "$workspace" --layout-type "$type" || true
+	fi
+fi
+exit $ok

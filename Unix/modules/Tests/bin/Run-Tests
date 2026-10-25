@@ -1,0 +1,769 @@
+#!/usr/bin/env bash
+# Run-Tests - runs the Unix test suites (bats) in parallel workers, plus the lint, like the CI workflow.
+#
+# Usage: Run-Tests [PATTERN...] [--path DIR] [--quick] [--changed] [--since REF] [--audit-since REF]
+#                  [--lint] [--no-lint] [--filter REGEX] [--workers N] [--detailed]
+#                  [--build-impact-map] [--update-contract-baseline] [--lint-files]
+#
+# The lint stage is shellcheck -S warning plus shfmt (formatting), both over the files CI checks;
+# it runs alongside the suites instead of before them. Their other settings live in
+# Unix/.shellcheckrc (follow sourced files) and Unix/.editorconfig (tabs, case branches indented:
+# shfmt -ci), which the editor extensions read too. --lint-files prints the shellcheck file list
+# (the libraries, functions.sh files, the shell rc files and every bash or sh command), one path
+# per line, and runs nothing; the CI workflow lints exactly that list. It combines with nothing.
+#
+# PATTERN picks the suites of Unix/tests and Unix/tests/modules whose path contains it (case-insensitive:
+# Run-Tests layout => layout.bats); several patterns run the union. Without a pattern every
+# suite runs and the lint covers the same files as .github/workflows/unix.yml; with one the
+# lint runs only with --lint, and --no-lint always skips it. --filter REGEX runs only the tests
+# whose name matches (bats --filter). --path DIR (the -Path of Windows) narrows every selection
+# to the suites below DIR, a folder of Unix/tests (Run-Tests --path Unix/tests/modules/Git). A
+# flag it does not know is an error, never a pattern.
+# Windows-style names: --test-name (-TestName) is accepted and ignored: the names after it are
+# patterns.
+#
+# Faster runs that never replace the full one (the gate, and what CI runs):
+#   --quick         leaves out the integration tier: suites tagged `# bats file_tags=integration`
+#                   (real git, real processes, real waits).
+#   --changed       runs only the suites the changes since the merge base with master (plus the
+#                   uncommitted and untracked files) can affect, and the lint when a shell file
+#                   changed. Conservative: whatever references a changed command, library, helper
+#                   or file is affected, transitively; when that cannot be told (a file under Unix/
+#                   nothing references), everything runs. With PATTERNs it runs the union. The
+#                   selection is printed before the run (the first 40 suites, each with its reason),
+#                   and with --quick a suite whose own file, command or library changed still runs.
+#                   --since REF picks another base (implies --changed).
+#   --audit-since REF  runs the full suite, then reports every failing suite --changed since REF
+#                   would have left out (CI: a warning annotation). Not a pass/fail criterion.
+#   --build-impact-map  records, for every suite that runs, each Foundation command it started
+#                   and each library it loaded (Unix/tests/Results/impact-map.tsv, merged per
+#                   suite); --changed then also picks the suites the map saw use a changed
+#                   command or library, a dependency no name in the code shows (the
+#                   -BuildImpactMap of Windows). Build it with a full run now and then.
+#
+# Release step, runs no tests and combines with nothing: --update-contract-baseline rewrites
+# Unix/tests/contract-baseline.tsv from the working tree (the commands, their documented flags, the
+# line kinds of the shipped base Unix/config files and the Bootstrap steps), stamped with the newest
+# release of Foundation's CHANGELOG.md (FOUNDATION_CHANGELOG, or the repository root's outside
+# Dotfiles) and keeping the deprecation records that still apply. tests/contract.bats then fails
+# every removal without a shipped deprecation (-UpdateContractBaseline of Windows). The first
+# baseline is written at 1.0.0: no rules apply in 0.x, as in WinuX before its 1.0.0.
+#
+# The suites need bats at least the version in Unix/tests/required-bats-version (the
+# RequiredPesterVersion.txt of Windows): an older one stops the run, a newer major warns.
+# After --quick or --changed, a reminder follows when this exact working tree has no green full
+# run yet (Unix/tests/Results/last-green).
+#
+# --workers N sets the number of parallel bats processes. Without it the count is learned per
+# machine and power source from earlier full runs (Unix/tests/Results/worker-history.tsv: the
+# best median wall clock, exploring the neighbours of the best first; a run is not recorded when
+# processes outside it used more than 15% of the machine, sampled every 2 s while it ran); without history it is
+# the CPU count, at most 12. A scoped run uses the best count, capped so no worker gets less than
+# about 2s of work. Each worker takes the next suite off a shared queue, the slowest suites of
+# the previous run first.
+#
+# Like the Windows Run-Tests, the terminal shows a spinner with a live test counter, then one
+# verdict line and the run log, Unix/tests/Results/TestRun_<timestamp>_<pid>.log (gitignored).
+# Each run first prunes that folder: the ten newest run logs stay, an older one goes once it is a
+# day old, and so does a scratch folder a killed run left behind (Invoke-LogMaintenance repeats it).
+# The log opens with the run conditions (machine, power, load, workers and why, the selection)
+# and the slowest tests, then holds every suite's full TAP output with per-test times; --detailed
+# also prints it. Outside a terminal (CI, a pipe) the spinner is replaced by one plain progress line.
+# Exit status 1 when a test or the lint failed, 2 when a suite did not run cleanly.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load testrun
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+patterns=()
+lint=auto
+filter=''
+detailed=0
+workers=0
+quick=0
+changed=0
+since=master
+audit_since=''
+suite_root=''
+impact=0
+update_baseline=0
+lint_files=0
+while [ $# -gt 0 ]; do
+	case $1 in
+		--lint) lint=on ;;
+		--no-lint) lint=off ;;
+		--filter)
+			filter=$2
+			shift
+			;;
+		--workers)
+			workers=$2
+			shift
+			;;
+		--quick) quick=1 ;;
+		--changed) changed=1 ;;
+		--since)
+			[ -n "${2:-}" ] || foundation_die "--since takes a git revision"
+			since=$2
+			changed=1
+			shift
+			;;
+		--audit-since)
+			[ -n "${2:-}" ] || foundation_die "--audit-since takes a git revision"
+			audit_since=$2
+			shift
+			;;
+		--path)
+			[ -n "${2:-}" ] || foundation_die "--path takes a folder of Unix/tests"
+			suite_root=$(cd "$2" 2>/dev/null && pwd -P) || foundation_die "No folder [$2]"
+			shift
+			;;
+		--detailed) detailed=1 ;;
+		--build-impact-map) impact=1 ;;
+		--update-contract-baseline) update_baseline=1 ;;
+		--lint-files) lint_files=1 ;;
+		--test-name | -v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1 (a pattern never starts with -)" ;;
+		*) foundation_split_list patterns "$1" ;;
+	esac
+	shift
+done
+case $workers in '' | *[!0-9]*) foundation_die "--workers takes a number, not [$workers]" ;; esac
+# --lint-files: the shellcheck file list for CI; nothing runs and nothing is written.
+if [ "$lint_files" -eq 1 ]; then
+	{ [ ${#patterns[@]} -gt 0 ] || [ -n "$suite_root" ] || [ "$changed" -eq 1 ] || [ "$quick" -eq 1 ] || [ -n "$filter" ] ||
+		[ -n "$audit_since" ] || [ "$impact" -eq 1 ] || [ "$lint" != auto ] || [ "$workers" -ne 0 ] || [ "$update_baseline" -eq 1 ] ||
+		[ "$detailed" -eq 1 ]; } &&
+		foundation_die "--lint-files only prints the lint's file list; it cannot be combined with any other flag"
+	cd "$DOTFILES_ROOT" || exit 1
+	testrun_lint_files
+	exit 0
+fi
+[ -n "$audit_since" ] && { [ ${#patterns[@]} -gt 0 ] || [ -n "$suite_root" ] || [ "$changed" -eq 1 ] || [ "$quick" -eq 1 ] || [ -n "$filter" ]; } &&
+	foundation_die "--audit-since audits a full run; it cannot be combined with a pattern, --changed, --quick or --filter"
+
+tests=$FOUNDATION_UNIX/tests
+results=${FOUNDATION_TEST_RESULTS:-$tests/Results}
+mkdir -p "$results" || foundation_die "Cannot create $results"
+# Results retention (testrun_prune_results): the ten newest run logs, then a day's grace.
+testrun_prune_results "$results" "${TMPDIR:-/tmp}" >/dev/null
+log=$results/TestRun_$(date +%Y%m%d_%H%M%S)_$$.log
+timings=$results/suite-timings.tsv
+history=$results/worker-history.tsv
+last_green=$results/last-green
+last_selection=$results/last-selection
+impact_map=$results/impact-map.tsv
+work=$(mktemp -d "${TMPDIR:-/tmp}/foundation-tests.XXXXXX") || foundation_die "Cannot create a scratch folder"
+# Every way out removes it, the early ones too (nothing to run, no suite matches). The workers are
+# subshells, which do not inherit the trap.
+trap 'rm -rf "$work"' EXIT
+interactive=0
+[ -t 1 ] && [ -z "${CI:-}" ] && interactive=1
+
+cd "$DOTFILES_ROOT" || exit 1
+
+# --update-contract-baseline: the release step; nothing else runs.
+if [ "$update_baseline" -eq 1 ]; then
+	{ [ ${#patterns[@]} -gt 0 ] || [ -n "$suite_root" ] || [ "$changed" -eq 1 ] || [ "$quick" -eq 1 ] || [ -n "$filter" ] ||
+		[ -n "$audit_since" ] || [ "$impact" -eq 1 ] || [ "$lint" != auto ] || [ "$workers" -ne 0 ]; } &&
+		foundation_die "--update-contract-baseline runs no tests; it cannot be combined with any other flag"
+	changelog=$(testrun_changelog_path "$DOTFILES_ROOT") ||
+		foundation_die "No Foundation CHANGELOG.md to stamp the baseline with (in Dotfiles the root one is WinuX's: set FOUNDATION_CHANGELOG)"
+	release=$(testrun_changelog_releases "$changelog" | head -1 | cut -f1)
+	[ -n "$release" ] || foundation_die "${changelog#"$DOTFILES_ROOT"/} has no released version to stamp the baseline with"
+	baseline=$tests/contract-baseline.tsv
+	testrun_contract_snapshot >"$work/snapshot" || foundation_die "Cannot take the contract snapshot"
+	testrun_contract_baseline "$work/snapshot" "$release" "$baseline" >"$work/baseline" &&
+		mv "$work/baseline" "$baseline" || foundation_die "Cannot write ${baseline#"$DOTFILES_ROOT"/}"
+	log_success "Contract baseline for [$release] => ${baseline#"$DOTFILES_ROOT"/} ($(grep -c . "$work/snapshot") items, $(grep -c '^deprecated' "$baseline") deprecation(s) kept)"
+	exit 0
+fi
+
+all_suites=()
+while IFS= read -r suite; do all_suites+=("$suite"); done < <(find "$tests" -name '*.bats' -type f -not -path "$tests/Results/*" | LC_ALL=C sort)
+if [ -n "$suite_root" ]; then
+	real_tests=$(cd "$tests" && pwd -P)
+	case $suite_root/ in "$real_tests"/*) ;; *) foundation_die "--path [$suite_root] is not a folder of Unix/tests" ;; esac
+	below=()
+	for suite in "${all_suites[@]}"; do
+		case $(cd "$(dirname "$suite")" && pwd -P)/ in "$suite_root"/*) below+=("$suite") ;; esac
+	done
+	[ ${#below[@]} -gt 0 ] || foundation_die "No test suite below [$suite_root]"
+	all_suites=("${below[@]}")
+fi
+
+# The suites --changed would run for the changes since REF, as repository-relative paths in
+# FILE (or `*` for everything); the reasons go to FILE.reasons. Returns 1 when REF does not
+# resolve, 2 when nothing changed.
+select_changed() {
+	testrun_changed_paths "$1" >"$work/changes" || return 1
+	[ -s "$work/changes" ] || return 2
+	[ -d "$work/corpus" ] || testrun_corpus "$work/corpus"
+	testrun_select "$work/corpus" "$work/changes" "$impact_map" | testrun_selection_unique >"$2.reasons"
+	cut -f1 "$2.reasons" >"$2"
+}
+
+suites=()
+mode='full run'
+changed_all=0
+excluded=0
+# The suites PATTERNs pick: the library suites in tests/ and the per-command files in
+# tests/modules/<Module>/, matched by their path below tests/ (Run-Tests Open-Obsidian, Run-Tests
+# Application).
+matched=()
+if [ ${#patterns[@]} -gt 0 ]; then
+	while IFS= read -r suite; do matched+=("$suite"); done < <(printf '%s\n' "${all_suites[@]}" | testrun_match_patterns "${patterns[@]}")
+	[ ${#matched[@]} -gt 0 ] || [ "$lint" = on ] || foundation_die "No test suite matches [${patterns[*]}] in Unix/tests"
+fi
+if [ "$changed" -eq 1 ]; then
+	select_changed "$since" "$work/selection"
+	case $? in
+		1) foundation_die "Cannot find the merge base of [$since] and HEAD" ;;
+		2)
+			# With patterns the union is just them (-Changed with -TestName on Windows).
+			if [ ${#patterns[@]} -eq 0 ]; then
+				log_success "Nothing changed since [$since] - nothing to run."
+				exit 0
+			fi
+			: >"$work/changes"
+			: >"$work/selection"
+			: >"$work/selection.reasons"
+			;;
+	esac
+	if grep -qxF '*' "$work/selection"; then
+		changed_all=1
+		suites=("${all_suites[@]}")
+		mode="changed since $since: everything ($(cut -f2 "$work/selection.reasons" | head -1))"
+	else
+		picked=0
+		for suite in "${all_suites[@]}"; do
+			if grep -qxF "${suite#"$DOTFILES_ROOT"/}" "$work/selection"; then
+				suites+=("$suite")
+				picked=$((picked + 1))
+			else
+				for match in ${matched[@]+"${matched[@]}"}; do
+					[ "$match" = "$suite" ] && suites+=("$suite") && break
+				done
+			fi
+		done
+		mode="changed since $since: $picked of ${#all_suites[@]} suites"
+		[ ${#patterns[@]} -gt 0 ] && mode="$mode, union with pattern: ${patterns[*]}"
+	fi
+	if [ "$lint" = auto ]; then
+		if [ "$changed_all" -eq 1 ] || testrun_needs_lint "$work/changes"; then lint=on; else lint=off; fi
+	fi
+elif [ ${#patterns[@]} -gt 0 ]; then
+	suites=(${matched[@]+"${matched[@]}"})
+	mode="pattern: ${patterns[*]}"
+else
+	suites=("${all_suites[@]}")
+fi
+[ "$lint" = auto ] && { if [ ${#patterns[@]} -eq 0 ] && [ -z "$suite_root" ]; then lint=on; else lint=off; fi; }
+
+if [ "$quick" -eq 1 ]; then
+	kept=()
+	own=0
+	for suite in ${suites[@]+"${suites[@]}"}; do
+		if ! testrun_is_integration "$suite"; then
+			kept+=("$suite")
+		elif [ "$changed" -eq 1 ] && testrun_own_subject "${suite#"$DOTFILES_ROOT"/}" "$work/changes"; then
+			# Its own subject changed: --quick does not leave out what the change is about.
+			kept+=("$suite")
+			own=$((own + 1))
+		else
+			excluded=$((excluded + 1))
+		fi
+	done
+	suites=(${kept[@]+"${kept[@]}"})
+	mode="$mode, quick: $excluded integration suite(s) left out"
+	[ "$own" -gt 0 ] && mode="$mode, $own kept because their own subject changed"
+fi
+[ -n "$filter" ] && mode="$mode, filter: $filter"
+[ -n "$suite_root" ] && mode="$mode, path: ${suite_root#"$(cd "$DOTFILES_ROOT" && pwd -P)"/}"
+
+if [ ${#suites[@]} -eq 0 ] && [ "$lint" = off ]; then
+	if [ "$changed" -eq 1 ] && [ "$excluded" -eq 0 ]; then
+		log_success "No suite is affected by the changes since [$since] and no shell file changed - nothing to run."
+	else
+		log_success "Every selected suite is in the integration tier ($excluded left out by --quick) - nothing to run."
+	fi
+	exit 0
+fi
+if [ ${#suites[@]} -gt 0 ]; then
+	command -v bats >/dev/null 2>&1 || foundation_die "bats is not installed (brew install bats-core)"
+	required_bats=$(tr -d '[:space:]' <"$tests/required-bats-version" 2>/dev/null)
+	bats_version=$(testrun_bats_version)
+	case $(testrun_bats_verdict "$bats_version" "$required_bats") in
+		old) foundation_die "bats $bats_version is older than $required_bats, the version the suites are verified with (Unix/tests/required-bats-version) - brew upgrade bats-core" ;;
+		newer-major) log_warning "bats $bats_version is a newer major than $required_bats, the version the suites are verified with - a failure may be the new bats (Unix/tests/required-bats-version)" ;;
+		unknown) log_warning "Cannot read the bats version (bats --version) - the suites need at least $required_bats" ;;
+	esac
+fi
+
+# A run is scoped when it is not the whole suite; only a full run counts for the gate stamp
+# and the worker history.
+scoped=0
+{ [ ${#patterns[@]} -gt 0 ] || [ -n "$suite_root" ] || [ -n "$filter" ] || [ "$quick" -eq 1 ] || { [ "$changed" -eq 1 ] && [ "$changed_all" -eq 0 ]; }; } && scoped=1
+
+# --audit-since: what --changed would have picked, worked out before the run.
+if [ -n "$audit_since" ]; then
+	select_changed "$audit_since" "$work/audit"
+	case $? in
+		1)
+			log_warning "--audit-since: cannot find the merge base of [$audit_since] and HEAD - no audit"
+			audit_since=''
+			;;
+		2) printf '' >"$work/audit" ;;
+	esac
+fi
+
+fingerprint=$(testrun_fingerprint)
+cpus=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
+machine=$(testrun_machine)
+load_start=$(testrun_load)
+conditions_start=$(testrun_conditions)
+
+# The lint stage, in the background: one line per verdict in $work/lint.result
+# ("ok|fail|warn MESSAGE"), the tool output in $work/lint.log.
+run_lint() {
+	local files formatted unformatted f
+	if command -v shellcheck >/dev/null 2>&1; then
+		# The engine modules and the Custom area (Unix/modules/Custom/<Module>), which may be empty;
+		# Unix/.shellcheckrc makes shellcheck follow sourced files (-x).
+		files=()
+		while IFS= read -r f; do files+=("$f"); done < <(testrun_lint_files)
+		printf '== shellcheck (%d files)\n' "${#files[@]}" >>"$work/lint.log"
+		if shellcheck -S warning "${files[@]}" >"$work/shellcheck.log" 2>&1; then
+			echo "ok shellcheck: ${#files[@]} files clean" >>"$work/lint.result"
+		else
+			echo "fail shellcheck: $(grep -c '^In ' "$work/shellcheck.log") finding(s)" >>"$work/lint.result"
+		fi
+		cat "$work/shellcheck.log" >>"$work/lint.log"
+	else
+		echo "warn shellcheck is not installed (brew install shellcheck) - lint skipped" >>"$work/lint.result"
+	fi
+	# Formatting: shfmt over every script it recognises under Unix/, in the style of
+	# Unix/.editorconfig (tabs, case branches indented: -ci), which shfmt reads only when no
+	# formatting flag is given. A difference fails like a lint finding; shfmt -w fixes it.
+	if command -v shfmt >/dev/null 2>&1; then
+		formatted=()
+		while IFS= read -r f; do formatted+=("$f"); done < <(shfmt -f Unix | grep -v '^Unix/tests/Results/')
+		printf '== shfmt (%d files)\n' "${#formatted[@]}" >>"$work/lint.log"
+		unformatted=$(shfmt -l "${formatted[@]}" 2>>"$work/lint.log")
+		if [ -z "$unformatted" ]; then
+			echo "ok shfmt: ${#formatted[@]} files formatted" >>"$work/lint.result"
+		else
+			printf '%s\n' "$unformatted" >>"$work/lint.log"
+			echo "fail shfmt: $(printf '%s\n' "$unformatted" | grep -c .) file(s) not formatted - shfmt -w <file>" >>"$work/lint.result"
+		fi
+	else
+		echo "warn shfmt is not installed (brew install shfmt) - format check skipped" >>"$work/lint.result"
+	fi
+}
+
+# Takes the next queue index under a mkdir lock; fails when the queue is empty.
+claim_suite() {
+	local next
+	until mkdir "$work/lock" 2>/dev/null; do sleep 0.01; done
+	next=$(cat "$work/next")
+	echo $((next + 1)) >"$work/next"
+	rmdir "$work/lock"
+	[ "$next" -lt "$queue_size" ] || return 1
+	printf '%s' "$next"
+}
+
+# One worker: runs queued suites until the queue is empty. Each suite's TAP goes to
+# $work/out.<index>, its "INDEX STATUS MILLISECONDS" to $work/status.<index>.
+run_worker() {
+	local index suite started status
+	while index=$(claim_suite); do
+		suite=${queue[index]}
+		started=$(foundation_now_ms)
+		FOUNDATION_IMPACT_SUITE=$suite bats --tap "${bats_args[@]}" "$suite" >"$work/out.$index" 2>&1 </dev/null
+		status=$?
+		echo "$index $status $(($(foundation_now_ms) - started))" >"$work/status.$index"
+	done
+}
+
+# The status line never wraps: a wrapped line leaves a stray row behind, because the carriage
+# return only clears the last physical row. In a narrow terminal (a tiled half of the screen) the
+# HEAD goes first, so the counters and the timer at the end of the line stay visible.
+# Usage: render_status FRAME HEAD TAIL
+render_status() {
+	[ "$interactive" -eq 1 ] || return 0
+	local width text="$1 $2  |  $3" size
+	# Read from the terminal itself: inside $(...) stdout is a pipe, and tput cols falls back to 80.
+	size=$(stty size </dev/tty 2>/dev/null) || size=''
+	size=${size#* }
+	case $size in '' | *[!0-9]*) size=100 ;; esac
+	width=$((size - 3))
+	[ "$width" -ge 20 ] || width=97
+	[ "${#text}" -le "$width" ] || text="$1 $3"
+	printf '\r\033[36m%-*.*s\033[0m' "$width" "$width" "$text"
+}
+
+# Blanks the status line and steps back onto the blank line above it: every log_* line opens
+# with a newline of its own, so the next one keeps a single blank line under the title.
+clear_status() {
+	[ "$interactive" -eq 1 ] || return 0
+	printf '\r\033[K\033[1A'
+}
+
+# Stops PID and everything below it.
+kill_tree() {
+	local child
+	for child in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$child"; done
+	kill -TERM "$1" 2>/dev/null
+}
+
+# Ctrl+C: stop every worker's tree so no orphan bats keeps running.
+abort_run() {
+	local pid
+	clear_status
+	[ "$interactive" -eq 1 ] && tput cnorm 2>/dev/null
+	for pid in "${worker_pids[@]}" "${lint_pid:-}" "${sampler_pid:-}"; do
+		[ -n "$pid" ] && kill_tree "$pid"
+	done
+	rm -rf "$work"
+	log_error "Run-Tests aborted"
+	exit 130
+}
+
+# A dim line under the verdict.
+note_line() {
+	if log_use_color 1; then
+		printf '\033[90m  %s\033[0m\n' "$1"
+	else
+		printf '  %s\n' "$1"
+	fi
+}
+
+seconds() {
+	printf '%d.%ds' $(($1 / 1000)) $(($1 % 1000 / 100))
+}
+
+log_title "Run-Tests"
+# What --changed picked and why, before the run (Invoke-TestSuite prints it too); the whole list
+# is in the run log.
+if [ "$changed" -eq 1 ] && [ -s "$work/selection.reasons" ]; then
+	note_line "Selected by --changed since $since:"
+	testrun_selection_preview "$work/selection.reasons" 40 | while IFS= read -r line; do note_line "  $line"; done
+	[ ${#patterns[@]} -gt 0 ] && note_line "  and the suites of pattern: ${patterns[*]}"
+fi
+started_ms=$(foundation_now_ms)
+worker_pids=()
+lint_pid=''
+queue=()
+queue_size=0
+phase=''
+reason=''
+trap abort_run INT TERM
+
+if [ "$lint" = on ]; then
+	run_lint &
+	lint_pid=$!
+fi
+
+failed=0
+broken=0
+if [ ${#suites[@]} -gt 0 ]; then
+	bats_args=(--timing)
+	[ -n "$filter" ] && bats_args+=(--filter "$filter")
+
+	# The queue (testrun_queue_order): the slowest suites of the previous run first, a suite
+	# without a timing ahead of them. Paths are relative to the repository root, as CI names them
+	# in its failure lines. A suite's weight for the worker count is its time, or the median time
+	# of the known suites when it has none.
+	while IFS= read -r suite; do queue+=("$suite"); done < <(printf '%s\n' "${suites[@]#"$DOTFILES_ROOT"/}" | testrun_queue_order "$timings")
+	queue_size=${#queue[@]}
+	total_ms=$(printf '%s\n' "${queue[@]}" | awk -v f="$timings" '
+		BEGIN { while ((getline line < f) > 0) { split(line, t, "\t"); ms[t[1]] = t[2]; v[++n] = t[2] + 0 }
+			for (i = 2; i <= n; i++) { x = v[i]; for (j = i - 1; j >= 1 && v[j] > x; j--) v[j + 1] = v[j]; v[j + 1] = x }
+			median = n ? v[int((n + 1) / 2)] : 1000 }
+		{ total += ($0 in ms) ? ms[$0] : median }
+		END { printf "%d", total }')
+	echo 0 >"$work/next"
+
+	if [ "$workers" -eq 0 ]; then
+		testrun_history_runs "$history" "$machine" >"$work/runs"
+		IFS=$'\t' read -r workers _ phase reason < <(testrun_worker_choice "$work/runs" "$cpus" "$queue_size" "$total_ms" "$scoped")
+	else
+		phase=Explicit
+		reason="--workers $workers"
+		[ "$workers" -gt "$queue_size" ] && workers=$queue_size
+	fi
+	[ "${workers:-0}" -ge 1 ] || workers=1
+
+	# --build-impact-map: every command and library the suites start goes to this log.
+	if [ "$impact" -eq 1 ]; then
+		export FOUNDATION_IMPACT_LOG=$work/impact.raw
+		: >"$FOUNDATION_IMPACT_LOG"
+	fi
+	for ((w = 0; w < workers; w++)); do
+		run_worker &
+		worker_pids+=($!)
+	done
+	# The run conditions while it runs (Start-RunConditionSampler): every 2 s, the share of the
+	# machine processes outside this run use.
+	(
+		while :; do
+			testrun_foreign_cpu "$$" "$cpus" >>"$work/foreign"
+			sleep 2
+		done
+	) &
+	sampler_pid=$!
+
+	# The counter's denominator: bats counts the tests of the files about to run (with the
+	# filter applied) while the workers are already busy.
+	bats --count "${bats_args[@]}" "${queue[@]}" >"$work/expected" 2>/dev/null &
+	count_pid=$!
+
+	if [ "$interactive" -eq 1 ]; then
+		frames=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+		tput civis 2>/dev/null
+		# The blank line between the title and the status line, as Windows writes it.
+		printf '\n'
+	else
+		frames=('|')
+		printf 'Running %d test file(s) across %d worker(s)...\n' "$queue_size" "$workers"
+	fi
+	frame=0
+	expected=''
+	while :; do
+		finished=0
+		for pid in "${worker_pids[@]}"; do kill -0 "$pid" 2>/dev/null || finished=$((finished + 1)); done
+		ran=$(cat "$work"/out.* 2>/dev/null | grep -cE '^(not )?ok ')
+		[ -z "$expected" ] && ! kill -0 "$count_pid" 2>/dev/null && expected=$(tr -dc '0-9' <"$work/expected")
+		counter="$ran tests"
+		[ -n "$expected" ] && [ "$expected" -gt 0 ] && {
+			[ "$ran" -gt "$expected" ] && expected=$ran
+			counter="$ran/$expected tests"
+		}
+		elapsed=$(($(foundation_now_ms) - started_ms))
+		linting=''
+		[ -n "$lint_pid" ] && kill -0 "$lint_pid" 2>/dev/null && linting='  |  lint running'
+		render_status "${frames[frame % ${#frames[@]}]}" \
+			"$(printf 'Running %d test file(s) on %d worker(s)' "$queue_size" "$workers")" \
+			"$(printf '%s  |  %d/%d done%s  |  %d.%ds' "$counter" "$finished" "$workers" "$linting" \
+				$((elapsed / 1000)) $((elapsed % 1000 / 100)))"
+		frame=$((frame + 1))
+		[ "$finished" -eq "$workers" ] && [ -z "$linting" ] && break
+		sleep 0.1
+	done
+	clear_status
+	[ "$interactive" -eq 1 ] && tput cnorm 2>/dev/null
+fi
+
+[ -n "$lint_pid" ] && wait "$lint_pid" 2>/dev/null
+[ -n "${sampler_pid:-}" ] && kill "$sampler_pid" 2>/dev/null
+foreign=$(testrun_foreign_average "$work/foreign")
+trap - INT TERM
+wall_ms=$(($(foundation_now_ms) - started_ms))
+load_end=$(testrun_load)
+
+# --- Outcome: failures, suites that did not run cleanly, the failing suites ---
+passed=0
+failures=0
+notes=()
+: >"$work/failed-suites"
+[ -f "$work/lint.result" ] && grep -q '^fail ' "$work/lint.result" && failed=1
+if [ ${#suites[@]} -gt 0 ]; then
+	passed=$(cat "$work"/out.* 2>/dev/null | grep -c '^ok ')
+	failures=$(cat "$work"/out.* 2>/dev/null | grep -c '^not ok ')
+	[ "$failures" -gt 0 ] && failed=1
+	for ((i = 0; i < queue_size; i++)); do
+		read -r _ status _ <"$work/status.$i" 2>/dev/null || status=missing
+		[ "$status" = 0 ] && continue
+		printf '%s\n' "${queue[i]}" >>"$work/failed-suites"
+		# A suite that failed without a failing test did not run cleanly (a syntax error, a
+		# broken setup_file, a crash).
+		grep -q '^not ok ' "$work/out.$i" 2>/dev/null && continue
+		notes+=("${queue[i]} exited with status $status without a failing test - see the run log")
+		broken=1
+	done
+
+	{
+		for ((i = 0; i < queue_size; i++)); do
+			read -r _ _ ms <"$work/status.$i" 2>/dev/null && printf '%s\t%s\n' "${queue[i]}" "$ms"
+		done
+		[ -f "$timings" ] && cat "$timings"
+	} | awk -F'\t' '!seen[$1]++' >"$work/timings" && mv "$work/timings" "$timings"
+fi
+
+# --- Impact map: the commands and libraries each suite that ran used ---
+impact_note=''
+if [ "$impact" -eq 1 ] && [ ${#suites[@]} -gt 0 ]; then
+	if testrun_impact_merge "$impact_map" "$FOUNDATION_IMPACT_LOG" "${queue[@]}"; then
+		impact_note="updated for ${#queue[@]} suite(s) => ${impact_map#"$DOTFILES_ROOT"/}"
+	else
+		impact_note='not written: the map could not be merged'
+	fi
+fi
+
+# --- Worker history: only a clean full run on a quiet machine teaches the count ---
+history_note=''
+if [ ${#suites[@]} -gt 0 ]; then
+	explicit=0
+	[ "$phase" = Explicit ] && explicit=1
+	if ! why=$(testrun_recordable "$scoped" "$explicit" "$failed" "$broken" "$lint" "$load_start" "$cpus" "$foreign"); then
+		history_note="not recorded: $why"
+	elif [ -n "${CI:-}" ]; then
+		history_note='not recorded: CI'
+	else
+		printf '%s\t%s\t%d.%02d\t%s\t%s\n' "$machine" "$workers" $((wall_ms / 1000)) $((wall_ms % 1000 / 10)) \
+			"$(date +%Y-%m-%dT%H:%M:%S)" "$phase" >>"$history" &&
+			history_note="recorded ($workers workers, $(seconds "$wall_ms")) for $machine" ||
+			history_note='not recorded: the history file could not be written'
+	fi
+fi
+
+# --- The gate: a green full run stamps this working tree; --changed remembers its pick ---
+full_green=0
+[ "$scoped" -eq 0 ] && [ "$lint" = on ] && [ "$failed" -eq 0 ] && [ "$broken" -eq 0 ] && full_green=1
+[ "$full_green" -eq 1 ] && printf '%s\t%s\n' "$fingerprint" "$(date +%Y-%m-%dT%H:%M:%S)" >"$last_green"
+if [ "$changed" -eq 1 ]; then
+	{
+		echo "$fingerprint"
+		cat "$work/selection"
+	} >"$last_selection"
+fi
+
+# Misses: failing suites a selection left out. Locally, the last --changed run's pick for this
+# same working tree; with --audit-since, the pick worked out before this run.
+misses=()
+if [ "$scoped" -eq 0 ] && [ -s "$work/failed-suites" ]; then
+	if [ -n "$audit_since" ]; then
+		while IFS= read -r miss; do misses+=("$miss"); done < <(testrun_misses "$work/audit" "$work/failed-suites")
+	elif [ "$changed" -eq 0 ] && [ -r "$last_selection" ] && [ "$(head -1 "$last_selection")" = "$fingerprint" ]; then
+		tail -n +2 "$last_selection" >"$work/last-pick"
+		while IFS= read -r miss; do misses+=("$miss"); done < <(testrun_misses "$work/last-pick" "$work/failed-suites")
+	fi
+fi
+
+# --- The run log: conditions, selection, slowest tests, lint output, every suite ---
+{
+	printf '== Run-Tests %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+	printf 'Mode: %s\n' "$mode"
+	printf 'Machine: %s\n' "$(testrun_machine_line)"
+	printf 'Conditions: %s; at the end: load %s%s\n' "$conditions_start" "$load_end" "${foreign:+; foreign load during the run ${foreign}%}"
+	[ -n "$impact_note" ] && printf 'Impact map: %s\n' "$impact_note"
+	[ ${#suites[@]} -gt 0 ] && printf 'Workers: %s (%s - %s)\n' "$workers" "$phase" "$reason"
+	[ -n "$history_note" ] && printf 'Worker history: %s\n' "$history_note"
+	printf 'Wall clock: %s\n' "$(seconds "$wall_ms")"
+	if [ "$changed" -eq 1 ]; then
+		printf 'Changes since %s:\n' "$since"
+		sed 's/^/  /' "$work/changes"
+		printf 'Selection:\n'
+		awk -F'\t' '{ print "  " $1 "  <=  " $2 }' "$work/selection.reasons"
+	fi
+	if [ -n "$audit_since" ]; then
+		printf 'Audit: --changed since %s would have run %s suite(s)\n' "$audit_since" "$(grep -c . "$work/audit")"
+	fi
+	for miss in ${misses[@]+"${misses[@]}"}; do printf 'Missed by the selection: %s\n' "$miss"; done
+	if [ "$queue_size" -gt 0 ]; then
+		printf 'Slowest tests:\n'
+		for ((i = 0; i < queue_size; i++)); do
+			awk -v s="${queue[i]}" '/^(not )?ok / && / in [0-9]+ms$/ {
+				ms = $0; sub(/.* in /, "", ms); sub(/ms$/, "", ms)
+				name = $0; sub(/^(not )?ok [0-9]+ /, "", name); sub(/ in [0-9]+ms$/, "", name)
+				printf "%d\t%s\t%s\n", ms, s, name }' "$work/out.$i" 2>/dev/null
+		done | sort -t$'\t' -k1,1nr | head -10 | awk -F'\t' '{ printf "  %6.1fs  %s  %s\n", $1 / 1000, $2, $3 }'
+	fi
+	printf '\n'
+	[ -f "$work/lint.log" ] && cat "$work/lint.log"
+	for ((i = 0; i < queue_size; i++)); do
+		read -r _ status ms <"$work/status.$i" 2>/dev/null || {
+			status=missing
+			ms=0
+		}
+		printf '%s\t%s\t%s\t%s\n' "${queue[i]}" "$i" "$status" "$ms"
+	done | LC_ALL=C sort | while IFS=$'\t' read -r key i status ms; do
+		printf '== bats %s (exit %s, %d.%ds)\n' "$key" "$status" $((ms / 1000)) $((ms % 1000 / 100))
+		cat "$work/out.$i" 2>/dev/null
+	done
+} >"$log"
+
+# --- Lint verdicts ---
+if [ -f "$work/lint.result" ]; then
+	while read -r kind message; do
+		case $kind in
+			ok) log_step "$message" ;;
+			warn) log_warning "$message" ;;
+			fail) log_error "$message" ;;
+		esac
+	done <"$work/lint.result"
+fi
+
+# --- Failures: each as "x NAME", then where it failed and the first line of why ---
+# The color is decided here: inside $(...) stdout is a pipe, never the terminal. A blank line
+# separates one failure from the next.
+if [ "$failures" -gt 0 ]; then
+	color=''
+	log_use_color 1 && color=1
+	printf '\n'
+	cat "$work"/out.* | awk -v color="$color" '
+		function grey(s) { return color ? "\033[90m" s "\033[0m" : s }
+		/^not ok / {
+			if (shown >= 20) { more++; name = ""; next }
+			name = $0; sub(/^not ok [0-9]+ /, "", name); sub(/ in [0-9]+ms$/, "", name)
+			if (shown) print ""
+			printf "%s\n", color ? "\033[31m  x " name "\033[0m" : "  x " name
+			shown++; detail = 0; next
+		}
+		name != "" && /^# \(in test file / && detail == 0 {
+			where = $0; sub(/^# \(in test file /, "", where); sub(/\)$/, "", where)
+			print grey("      " where); detail = 1; next
+		}
+		name != "" && /^#   / && detail == 1 { why = $0; sub(/^#   /, "", why); print grey("      " why); detail = 2; next }
+		/^(ok |not ok )/ { name = "" }
+		END { if (more) print grey("  ... and " more " more - see the run log.") }'
+fi
+rm -rf "$work"
+
+for note in ${notes[@]+"${notes[@]}"}; do log_error "$note"; done
+for miss in ${misses[@]+"${misses[@]}"}; do
+	if [ -n "$audit_since" ]; then
+		log_warning "Run-Tests --changed since [$audit_since] would have missed the failing suite $miss"
+		[ -n "${GITHUB_ACTIONS:-}" ] && printf '::warning file=%s::Run-Tests --changed since %s would have missed this failing suite\n' "$miss" "$audit_since"
+	else
+		log_warning "The last Run-Tests --changed run on this working tree left out the failing suite $miss"
+	fi
+done
+
+[ "$detailed" -eq 1 ] && {
+	printf '\n'
+	cat "$log"
+}
+
+worker_label="$workers workers"
+[ "$workers" -eq 1 ] && worker_label="1 worker"
+if [ "$broken" -eq 1 ]; then
+	log_error "Test run did not complete cleanly - see the run log."
+elif [ "$failed" -eq 1 ] && [ "$failures" -gt 0 ]; then
+	log_error "Tests failed: $failures failed, $passed passed"
+elif [ "$failed" -eq 1 ]; then
+	log_error "Lint failed - see the run log."
+elif [ ${#suites[@]} -gt 0 ]; then
+	log_success "All tests passed! ($passed passed in $((wall_ms / 1000)).$((wall_ms % 1000 / 100))s across $worker_label)"
+else
+	log_success "Lint passed!"
+fi
+printf '\n'
+note_line "Log file location => ${log#"$DOTFILES_ROOT"/}"
+if { [ "$quick" -eq 1 ] || [ "$changed" -eq 1 ]; } && [ "$full_green" -eq 0 ]; then
+	green=''
+	[ -r "$last_green" ] && green=$(cut -f1 "$last_green")
+	[ "$green" = "$fingerprint" ] ||
+		note_line "No green full run for this working tree yet - run Run-Tests (no arguments) before committing."
+fi
+
+[ "$broken" -eq 1 ] && exit 2
+exit $failed

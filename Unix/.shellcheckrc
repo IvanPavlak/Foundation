@@ -1,0 +1,6 @@
+# shellcheck settings of the Unix half, read by CI, Run-Tests and the timonwong.shellcheck
+# extension alike (shellcheck looks in each linted file's folder and its parents).
+# Follow `.` and `source` into files not named on the command line (the -x flag).
+external-sources=true
+# The minimum severity (-S warning) cannot be set here: shellcheck takes it from the command line
+# only, so CI and Run-Tests pass it (an editor shows the info and style notes too).

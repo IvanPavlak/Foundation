@@ -1,0 +1,100 @@
+name: Bug report
+description: Report a problem with Foundation (bootstrap, a command, a workspace, etc.)
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+    - type: markdown
+      attributes:
+          value: |
+              Thanks for taking the time to file a bug report!
+
+              **Security issues:** Do **not** report security vulnerabilities here. Follow our
+              [Security Policy](https://github.com/IvanPavlak/Foundation/security/advisories/new) instead
+              (private GitHub Security Advisory).
+
+              Please search [existing issues](https://github.com/IvanPavlak/Foundation/issues) first to
+              avoid duplicates.
+    - type: checkboxes
+      id: prerequisites
+      attributes:
+          label: Prerequisites
+          options:
+              - label: I am running the latest `master` (or have updated before reporting).
+                required: true
+              - label: I searched existing issues and this is not a duplicate.
+                required: true
+              - label: This is **not** a security vulnerability (those go through a private advisory).
+                required: true
+    - type: textarea
+      id: description
+      attributes:
+          label: Describe the bug
+          description: A clear and concise description of what went wrong.
+          placeholder: When I run ..., Foundation does ... instead of ...
+      validations:
+          required: true
+    - type: textarea
+      id: reproduction
+      attributes:
+          label: Steps to reproduce
+          description: Exact commands and configuration. Redact tokens and personal paths.
+          placeholder: |
+              1. Run `Open-Workspace MyWorkspace`
+              2. Observe ...
+          render: shell
+      validations:
+          required: true
+    - type: textarea
+      id: expected
+      attributes:
+          label: Expected behavior
+          description: What did you expect to happen?
+      validations:
+          required: true
+    - type: textarea
+      id: actual
+      attributes:
+          label: Actual behavior / error output
+          description: Paste the full error or the relevant lines of the session log (`Unix/logs`). Redact secrets.
+          render: shell
+      validations:
+          required: true
+    - type: input
+      id: command
+      attributes:
+          label: Affected command / module
+          description: Which command or module is involved, if known?
+          placeholder: e.g. Set-WorkspaceWindowLayout (Window module)
+    - type: input
+      id: os-version
+      attributes:
+          label: macOS version
+          description: Output of `sw_vers -productVersion`, and Apple silicon or Intel.
+          placeholder: e.g. 26.1, Apple silicon
+      validations:
+          required: true
+    - type: input
+      id: tool-versions
+      attributes:
+          label: Tool versions
+          description: Output of `bash --version | head -1`, `aerospace --version` and `wezterm --version`, as relevant.
+          placeholder: e.g. bash 5.3.3, AeroSpace 0.19, WezTerm 20240203
+    - type: input
+      id: foundation-version
+      attributes:
+          label: Foundation commit / ref
+          description: Output of `git -C <repo> rev-parse --short HEAD`, or the tag you cloned.
+          placeholder: e.g. a1b2c3d (master)
+      validations:
+          required: true
+    - type: textarea
+      id: config
+      attributes:
+          label: Relevant config lines
+          description: The minimal `Unix/config` lines (base or `.local.conf`) that trigger the bug. **Redact any real paths, hostnames, tokens or personal data.**
+          render: shell
+    - type: textarea
+      id: additional
+      attributes:
+          label: Additional context
+          description: Anything else that might help - screenshots, recent changes, workarounds tried.

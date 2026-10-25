@@ -1,0 +1,8 @@
+# shellcheck shell=bash
+# The following lines were added by Docker Desktop to add commands to your PATH.
+[ -d "$HOME/.docker/bin" ] && export PATH="$PATH:$HOME/.docker/bin"
+# End of Docker Desktop section.
+
+# ~/.bash_profile - a link chezmoi keeps to this file (Unix/home/symlink_dot_bash_profile.tmpl).
+# Login bash reads only this file, so hand over to ~/.bashrc.
+[ -r "$HOME/.bashrc" ] && . "$HOME/.bashrc"

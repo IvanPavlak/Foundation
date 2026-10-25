@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# Install-CondaEnvironments - creates the Conda environments of Unix/config/conda-environments.conf
+# from their environment files, the Unix counterpart of the Windows Create-CondaEnvironments.
+#
+# Usage: Install-CondaEnvironments [--list] [--dry-run]
+#
+# Every `env NAME` line creates NAME from NAME.yml in the `directory` of the file (default
+# Conda/Environments/macOS); without env lines every .yml file there is created. The environment
+# is named after its file, and one that already exists is left alone. `update-base on` first
+# updates conda in the base environment (the defaults channel needs its Terms of Service
+# accepted). Without conda on PATH it does nothing. --list shows each file and whether its
+# environment exists; --dry-run prints the conda commands; neither changes anything.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+dry=0
+list_only=0
+for argument in "$@"; do
+	case $argument in
+		--dry-run) dry=1 ;;
+		--list) list_only=1 ;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument [$argument] - usage: Install-CondaEnvironments [--list] [--dry-run]" ;;
+	esac
+done
+
+TOS_HINT="accept the Anaconda Terms of Service once with: conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main --channel https://repo.anaconda.com/pkgs/r"
+
+# Runs a conda command with its output on the terminal; a refusal over the Terms of Service gets
+# the hint to accept them. Usage: run_conda ARGS...
+run_conda() {
+	local output status
+	output=$(mktemp "${TMPDIR:-/tmp}/conda.XXXXXX") || return 1
+	conda "$@" 2>&1 | tee "$output"
+	status=${PIPESTATUS[0]}
+	if [ "$status" -ne 0 ] && grep -qi 'terms of service' "$output"; then
+		log_warning "conda refused a channel whose Terms of Service are not accepted - $TOS_HINT"
+	fi
+	rm -f "$output"
+	return "$status"
+}
+
+config=$(conf_path conda-environments.conf) || foundation_die "Missing Unix/config/conda-environments.conf"
+log_title "Install-CondaEnvironments"
+
+if ! command -v conda >/dev/null 2>&1; then
+	log_warning "conda is not installed (the miniconda cask) - skipping Conda environments!"
+	exit 0
+fi
+
+directory=Conda/Environments/macOS
+update_base=off
+names=()
+while IFS= read -r line; do
+	read -r kind value <<<"$line"
+	case $(foundation_lower "$kind") in
+		directory) directory=$value ;;
+		env) names+=("${value%.yml}") ;;
+		update-base) update_base=$(foundation_lower "$value") ;;
+		*) log_warning "Unknown line kind [$kind], skipped => $line" ;;
+	esac
+done < <(conf_lines "$config")
+directory=$(foundation_expand_path "$directory")
+case $directory in /*) ;; *) directory=$DOTFILES_ROOT/$directory ;; esac
+
+# A clone without the folder (a fork payload) has nothing to install.
+if [ ! -d "$directory" ]; then
+	log_warning "Conda environments folder not found => $directory - skipping Conda environments!"
+	exit 0
+fi
+if [ ${#names[@]} -eq 0 ]; then
+	for file in "$directory"/*.yml; do
+		[ -f "$file" ] && names+=("$(basename "$file" .yml)")
+	done
+fi
+if [ ${#names[@]} -eq 0 ]; then
+	log_warning "No .yml environment files in => $directory"
+	exit 0
+fi
+
+# Environment names from `conda env list`: the first field of every line that is not a comment.
+existing=$(conda env list 2>/dev/null | awk '!/^#/ && NF { print $1 }')
+exists() { printf '%s\n' "$existing" | grep -qixF -- "$1"; }
+
+if [ "$list_only" -eq 1 ]; then
+	log_step "Environment files in $directory"
+	for name in "${names[@]}"; do
+		state=missing
+		exists "$name" && state=exists
+		[ -f "$directory/$name.yml" ] || state="no file"
+		printf '  %-24s %s\n' "$name" "$state"
+	done
+	exit 0
+fi
+
+failures=0
+if [ "$update_base" = on ]; then
+	if [ "$dry" -eq 1 ]; then
+		printf '  conda update -n base -c defaults conda -y\n'
+	elif ! run_conda update -n base -c defaults conda -y; then
+		log_warning "conda update of the base environment failed"
+		failures=$((failures + 1))
+	fi
+fi
+
+created=0
+for name in "${names[@]}"; do
+	file=$directory/$name.yml
+	if [ ! -f "$file" ]; then
+		log_warning "No environment file, skipped => $file"
+		continue
+	fi
+	if exists "$name"; then
+		log_debug "[Install-CondaEnvironments] $name already exists"
+		continue
+	fi
+	created=$((created + 1))
+	if [ "$dry" -eq 1 ]; then
+		printf '  conda env create -n %s -f %s\n' "$name" "$file"
+		continue
+	fi
+	log_step "Creating $name from $(basename "$file")"
+	if run_conda env create -n "$name" -f "$file"; then
+		log_success "Created $name"
+	else
+		log_error "Could not create $name"
+		failures=$((failures + 1))
+	fi
+done
+
+if [ "$failures" -gt 0 ]; then
+	log_error "Conda environments done with $failures failure(s)"
+	exit 1
+elif [ "$created" -eq 0 ]; then
+	log_success "Every Conda environment already exists!"
+elif [ "$dry" -eq 0 ]; then
+	log_success "Conda environments created!"
+fi

@@ -1,0 +1,236 @@
+#!/usr/bin/env bash
+# Open-ProjectTerminals - opens a project's terminal tabs in WezTerm, titled <Project>.<KEY>.
+#
+# Usage: Open-ProjectTerminals [PROJECT...] [--project NAME...] [--new-window | --in-same-shell] [--in-same-group | --no-in-same-group] [--focus-tab origin|TITLE|INDEX] [--force] [--alongside] [--invoke-onefetch | --no-onefetch]
+#
+# Tabs come from the `tab` lines of the project in Unix/config/projects.conf. A tab whose title
+# is already open is skipped unless --force (or --alongside: an alongside workspace opens its own
+# tabs even when another workspace has the same ones). Where the tabs go is the Windows matrix of
+# --in-same-shell (or --new-window, -InSameShell:$false) and --in-same-group (the default; or
+# --no-in-same-group, -InSameGroup:$false):
+#   same shell + same group     every tab in the WezTerm window this shell runs in
+#   same shell + no same group  each project in a new window of its own
+#   new window + same group     all the projects of the call together in ONE new window
+#   new window + no same group  every tab in a new window of its own
+# Without --in-same-shell or --new-window it is decided as on Windows: the same window when
+# WezTerm has exactly one window and no project tab is open in it (a tab titled <Project>.<KEY>
+# of any projects.conf project), else a new window, which keeps project groups apart. --alongside
+# keeps the tabs in the window the alongside open runs in. Of two opposite flags the last one
+# wins. --focus-tab (FocusTab) picks the tab selected once the call's tabs are open, when they all
+# went into one window: INDEX the tab at that position in the window (0, the first, by default, as
+# on Windows), TITLE the tab of that title (case-insensitive), origin the tab this shell runs in.
+# --project NAME is the same as PROJECT. Each tab greets with Show-TerminalGreeting (fastfetch, plus onefetch inside a repository
+# per greeting.conf). `onefetch-in-project-terminals off` in greeting.conf leaves the onefetch
+# panel out of that first greeting (a later `c` in the tab draws it); --invoke-onefetch and
+# --no-onefetch decide it for one call. During a workspace open the tabs start without the panel
+# and draw it once the layout placed their window. `A,B` names both projects, and a number names
+# that entry of the menu; a flag it does not know is an error.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps drivers/wezterm terminal project
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+projects=()
+shell=''
+group=1
+alongside=0
+force=0
+onefetch=''
+focus=0
+# PowerShell's switch form: -InSameShell:$false is false, -InSameShell:$true (or :true) true.
+switch_value() { case $(foundation_lower "${1#*:}") in '$false' | false | 0) echo 0 ;; *) echo 1 ;; esac }
+while [ $# -gt 0 ]; do
+	case $1 in
+		--new-window) shell=0 ;;
+		--in-same-shell) shell=1 ;;
+		--in-same-shell:*) shell=$(switch_value "$1") ;;
+		--in-same-group) group=1 ;;
+		--no-in-same-group) group=0 ;;
+		--in-same-group:*) group=$(switch_value "$1") ;;
+		--focus-tab)
+			[ -n "${2:-}" ] || foundation_die "--focus-tab needs origin, a tab title or an index - nothing was opened"
+			focus=$2
+			shift
+			;;
+		--force) force=1 ;;
+		--alongside)
+			force=1
+			alongside=1
+			;;
+		--no-onefetch) onefetch=off ;;
+		--invoke-onefetch) onefetch=on ;;
+		--project) ;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1 - nothing was opened" ;;
+		*) foundation_split_list projects "$1" ;;
+	esac
+	shift
+done
+
+# Only projects that define tabs, as the Windows menu lists ProjectTerminals. Read only for the
+# menu or a number, which is that entry of it (-Project 2): a workspace open names its projects.
+available=()
+if [ ${#projects[@]} -eq 0 ] || foundation_has_number "${projects[@]}"; then
+	while IFS= read -r name; do
+		[ -n "$(project_lines "$name" tab)" ] && available+=("$name")
+	done < <(project_names)
+fi
+if [ ${#projects[@]} -gt 0 ]; then
+	mapfile -t projects < <(foundation_resolve_items "${projects[@]}" -- ${available[@]+"${available[@]}"})
+else
+	selection=$(foundation_resolve_selection "[Available Project Terminals]" "" 0 1 "${available[@]}") || exit 1
+	while IFS= read -r name; do [ -n "$name" ] && projects+=("$name"); done <<<"$selection"
+fi
+defer=0
+[ -n "${FOUNDATION_WORKSPACE_OPEN:-}" ] && defer=1
+# InProjectTerminals: a flag wins for this call, else greeting.conf (default on).
+if [ -z "$onefetch" ]; then
+	onefetch=on
+	greeting=$(conf_path greeting.conf) && [ "$(conf_value "$greeting" onefetch-in-project-terminals 2>/dev/null)" = off ] && onefetch=off
+fi
+no_onefetch=0
+if [ "$onefetch" = off ]; then
+	no_onefetch=1
+	log_debug "[Open-ProjectTerminals] the tabs greet without the onefetch panel"
+fi
+
+existing=''
+panes=''
+if wt_running; then
+	existing=$(wt_tab_titles)
+	panes=$(wt_panes)
+fi
+
+# InSameShell not given: Windows' auto-detection. The same window only when there is exactly one
+# WezTerm window and it holds no project tab; the alongside open's own window always.
+if [ -z "$shell" ]; then
+	shell=0
+	if [ "$alongside" -eq 1 ]; then
+		shell=1
+	elif [ -n "$panes" ] && [ "$(printf '%s\n' "$panes" | cut -f1 | sort -u | grep -c .)" -eq 1 ]; then
+		shell=1
+		known=$(project_names | tr '[:upper:]' '[:lower:]')
+		while IFS= read -r tab; do
+			case $tab in *.*) ;; *) continue ;; esac
+			if printf '%s\n' "$known" | grep -qxF -- "$(foundation_lower "${tab%.*}")"; then
+				log_debug "[Open-ProjectTerminals] the window already holds project tab [$tab] - a new window keeps the groups apart"
+				shell=0
+				break
+			fi
+		done < <(printf '%s\n' "$panes" | awk -F'\t' '$5 != "" && !seen[$2]++ { print $5 }')
+	fi
+fi
+log_debug "[Open-ProjectTerminals] in same shell $shell, in same group $group"
+
+# The window a call's projects share when they go to one new window (new window + same group).
+shared=''
+# The pane ids of every tab this call opened, in order.
+opened=()
+record_panes() {
+	local pane
+	while IFS= read -r pane; do [ -n "$pane" ] && opened+=("$pane"); done <<<"$1"
+}
+# Opens the tabs of SPECS (stdin) per the matrix and records their pane ids.
+open_specs() {
+	local specs pane line out
+	specs=$(cat)
+	if [ "$shell" -eq 0 ] && [ "$group" -eq 0 ]; then
+		# Every tab in a window of its own.
+		while IFS= read -r line; do
+			[ -n "$line" ] || continue
+			out=$(printf '%s\n' "$line" | term_open_tabs new "$defer" "$no_onefetch") || return 1
+			record_panes "$out"
+		done <<<"$specs"
+		return 0
+	fi
+	if [ "$shell" -eq 1 ] && [ "$group" -eq 1 ]; then
+		out=$(printf '%s\n' "$specs" | term_open_tabs same "$defer" "$no_onefetch") || return 1
+	elif [ "$shell" -eq 1 ]; then
+		# Each project in a new window of its own.
+		out=$(printf '%s\n' "$specs" | term_open_tabs new "$defer" "$no_onefetch") || return 1
+	else
+		# One new window for the whole call: the first project opens it, the others join it.
+		out=$(printf '%s\n' "$specs" | term_open_tabs "${shared:-new}" "$defer" "$no_onefetch") || return 1
+		pane=$(printf '%s\n' "$out" | head -n 1)
+		[ -n "$shared" ] || [ -z "$pane" ] || shared=$(wt_pane_window "$pane")
+	fi
+	record_panes "$out"
+}
+
+# FocusTab: when every tab of the call went into one window, selects the tab --focus-tab names
+# there - by position (0 = the first tab of the window), by title, or this shell's own (origin).
+focus_tab() {
+	local snapshot window pane own
+	snapshot=$(wt_panes) || return 0
+	window=$(printf '%s\n' "$snapshot" | awk -F'\t' -v p="${opened[0]}" '$3 == p { print $1; exit }')
+	for pane in "${opened[@]}"; do
+		if [ -z "$window" ] || [ "$(printf '%s\n' "$snapshot" | awk -F'\t' -v p="$pane" '$3 == p { print $1; exit }')" != "$window" ]; then
+			log_debug "[Open-ProjectTerminals] the tabs are not in one window - no tab to focus"
+			return 0
+		fi
+	done
+	case $focus in
+		origin)
+			own=$(wt_own_pane) || return 0
+			pane=$(printf '%s\n' "$snapshot" | awk -F'\t' -v p="$own" -v w="$window" '$3 == p && $1 == w { print $3; exit }')
+			[ -n "$pane" ] || return 0
+			;;
+		*[!0-9]*)
+			pane=$(printf '%s\n' "$snapshot" | awk -F'\t' -v t="$(foundation_lower "$focus")" -v w="$window" '$1 == w && tolower($5) == t { print $3; exit }')
+			;;
+		*)
+			pane=$(printf '%s\n' "$snapshot" | awk -F'\t' -v n="$focus" -v w="$window" '$1 == w && !seen[$2]++ { if (i++ == n) { print $3; exit } }')
+			;;
+	esac
+	if [ -z "$pane" ]; then
+		log_warning "Warning: Tab [$focus] not found in the project terminals' window!"
+		return 0
+	fi
+	log_debug "[Open-ProjectTerminals] focusing tab [$focus] (pane $pane)"
+	wt_activate_pane "$pane"
+}
+
+status=0
+for project in "${projects[@]}"; do
+	canonical=$(project_canonical "$project") || {
+		log_error "Error: Project [$project] not found in projects.conf!"
+		status=1
+		continue
+	}
+	log_step "Opening [$canonical] project terminals..."
+	specs=''
+	count=0
+	while IFS=$'\t' read -r title dir _; do
+		if [ "$force" -eq 0 ] && printf '%s\n' "$existing" | grep -qxF -- "$title"; then
+			log_warning "  Skipping [$title] (already open)"
+			continue
+		fi
+		# No per-tab onefetch: the tab's greeting (Show-TerminalGreeting) draws the styled panel
+		# itself inside a repository, and a second, unstyled one would follow it.
+		command=''
+		specs+="$title"$'\t'"$dir"$'\t'"$command"$'\n'
+		count=$((count + 1))
+	done < <(project_tabs "$canonical")
+	if [ "$count" -eq 0 ]; then
+		log_warning "All [$canonical] tabs are already open!"
+		continue
+	fi
+	# A here-string, not a pipe: open_specs keeps the shared window in this shell for the next project.
+	if open_specs <<<"$specs"; then
+		log_success "Opened $count [$canonical] tab(s)!"
+		existing+=$'\n'$(printf '%s' "$specs" | cut -f1)
+	else
+		status=1
+	fi
+done
+# Only a grouped call shares one window (Windows focuses only then, in its shared window).
+[ ${#opened[@]} -eq 0 ] || [ "$group" -eq 0 ] || focus_tab
+exit $status

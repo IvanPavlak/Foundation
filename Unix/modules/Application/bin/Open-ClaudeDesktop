@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Open-ClaudeDesktop - opens the Claude desktop app unless it already has a window.
+#
+# Usage: Open-ClaudeDesktop [ARGUMENT...]
+#
+# Open-Application Claude: ARGUMENTs are handed to the app (open -b BUNDLE --args ...), and the
+# window check needs AeroSpace (without it the app is always asked to open, which brings a running
+# Claude forward). A leading --help prints this header; -v and --help elsewhere are taken by
+# Open-Application, so they never reach the app.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+# Its own header, not Open-Application's, which would answer --help after the exec.
+case ${1:-} in -h | --help)
+	foundation_usage "$0"
+	exit 0
+	;;
+esac
+exec "${BASH:-bash}" "$(foundation_command_path Open-Application)" Claude "$@"

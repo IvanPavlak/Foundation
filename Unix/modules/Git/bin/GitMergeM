@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# GitMergeM - merges master (or main) into the current branch. Alias: gmm
+#
+# Usage: GitMergeM
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+case ${1:-} in -h | --help)
+	foundation_usage "$0"
+	exit 0
+	;;
+esac
+
+if git show-ref --verify --quiet refs/heads/master; then exec git merge master; fi
+if git show-ref --verify --quiet refs/heads/main; then exec git merge main; fi
+foundation_die "Neither 'master' nor 'main' branch exists in this repository!"

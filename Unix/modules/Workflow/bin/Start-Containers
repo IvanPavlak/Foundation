@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# Start-Containers - starts (or stops) Docker Compose stacks without running any project.
+#
+# Usage: Start-Containers [STACK...] [--stop] [--down]
+#
+# Stacks are the `stack` lines of Unix/config/docker.conf. With one configured stack it is used
+# directly; with several and none named, a menu lists them sorted by name (case-insensitively, as
+# Windows sorts the DockerComposeFiles keys). Every chosen stack's compose file is checked first: an
+# unknown stack or a missing file is an error for that stack only, and Docker Desktop is started
+# only when one remains, so a wrong path fails at once instead of after a cold start. Starting
+# launches Docker Desktop when needed, runs `docker compose up -d` and prints the published ports so the connection target
+# (DBeaver, psql) is obvious. --stop runs `docker compose stop` (containers kept, fast to
+# resume); --stop --down runs `docker compose down` (containers and network removed, volumes
+# kept). Docker Desktop itself stays running either way. `A,B` names two stacks, and a number
+# names that entry of the menu; a flag it does not know is an error.
+# Windows-style names: --name (-Name) is accepted and ignored: the names after it are stacks.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config docker
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+names=()
+stop=0
+down=0
+for argument in "$@"; do
+	case $argument in
+		--stop) stop=1 ;;
+		--down) down=1 ;;
+		--name | -v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $argument - nothing was started or stopped" ;;
+		*) foundation_split_list names "$argument" ;;
+	esac
+done
+
+stacks=()
+while IFS= read -r stack; do stacks+=("$stack"); done < <(docker_stacks | LC_ALL=C sort -f)
+[ ${#stacks[@]} -gt 0 ] || foundation_die "No stacks configured in Unix/config/docker.conf"
+if [ ${#names[@]} -gt 0 ]; then
+	# A number is that entry of the menu, as -Name 2 is on Windows.
+	mapfile -t names < <(foundation_resolve_items "${names[@]}" -- "${stacks[@]}")
+else
+	if [ ${#stacks[@]} -eq 1 ]; then
+		names=("${stacks[0]}")
+	else
+		selection=$(foundation_resolve_selection "[Docker Compose stacks]" "" 0 1 "${stacks[@]}") || exit 1
+		while IFS= read -r stack; do [ -n "$stack" ] && names+=("$stack"); done <<<"$selection"
+	fi
+fi
+
+log_title "Start-Containers"
+if [ "$stop" -eq 1 ] && ! docker_running; then
+	log_warning "Docker is not running - nothing to stop"
+	exit 0
+fi
+
+# Resolved before Docker Desktop starts (Windows checks the file before DockerWizard).
+status=0
+resolved=()
+composes=()
+for name in "${names[@]}"; do
+	compose=$(docker_stack_file "$name") || {
+		log_error "No stack [$name] in docker.conf"
+		status=1
+		continue
+	}
+	if [ ! -f "$compose" ]; then
+		log_error "Compose file for [$name] not found => $compose"
+		status=1
+		continue
+	fi
+	resolved+=("$name")
+	composes+=("$compose")
+done
+[ ${#resolved[@]} -gt 0 ] || exit 1
+[ "$stop" -eq 1 ] || docker_start || exit 1
+
+for index in "${!resolved[@]}"; do
+	name=${resolved[$index]}
+	compose=${composes[$index]}
+	if [ "$stop" -eq 1 ] && [ "$down" -eq 1 ]; then
+		log_step "[$name] docker compose down"
+		docker compose -f "$compose" down </dev/null || status=1
+	elif [ "$stop" -eq 1 ]; then
+		log_step "[$name] docker compose stop"
+		docker compose -f "$compose" stop </dev/null || status=1
+	else
+		log_step "[$name] docker compose up -d"
+		if docker compose -f "$compose" up -d </dev/null; then
+			docker_stack_ports "$compose" | sed 's/^/    /'
+		else
+			status=1
+		fi
+	fi
+done
+[ "$status" -eq 0 ] && log_success "Containers $([ "$stop" -eq 1 ] && printf 'stopped' || printf 'started')!"
+exit $status

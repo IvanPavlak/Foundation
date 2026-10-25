@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Invoke-LogMaintenance - the periodic sweep over every store Foundation fills: logs, backups and test results.
+#
+# Usage: Invoke-LogMaintenance [--force] [--results-directory DIR]
+#
+# The Unix twin of the Windows Invoke-LogMaintenance. Applies the Clear-OldLogs rules
+# (logging.conf), Clear-OldBackups (backups.conf, over Backups/Unix) and the Run-Tests results
+# retention to Unix/tests/Results (the ten newest TestRun_*.log stay, an older one goes once it
+# is a day old, and so does a scratch folder a killed run left in $TMPDIR). Prints nothing (-v
+# shows what it did) and never fails a caller. Throttled: it runs only when `maintenance on` (the
+# default) and the stamp Unix/logs/.last-maintenance is older than maintenance-interval-hours (24),
+# and writes the stamp before it starts, so shells opened together do not sweep twice. Every new
+# session's background retention calls it when it is due; --force runs it now, whatever the switch
+# and the stamp. --results-directory DIR prunes DIR instead of Unix/tests/Results (default:
+# $FOUNDATION_TEST_RESULTS, else Unix/tests/Results).
+export FOUNDATION_LOGGING=off
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load testrun
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+force=0
+results=${FOUNDATION_TEST_RESULTS:-$FOUNDATION_UNIX/tests/Results}
+while [ $# -gt 0 ]; do
+	case $1 in
+		--force) force=1 ;;
+		--results-directory)
+			[ -n "${2-}" ] || foundation_die "--results-directory takes a folder"
+			results=$2
+			shift
+			;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument => $1" ;;
+	esac
+	shift
+done
+# Its lines never reach a session log: called from one, it would write into that session.
+unset FOUNDATION_LOG_FILE
+
+if [ "$force" -eq 0 ] && ! logfile_maintenance_due; then
+	log_debug "[Invoke-LogMaintenance] not due (maintenance off, or the last sweep is younger than the interval)"
+	exit 0
+fi
+dir=$(logfile_dir)
+mkdir -p "$dir" 2>/dev/null && date '+%Y-%m-%dT%H:%M:%S%z' >"$dir/.last-maintenance" 2>/dev/null
+
+logfile_prune 0 2>/dev/null | while IFS= read -r line; do log_debug "[Clear-OldLogs] $line"; done
+foundation_run Clear-OldBackups >/dev/null 2>&1 || log_debug "[Invoke-LogMaintenance] Clear-OldBackups failed"
+testrun_prune_results "$results" "${TMPDIR:-/tmp}" 2>/dev/null | while IFS= read -r line; do log_debug "[Tests/Results] $line"; done
+exit 0

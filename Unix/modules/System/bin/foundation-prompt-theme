@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# foundation-prompt-theme - prints the Oh My Posh theme the shell prompt uses, for Unix/shell/shellrc.sh.
+#
+# Usage: foundation-prompt-theme
+#
+# The `prompt-theme PATH` line of Unix/config/theme.conf for this machine type (@TYPE lines and
+# the .local overlay apply), with {MachineType} replaced by the machine type of machines.conf and
+# ~ and $VARIABLES expanded; without a line, Oh-My-Posh/WinuX_Test.omp.json, the theme every
+# repository ships. Prints the path even when the file is missing: the shell reports that.
+# A new interactive shell reads it through foundation-shell-settings, which computes it (this is
+# `foundation-shell-settings --prompt-theme`). Keeps no session log of its own.
+export FOUNDATION_LOGGING=off
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+exec "$(dirname "$_foundation")/foundation-shell-settings" --prompt-theme

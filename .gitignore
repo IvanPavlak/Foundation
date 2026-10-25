@@ -1,0 +1,31 @@
+# Personal config overlays - your machine-specific values (identity, hosts, paths, workspaces,
+# projects, ...), layered over the base Unix/config/NAME.conf at read time by Unix/lib/config.sh.
+# Written by Initialize-Configuration, the Add-* commands and the macOS Configurator. Foundation
+# ships only the generic base, so the overlays are ignored here. A fork that runs several Macs can
+# commit its own (git add -f; see docs/unix/fork-model.md) - upstream never tracks them, so
+# committing them downstream never conflicts on a merge.
+Unix/config/*.local.conf
+Unix/config/layouts/*/*.local.conf
+Unix/Brewfile.local
+
+# Terminal overrides - a fork's own WezTerm and Ghostty settings, loaded last by the shared configs
+# and linked by chezmoi only when they exist (docs/unix/fork-model.md).
+WezTerm/wezterm.local.lua
+Unix/ghostty/config.local
+
+# The unified backup sink - every real file a Foundation writer replaces (a dotfile a chezmoi link
+# displaces, a rewritten config file) is first copied into Backups/Unix/<Category>/<Key>/<timestamp>/,
+# bounded by Clear-OldBackups. Kept in the repository so a replaced file is easy to find again, but
+# it is your machine's own data (and may hold secrets), so it is never committed. See
+# docs/unix/backups.md.
+Backups/*
+!Backups/.gitkeep
+
+# Run-Tests logs and run artifacts (merged run logs, the measured timings, the impact map).
+Unix/tests/Results/
+
+# Session and error logs of the Foundation commands (kept locally for inspection, never committed).
+Unix/logs/*
+!Unix/logs/Pinned/
+Unix/logs/Pinned/*
+!Unix/logs/Pinned/.gitkeep

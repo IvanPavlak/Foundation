@@ -1,0 +1,4 @@
+Capabilities for Battery Power:
+ displaysleep
+ sleep
+ womp

@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# Open-Project - runs a project's actions (VS Code folders, terminal tabs, ...).
+#
+# Usage: Open-Project [PROJECT...] [--run-app] [--new-window] [--alongside] [--vscode-workspace [NAME]]
+#
+# Runs the `action` lines of each PROJECT in Unix/config/projects.conf in order ({ProjectName} in
+# an action line is the project's name). Without a project a menu of all projects is shown.
+# --run-app opens the project with Run-Project (its run commands typed into the tabs) instead of
+# plain terminals, the -RunApp switch of Windows.
+# --new-window reaches Open-ProjectTerminals, or Run-Project with --run-app.
+# --alongside (Open-Workspace --alongside) reaches the project actions that take it.
+# --vscode-workspace NAME makes every Open-VSCode action open NAME.code-workspace instead (through
+# Open-VSCodeWorkspace, as Open-Workspace --vscode-workspace does); bare, it asks with that menu.
+# `Open-Project A,B` opens both, and a number names that entry of the menu; a flag it does not
+# know is an error.
+# Windows-style names: --project (-Project) is accepted and ignored: the names after it are
+# projects; --in-same-shell (-InSameShell) is accepted and ignored.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config project
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+projects=()
+run_app=0
+terminal_args=()
+alongside_args=()
+while [ $# -gt 0 ]; do
+	case $1 in
+		--run-app) run_app=1 ;;
+		--new-window) terminal_args+=(--new-window) ;;
+		--alongside) alongside_args=(--alongside) ;;
+		--vscode-workspace)
+			# A value is optional: bare means "ask" (the Open-VSCodeWorkspace menu).
+			if [ $# -gt 1 ] && [ "${2#-}" = "$2" ]; then
+				FOUNDATION_VSCODE_WORKSPACE=$2
+				shift
+			else FOUNDATION_VSCODE_WORKSPACE='?'; fi
+			# Read by Open-VSCode, which reroutes to Open-VSCodeWorkspace while it is set.
+			export FOUNDATION_VSCODE_WORKSPACE
+			;;
+		--in-same-shell) ;;
+		--project) ;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1 - nothing was opened" ;;
+		*) foundation_split_list projects "$1" ;;
+	esac
+	shift
+done
+
+all=()
+while IFS= read -r name; do all+=("$name"); done < <(project_names)
+if [ ${#projects[@]} -gt 0 ]; then
+	# A number is that entry of the menu, as -Project 2 is on Windows.
+	mapfile -t projects < <(foundation_resolve_items "${projects[@]}" -- ${all[@]+"${all[@]}"})
+else
+	selection=$(foundation_resolve_selection "[Available projects]" "Enter project(s) or press Enter to skip" 1 1 "${all[@]}") || exit 1
+	while IFS= read -r name; do [ -n "$name" ] && projects+=("$name"); done <<<"$selection"
+	[ ${#projects[@]} -gt 0 ] || exit 0
+fi
+
+status=0
+for project in "${projects[@]}"; do
+	canonical=$(project_canonical "$project") || {
+		log_warning "No actions configured for project [$project]"
+		status=1
+		continue
+	}
+	while IFS= read -r line; do
+		read -r -a words <<<"$line"
+		action=${words[0]}
+		# {ProjectName}: the project being opened, as on Windows.
+		arguments=()
+		for word in "${words[@]:1}"; do arguments+=("${word//\{ProjectName\}/$canonical}"); done
+		if [ "$action" = "Open-ProjectTerminals" ]; then
+			[ "$run_app" -eq 1 ] && action=Run-Project
+			arguments+=("${terminal_args[@]}")
+		fi
+		if ! foundation_has_command "$action"; then
+			log_warning "Project action [$action] has no macOS implementation yet - skipped"
+			continue
+		fi
+		if [ ${#alongside_args[@]} -gt 0 ] && foundation_command_flags "$(foundation_command_path "$action")" | grep -qxF -- --alongside; then
+			arguments+=(--alongside)
+		fi
+		# </dev/null: the action lines come in on stdin, and a launched program (code) would
+		# otherwise read the remaining lines and silently end this loop.
+		foundation_run "$action" "${arguments[@]}" </dev/null || status=1
+	done < <(project_lines "$canonical" action)
+done
+exit $status

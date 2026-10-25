@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Get-RepositoryPath - prints the repository root, or a named part of it.
+#
+# Usage: Get-RepositoryPath [unix|modules|windows|config|docs] [--start-path DIR]
+#
+# Anchor-file rule, no hardcoded depth: the root is the nearest folder that holds
+# Unix/lib/foundation.sh, walking up from DIR (--start-path, any folder of another clone or a
+# worktree, as the Windows -StartPath) or else from this executable. The parts: unix (Unix),
+# modules (Unix/modules, the Windows Modules), windows (the Windows half; a clone without one, as
+# Foundation's, fails instead of printing a folder that is not there), config (the configuration
+# folder; the root's Unix/config for a --start-path, FOUNDATION_CONFIG_DIR otherwise) and docs.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+part=''
+start=''
+while [ $# -gt 0 ]; do
+	case $1 in
+		--start-path)
+			[ -n "${2:-}" ] || foundation_die "--start-path takes a folder"
+			start=$2
+			shift
+			;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1" ;;
+		*) part=$1 ;;
+	esac
+	shift
+done
+
+dir=$FOUNDATION_UNIX
+if [ -n "$start" ]; then
+	dir=$(cd "$start" 2>/dev/null && pwd -P) || foundation_die "Start path not found => $start"
+fi
+while [ "$dir" != "/" ] && [ ! -r "$dir/Unix/lib/foundation.sh" ]; do dir=$(dirname "$dir"); done
+[ -r "$dir/Unix/lib/foundation.sh" ] || foundation_die "Could not locate the repository root from ${start:-$FOUNDATION_UNIX}"
+config=$FOUNDATION_CONFIG_DIR
+[ -z "$start" ] || config=$dir/Unix/config
+case $(foundation_lower "$part") in
+	"") printf '%s\n' "$dir" ;;
+	unix) printf '%s\n' "$dir/Unix" ;;
+	modules) printf '%s\n' "$dir/Unix/modules" ;;
+	windows)
+		[ -d "$dir/Windows" ] || foundation_die "No Windows half in this clone => $dir"
+		printf '%s\n' "$dir/Windows"
+		;;
+	config) printf '%s\n' "$config" ;;
+	docs) printf '%s\n' "$dir/docs" ;;
+	*) foundation_die "Unknown part [$part] (expected unix, modules, windows, config or docs)" ;;
+esac

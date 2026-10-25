@@ -1,0 +1,375 @@
+#!/usr/bin/env bash
+# Deploy-AiMarketplaces - registers the configured Claude Code plugin marketplaces, writes the
+# variables and options their plugins need into the user settings and installs the plugins through
+# the Claude Code CLI.
+#
+# Usage: Deploy-AiMarketplaces [--check]
+#
+# Unix counterpart of Deploy-AiMarketplaces (WinuX AI module; design: docs/ai/mods.md). Marketplaces
+# are not an artifact kind: the plugins install through the app's own CLI, beside the mods
+# Deploy-AiArtifacts links.
+#
+# Reads Unix/config/ai-marketplaces.conf (one [section] per marketplace, see its header):
+#
+#   1. extraKnownMarketplaces.<section> of ~/.claude/settings.json is set to the GitHub source of
+#      the section's repository, so Claude Code knows the marketplace on every start;
+#   2. every `env` line of the section is written to the env block of the same file (every other
+#      variable kept), because Claude Code reads its own environment from there in every session:
+#      that is where a switch the plugins need goes, such as CLAUDE_CODE_ENABLE_FUNCTION_HOOKS 1,
+#      which Claude Code 2.1.286 needs before it loads any hooks module; sections are read in file
+#      order, so a variable two of them name ends with the value of the last;
+#   3. pluginConfigs.<plugin>@<section>.options is set to the section's `option` lines of that
+#      plugin, replacing that key whole (as the Windows PluginConfigs.<plugin>.options does), and
+#      every `config PLUGIN CHILD VALUE` line sets pluginConfigs.<plugin>@<section>.<CHILD>; a
+#      [plugin:NAME] section (a plugin no marketplace installs, such as a folder-loaded mod of
+#      ai-artifacts.conf) writes its `option KEY VALUE` and `config CHILD VALUE` lines the same way
+#      beneath pluginConfigs.<NAME>, as the Windows PluginConfigs does for a name no marketplace
+#      lists; every other setting is kept (python3 edits the JSON; an unparseable file is left
+#      untouched);
+#   4. with the claude CLI on PATH, every marketplace `claude plugin marketplace list --json` does
+#      not show is added with `claude plugin marketplace add OWNER/NAME`, and every plugin
+#      `claude plugin list --json` does not show is installed as <plugin>@<section>. A missing CLI
+#      only warns: the settings are deployed regardless. Installed plugins are left to
+#      `claude plugin update`. A `claude` resolved under /mnt/ (inside WSL, the Windows CLI reached
+#      through interop, which would install into the Windows profile) counts as missing.
+#
+# A folder in env.CLAUDE_CODE_PLUGIN_DIRS that holds a plugin installed here is reported, never
+# removed: Claude Code would load that plugin twice, and the folder copy ignores the options under
+# pluginConfigs.<plugin>@<section>. A development clone belongs in `claude --plugin-dir` for one
+# session instead.
+#
+# --check (--dry-run, the Windows -WhatIf) reports the current state and changes nothing.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config
+
+# The Claude Code CLI; FOUNDATION_CLAUDE_CLI names another executable (the test suites set a name that
+# never exists, or their stand-in), since foundation.sh puts Homebrew back on any trimmed PATH.
+claude_cli=${FOUNDATION_CLAUDE_CLI:-claude}
+
+# One FIELD of every entry of a `claude plugin ... --json` listing, one per line; an unreadable
+# listing prints nothing. Usage: listed FIELD SUBCOMMAND...
+listed() {
+	local field=$1
+	shift
+	"$claude_cli" plugin "$@" --json 2>/dev/null | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except ValueError:
+    sys.exit(0)
+for item in data if isinstance(data, list) else []:
+    if isinstance(item, dict) and item.get(sys.argv[1]):
+        print(item[sys.argv[1]])
+' "$field"
+}
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+check=0
+for argument in "$@"; do
+	case $argument in
+		--check | --dry-run) check=1 ;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument: $argument (expected --check)" ;;
+	esac
+done
+
+log_title "Deploy-AiMarketplaces"
+file=$(conf_path ai-marketplaces.conf) || {
+	log_warning "No marketplaces configured (ai-marketplaces.conf) - nothing to deploy!"
+	exit 0
+}
+
+settings=$HOME/.claude/settings.json
+failures=0
+# One line per marketplace (NAME REPOSITORY), per plugin (NAME PLUGIN), per variable
+# (NAME VARIABLE VALUE), per option (PLUGIN-ID KEY VALUE) and per other child key (PLUGIN-ID CHILD
+# VALUE), handed to python3 as the desired state; PLUGIN-ID is <plugin>@<section>, or the NAME of a
+# [plugin:NAME] section.
+marketplaces=''
+plugins=''
+envs=''
+options=''
+children=''
+while IFS= read -r section; do
+	lines=$(conf_section "$file" "$section")
+	if [[ ${section,,} == plugin:* ]]; then
+		id=${section#*:}
+		if [ -z "$id" ]; then
+			log_error "Section [$section] names no plugin - skipped!"
+			failures=$((failures + 1))
+			continue
+		fi
+		while IFS= read -r line; do
+			read -r kind key value <<<"$line"
+			case $kind in
+				option | config)
+					if [ -z "$key" ]; then
+						log_error "Plugin [$id]: $kind line needs KEY VALUE => $line"
+						failures=$((failures + 1))
+					elif [ "$kind" = option ]; then
+						options+="$id $key $value"$'\n'
+					else
+						children+="$id $key $value"$'\n'
+					fi
+					;;
+				'') ;;
+				*)
+					log_error "Plugin [$id]: unknown line (expected option or config) => $line"
+					failures=$((failures + 1))
+					;;
+			esac
+		done <<<"$lines"
+		continue
+	fi
+	repository=$(printf '%s\n' "$lines" | awk '$1 == "repository" { print $2; exit }')
+	if ! [[ $repository =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+		log_error "Marketplace [$section] has no valid repository (OWNER/NAME) - skipped!"
+		failures=$((failures + 1))
+		continue
+	fi
+	marketplaces+="$section $repository"$'\n'
+	while IFS= read -r line; do
+		read -r kind rest <<<"$line"
+		case $kind in
+			plugins)
+				for plugin in $rest; do plugins+="$section $plugin"$'\n'; done
+				;;
+			env)
+				read -r variable value <<<"$rest"
+				if ! [[ $variable =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+					log_error "Marketplace [$section]: env line needs NAME VALUE with a valid variable name => $line"
+					failures=$((failures + 1))
+					continue
+				fi
+				envs+="$section $variable $value"$'\n'
+				;;
+			option | config)
+				read -r plugin key value <<<"$rest"
+				if [ -z "$plugin" ] || [ -z "$key" ]; then
+					log_error "Marketplace [$section]: $kind line needs PLUGIN KEY VALUE => $line"
+					failures=$((failures + 1))
+					continue
+				fi
+				if [ "$kind" = option ]; then
+					options+="$plugin@$section $key $value"$'\n'
+				else
+					children+="$plugin@$section $key $value"$'\n'
+				fi
+				;;
+		esac
+	done <<<"$lines"
+done < <(conf_sections "$file")
+
+if [ -z "$marketplaces$options$children" ]; then
+	log_warning "No marketplaces configured (ai-marketplaces.conf) - nothing to deploy!"
+	[ "$failures" -eq 0 ] || exit 1
+	exit 0
+fi
+
+command -v python3 >/dev/null 2>&1 || foundation_die "python3 is required (edits $settings)"
+
+log_step "[$settings]"
+python3 - "$settings" "$check" "$marketplaces" "$options" "$envs" "$children" <<'PY'
+import json, os, sys
+
+path, check_only = sys.argv[1], sys.argv[2] == "1"
+marketplaces = [line.split(" ", 1) for line in sys.argv[3].splitlines() if line]
+wanted_env = {}
+for line in sys.argv[5].splitlines():
+    if not line:
+        continue
+    market, variable, *rest = line.split(" ", 2)
+    wanted_env[variable] = rest[0] if rest else ""
+
+
+def parsed(raw):
+    # JSON when it parses (true, 60, ["a","b"]), else the text itself.
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return raw
+
+
+# PLUGIN-ID -> {child: value}: every config line sets one child, the option lines set `options`
+# whole (over a config line naming options).
+wanted = {}
+for line in sys.argv[6].splitlines():
+    if line:
+        plugin_id, child, *rest = line.split(" ", 2)
+        wanted.setdefault(plugin_id, {})[child] = parsed(rest[0] if rest else "")
+wanted_options = {}
+for line in sys.argv[4].splitlines():
+    if line:
+        plugin_id, key, *rest = line.split(" ", 2)
+        wanted_options.setdefault(plugin_id, {})[key] = parsed(rest[0] if rest else "")
+for plugin_id, values in wanted_options.items():
+    wanted.setdefault(plugin_id, {})["options"] = values
+
+document = {}
+if os.path.exists(path):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        document = json.loads(text) if text.strip() else {}
+    except ValueError as error:
+        print(f"Could not parse {path} - left untouched: {error}", file=sys.stderr)
+        sys.exit(2)
+if not isinstance(document, dict):
+    print(f"The top level of {path} is not a JSON object - left untouched", file=sys.stderr)
+    sys.exit(2)
+
+changes = []
+known = document.get("extraKnownMarketplaces")
+known = known if isinstance(known, dict) else {}
+for name, repository in marketplaces:
+    source = {"source": {"source": "github", "repo": repository}}
+    if known.get(name) != source:
+        known[name] = source
+        changes.append(f"extraKnownMarketplaces.{name}")
+env_block = document.get("env")
+if env_block is None:
+    env_block = {}
+elif not isinstance(env_block, dict):
+    print(f"The env entry of {path} is not a JSON object - left untouched", file=sys.stderr)
+    sys.exit(2)
+for variable, value in wanted_env.items():
+    if env_block.get(variable) != value:
+        env_block[variable] = value
+        changes.append(f"env.{variable}")
+configs = document.get("pluginConfigs")
+configs = configs if isinstance(configs, dict) else {}
+for plugin_id, children in sorted(wanted.items()):
+    entry = configs.get(plugin_id)
+    entry = entry if isinstance(entry, dict) else {}
+    for child, value in sorted(children.items()):
+        if entry.get(child) != value:
+            entry[child] = value
+            changes.append(f"pluginConfigs.{plugin_id}.{child}")
+    configs[plugin_id] = entry
+
+if not changes:
+    print(f"Marketplaces, variables and plugin options in {path} are up to date")
+    sys.exit(0)
+if check_only:
+    for change in changes:
+        print(f"DIFFERS {change}")
+    sys.exit(3)
+
+if marketplaces:
+    document["extraKnownMarketplaces"] = known
+if wanted_env:
+    document["env"] = env_block
+if configs:
+    document["pluginConfigs"] = configs
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(document, handle, indent=2, ensure_ascii=False)
+    handle.write("\n")
+for change in changes:
+    print(f"Set {change}")
+PY
+case $? in
+	0) ;;
+	3) failures=$((failures + 1)) ;;
+	*)
+		log_error "Claude Code settings not updated: $settings"
+		failures=$((failures + 1))
+		;;
+esac
+
+# One copy per plugin: every CLAUDE_CODE_PLUGIN_DIRS folder whose plugin.json names a plugin
+# installed here, printed as "<plugin>@<section> <folder>".
+duplicates=$(
+	python3 - "$settings" "$plugins" <<'PY'
+import json, os, sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        document = json.load(handle)
+    dirs = str((document.get("env") or {}).get("CLAUDE_CODE_PLUGIN_DIRS") or "")
+except (OSError, ValueError, AttributeError):
+    sys.exit(0)
+wanted = {}
+for line in sys.argv[2].splitlines():
+    if line:
+        market, plugin = line.split(" ", 1)
+        wanted.setdefault(plugin, f"{plugin}@{market}")
+for entry in filter(None, (part.strip() for part in dirs.split(":"))):
+    try:
+        with open(os.path.join(os.path.expanduser(entry), ".claude-plugin", "plugin.json"), encoding="utf-8") as handle:
+            name = json.load(handle).get("name")
+    except (OSError, ValueError, AttributeError):
+        continue
+    if name in wanted:
+        print(wanted[name], entry)
+PY
+)
+while read -r id entry; do
+	[ -n "$id" ] || continue
+	log_warning "Plugin [$id] is installed from its marketplace and also loaded from [$entry] in env.CLAUDE_CODE_PLUGIN_DIRS of [$settings] - Claude Code loads two copies, and the folder copy ignores the options under pluginConfigs.$id! Remove that entry and load a development clone with 'claude --plugin-dir <clone>' for one session instead."
+done <<<"$duplicates"
+
+claude_path=$(command -v "$claude_cli" 2>/dev/null || true)
+if [ -z "$claude_path" ]; then
+	log_warning "Claude Code CLI (claude) not found on PATH - marketplaces are registered in the settings but cannot be added or their plugins installed until the Claude Code CLI is installed!"
+elif [[ $claude_path == /mnt/* ]]; then
+	log_warning "claude resolves to the Windows CLI [$claude_path], which would install into the Windows profile - install the Claude Code CLI here so the plugins are installed for this user!"
+else
+	known=$(listed name marketplace list)
+	while read -r name repository; do
+		[ -n "$name" ] || continue
+		if printf '%s\n' "$known" | grep -qxF "$name"; then
+			log_step "Marketplace [$name] already added"
+		elif [ "$check" -eq 1 ]; then
+			log_step "MISSING marketplace [$name] ($repository)"
+			failures=$((failures + 1))
+		elif "$claude_cli" plugin marketplace add "$repository" >/dev/null 2>&1; then
+			log_success "Added marketplace [$name] ($repository)"
+		else
+			log_error "claude plugin marketplace add [$repository] failed - run it by hand to see why!"
+			failures=$((failures + 1))
+		fi
+	done <<<"$marketplaces"
+
+	installed=$(listed id list)
+	while read -r name plugin; do
+		[ -n "$name" ] || continue
+		id=$plugin@$name
+		if printf '%s\n' "$installed" | grep -qxF "$id"; then
+			log_step "Plugin [$id] already installed"
+		elif [ "$check" -eq 1 ]; then
+			log_step "MISSING plugin [$id]"
+			failures=$((failures + 1))
+		elif "$claude_cli" plugin install "$id" >/dev/null 2>&1; then
+			log_success "Installed plugin [$id]"
+		else
+			log_error "claude plugin install [$id] failed - run it by hand to see why!"
+			failures=$((failures + 1))
+		fi
+	done <<<"$plugins"
+fi
+
+if [ "$check" -eq 1 ]; then
+	if [ "$failures" -eq 0 ]; then
+		log_success "AI marketplaces fully deployed!"
+	else
+		log_warning "AI marketplaces incomplete: $failures item(s) need deployment!"
+	fi
+	exit 0
+fi
+
+if [ "$failures" -eq 0 ]; then
+	log_success "AI marketplaces deployed!"
+else
+	log_error "AI marketplaces deployment finished with $failures failure(s)!"
+	exit 1
+fi

@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# Get-WorkspaceState - shows what each open workspace owns, the record Close-Workspace tears down.
+#
+# Usage: Get-WorkspaceState [WORKSPACE...] [--raw]
+#
+# Reads the ownership record Open-Workspace writes ($XDG_STATE_HOME/foundation/open-workspaces): per
+# workspace the windows (app, title, id) and terminal tabs it opened, each marked live or gone
+# depending on whether it still exists - found the way cw finds it (lib/state.sh
+# state_resolve_windows: by id, else re-resolved to the app's recreated or restarted window,
+# shown as "now ID") - so the output is exactly what `cw` would close. A workspace open twice
+# (plain, then --alongside) shows each instance under its label, "Name (alongside, desktop 6)".
+# Without a name every recorded workspace is shown. --raw prints the record lines unchanged (an
+# instance's key is NAME#N). `A,B` names two workspaces; a flag it does not know is an error.
+# Windows-style names: --workspace (-Workspace) is accepted and ignored: the names after it are
+# workspaces.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps state drivers/aerospace drivers/wezterm
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+names=()
+raw=0
+for argument in "$@"; do
+	case $argument in
+		--raw) raw=1 ;;
+		--workspace | -v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $argument" ;;
+		*) foundation_split_list names "$argument" ;;
+	esac
+done
+[ ${#names[@]} -gt 0 ] || mapfile -t names < <(state_workspaces)
+if [ ${#names[@]} -eq 0 ] || [ -z "${names[0]}" ]; then
+	log_success "No workspace is recorded as open"
+	exit 0
+fi
+
+live=''
+as_available && live=$(as_windows)
+live_panes=' '
+wt_running && live_panes=" $(wt_panes | cut -f3 | tr '\n' ' ')"
+green='' dim='' reset=''
+if log_use_color 1; then green=$'\033[32m' dim=$'\033[90m' reset=$'\033[0m'; fi
+
+for workspace in "${names[@]}"; do
+	instances=()
+	while IFS= read -r key; do [ -n "$key" ] && instances+=("$key"); done < <(state_instances "$workspace")
+	[ ${#instances[@]} -gt 0 ] || instances=("$workspace")
+	for key in "${instances[@]}"; do
+		entries=$(state_entries "$key")
+		if [ "$raw" -eq 1 ]; then
+			[ -n "$entries" ] && printf '%s\n' "$entries" | sed "s/^/$key\t/"
+			continue
+		fi
+		if [ ${#instances[@]} -gt 1 ]; then
+			log_title "$(state_instance_label "$key" "$live")"
+		elif state_is_alongside "$key"; then
+			log_title "$workspace (alongside)"
+		else
+			log_title "$workspace"
+		fi
+		[ -n "$entries" ] || {
+			log_step "(nothing recorded)"
+			continue
+		}
+		resolved=$(state_resolve_windows "$key" "$live")
+		while IFS=$'\t' read -r kind id a _ c; do
+			now=''
+			case $kind in
+				window)
+					label="window  $(printf '%-10s' "$a") $c"
+					now=$(printf '%s\n' "$resolved" | awk -F'\t' -v i="$id" '$1 == i { print $2; exit }')
+					if [ -n "$now" ]; then state=live; else state=gone; fi
+					[ "$now" = "$id" ] && now=''
+					;;
+				pane)
+					label="tab     ${a:-(untitled)}"
+					case $live_panes in *" $id "*) state=live ;; *) state=gone ;; esac
+					;;
+				*) continue ;;
+			esac
+			if [ "$state" = live ]; then
+				printf '  %s%-5s%s %s %s(%s%s)%s\n' "$green" live "$reset" "$label" "$dim" "$id" "${now:+, now $now}" "$reset"
+			else printf '  %s%-5s %s (%s)%s\n' "$dim" gone "$label" "$id" "$reset"; fi
+		done <<<"$entries"
+	done
+done

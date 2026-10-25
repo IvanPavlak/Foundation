@@ -1,0 +1,314 @@
+#!/usr/bin/env bash
+# Open-Browser - opens browser groups, one new browser window per group, its URLs as tabs.
+#
+# Usage: Open-Browser [GROUP...] [--browser TOKEN] [--private] [--force] [--alongside] [--no-menu [--instances N]] [--search QUERY...]
+#
+# GROUP is a section, nested section or named URL of Unix/config/browser-groups.conf
+# (AI, GitHub.Personal, DotfilesRepository). Without a group a menu of every group is shown, a
+# tree numbered 1, 1.2, 1.2.1 with nested groups and named URLs under their group, as on Windows;
+# an answer is an index path or a name; an empty Enter opens a plain browser window. The browser defaults to default-browser of
+# config/apps.conf and is launched from its binary so a running instance receives the URLs;
+# Safari (`launch=script`) gets a new window of the URLs through the browser scripting driver. On
+# a cold start the next group waits until the first window exists, so every group gets its own
+# window. A group that is already open is skipped, so rerunning a workspace does not duplicate
+# windows: in Safari and the Chromium browsers a window whose tabs hold every URL of the group
+# (background tabs too), in Firefox the window recorded when the group was opened. Firefox has no
+# tab list and titles a window after its active tab only, so a group opened by hand there is not
+# seen and a rerun opens it again (decided 2026-10-24: no title guess, which could skip a group).
+#
+#   --browser TOKEN   Firefox, Chrome, Brave, Edge, Safari, TorBrowser
+#   --private         open a private window; groups refuse it as on Windows (a warning, then a
+#                     normal window; Safari: always a normal one)
+#   --force           open the group even when its earlier window is still open (--override,
+#                     the Windows -Override, is the same)
+#   --alongside       an alongside workspace open: groups open as with --force, and --instances
+#                     opens N new windows instead of counting the ones already open
+#   --no-menu         no group menu: open the bare browser
+#   --instances N     with --no-menu, make sure N browser windows exist (opens only the missing);
+#                     ignored with groups (not ported: Windows padded the groups up to N windows)
+#   --search QUERY    Google search in a new window instead of a group
+#
+# `Open-Browser AI,GitHub` names two groups, and an index path (1.2) names that entry of the menu;
+# a flag it does not know is an error, never a group.
+# Windows-style names: --groups (-Groups) is accepted and ignored: the names after it are groups.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps drivers/aerospace drivers/browserscript browser state
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+# How many times (0.25 s apart) a launch waits for its new window: 80 (20 s); the suites set fewer.
+polls=${FOUNDATION_BROWSER_WINDOW_POLLS:-80}
+
+groups=()
+browser=''
+private=0
+force=0
+alongside=0
+no_menu=0
+instances=0
+search=()
+while [ $# -gt 0 ]; do
+	case $1 in
+		--browser)
+			browser=$2
+			shift
+			;;
+		--private) private=1 ;;
+		--force | --override) force=1 ;;
+		--alongside)
+			force=1
+			alongside=1
+			;;
+		--search)
+			shift
+			search=("$@")
+			break
+			;;
+		--groups) ;;
+		--instances)
+			instances=$2
+			shift
+			;;
+		--no-menu) no_menu=1 ;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1 - nothing was opened" ;;
+		*) foundation_split_list groups "$1" ;;
+	esac
+	shift
+done
+
+[ -n "$browser" ] || browser=$(app_default_browser)
+token=$(app_token "$browser") || foundation_die "apps.conf has no entry for browser [$browser]"
+app_browser_prepare "$token" || exit 1
+window_arg=$BROWSER_NEW_WINDOW_ARG
+if [ "$BROWSER_LAUNCH_MODE" = script ]; then
+	# Safari: a window of URLs through the scripting driver, which has no private window.
+	[ "$private" -eq 1 ] && log_warning "$token cannot open a private window by script - opening a normal one"
+else
+	[ "$private" -eq 1 ] && [ -n "$BROWSER_PRIVATE_ARG" ] && window_arg=$BROWSER_PRIVATE_ARG
+fi
+
+if [ ${#search[@]} -gt 0 ]; then
+	query=$(browser_url_encode "${search[*]}")
+	app_browser_launch "$window_arg" "https://www.google.com/search?q=$query"
+	log_success "Searching for [${search[*]}]!"
+	exit 0
+fi
+
+# The windows of other workspaces a workspace open leaves alone ($FOUNDATION_RUN_DIR/protected,
+# written by Open-Workspace; empty outside an open): never this open's, so they are not counted for
+# --instances or taken for an open group, as Windows skips its -ProtectedWindowHandles.
+protected=' '
+[ -n "${FOUNDATION_RUN_DIR:-}" ] && [ -r "$FOUNDATION_RUN_DIR/protected" ] && protected=" $(tr '\n' ' ' <"$FOUNDATION_RUN_DIR/protected") "
+
+# The AeroSpace ids of this browser's windows, protected ones left out.
+browser_window_ids() {
+	as_available || return 0
+	as_windows | awk -F'\t' -v t="$token" -v p="$protected" '$2 == t && !index(p, " " $1 " ") { print $1 }'
+}
+
+# --no-menu: the bare browser, no group selection. With --instances N it makes sure N windows of
+# the browser exist and opens only the missing ones (Windows' "have N windows available").
+if [ "$no_menu" -eq 1 ] && [ ${#groups[@]} -eq 0 ]; then
+	log_step "Opening $token..."
+	existing=0
+	# Alongside: the windows already open belong to another workspace, so N new ones open.
+	[ "$alongside" -eq 1 ] || existing=$(browser_window_ids | grep -c .)
+	target=$instances
+	[ "$target" -gt 0 ] 2>/dev/null || target=1
+	to_open=$((target - existing))
+	if [ "$to_open" -le 0 ]; then
+		log_warning "[$token] already has $existing/$target instance(s) open!"
+		exit 0
+	fi
+	log_debug "[Open-Browser] $existing [$token] window(s) open, opening $to_open more"
+	for ((inst = 0; inst < to_open; inst++)); do
+		app_browser_launch "$window_arg"
+		# Cold-start gate: launches fired while the first window is still starting are lost.
+		if [ "$inst" -eq 0 ] && [ "$existing" -eq 0 ] && [ "$to_open" -gt 1 ]; then
+			for _ in $(seq 1 "$polls"); do
+				sleep 0.25
+				[ "$(as_windows | awk -F'\t' -v t="$token" '$2 == t' | grep -c .)" -gt 0 ] && break
+			done
+			sleep 0.75
+		else
+			sleep 0.15
+		fi
+	done
+	log_success "$token opened! ($to_open instance(s) launched)"
+	exit 0
+fi
+
+if [ ${#groups[@]} -gt 0 ]; then
+	# An index path is that entry of the menu (1.2), as -Groups 1.2 is on Windows. Names need no
+	# menu, so a workspace open does not build it.
+	if foundation_has_number "${groups[@]}"; then
+		available=()
+		while IFS= read -r group; do available+=("$group"); done < <(browser_menu_nodes)
+		mapfile -t groups < <(foundation_resolve_tree_items "${groups[@]}" -- ${available[@]+"${available[@]}"})
+	fi
+else
+	available=()
+	while IFS= read -r group; do available+=("$group"); done < <(browser_menu_nodes)
+	selection=$(foundation_resolve_tree_selection "[Available $token groups]" "Enter group(s) by number or name, or press Enter to open default $token" 1 1 "${available[@]}") || exit 1
+	while IFS= read -r group; do [ -n "$group" ] && groups+=("$group"); done <<<"$selection"
+	if [ ${#groups[@]} -eq 0 ]; then
+		# Empty Enter: a plain window of the browser, as on Windows.
+		app_browser_launch "$window_arg"
+		log_success "$token opened!"
+		exit 0
+	fi
+fi
+
+# As on Windows, groups never open private (Tor Browser is private anyway): warn, go on normal.
+if [ "$private" -eq 1 ] && [ "$token" != TorBrowser ]; then
+	log_warning "Groups cannot be opened in private mode. Continuing with normal mode..."
+	private=0
+	window_arg=$BROWSER_NEW_WINDOW_ARG
+fi
+
+log_step "Opening $token group(s)..."
+state_file=$FOUNDATION_STATE_DIR/browser-groups
+mkdir -p "$FOUNDATION_STATE_DIR" 2>/dev/null
+
+# Window a group opened earlier, when it is still open (state line: TOKEN GROUP WINDOW-ID).
+recorded_window() {
+	local group=$1 live
+	[ -r "$state_file" ] || return 1
+	live=" $(browser_window_ids | tr '\n' ' ') "
+	awk -F'\t' -v t="$token" -v g="$(foundation_lower "$group")" '$1 == t && tolower($2) == g { print $3 }' "$state_file" |
+		while read -r id; do case $live in *" $id "*)
+			printf '%s' "$id"
+			break
+			;;
+		esac done
+}
+
+# Where the group GROUP with URLS is already open, or nothing. A scriptable browser (Safari, the
+# Chromium family) is asked for its tabs: the group is open in a window whose tabs hold every one of
+# its URLs, background tabs included, a tab counting when the configured URL (scheme, www. and a
+# trailing slash dropped, any case) begins its address, so a redirect deeper into the site still
+# matches - the Test-BrowserGroupAlreadyOpen of Windows, which can only score window titles. Any
+# other browser, or a scriptable one that may not be scripted, falls back to the window recorded
+# when the group was opened. A protected window (see above) never counts: the scripting dictionary
+# shares no window id with AeroSpace, so a scripted window is taken for a protected one when one of
+# its tab titles begins a protected window's title and none begins the title of another window of
+# the browser (a window both could be stays counted, so a rerun never duplicates a group).
+# Usage: open_group GROUP URL...
+open_group() {
+	local group=$1 tabs window
+	shift
+	if bs_scriptable "$token" && tabs=$(bs_tabs "$token"); then
+		window=$(
+			{
+				printf '%s\n' "$@" | sed 's/^/U\t/'
+				printf '%s\n' "$tabs" | sed 's/^/T\t/'
+				[ "$protected" = ' ' ] || as_windows | awk -F'\t' -v t="$token" -v p="$protected" '
+					$2 == t { print (index(p, " " $1 " ") ? "P" : "Q") "\t" $7 }'
+			} | awk -F'\t' '
+				function norm(u) { u = tolower(u); sub(/^[a-z]+:\/\//, "", u); sub(/^www\./, "", u); sub(/\/+$/, "", u); return u }
+				function begins(list, count, text, i) { for (i = 1; i <= count; i++) if (index(list[i], text) == 1) return 1; return 0 }
+				$1 == "U" && $2 != "" { want[++n] = norm($2); next }
+				$1 == "P" && $2 != "" { prot[++np] = tolower($2); next }
+				$1 == "Q" && $2 != "" { free[++nq] = tolower($2); next }
+				$1 == "T" && $3 != "" { tab[++t] = norm($3); win[t] = $2; title[t] = tolower($4); wins[$2] = 1 }
+				END {
+					if (n == 0) exit 1
+					for (w in wins) {
+						if (np > 0) {
+							mine = 0; other = 0
+							for (k = 1; k <= t; k++) {
+								if (win[k] != w || title[k] == "") continue
+								if (begins(prot, np, title[k])) other = 1
+								if (begins(free, nq, title[k])) mine = 1
+							}
+							if (other && !mine) continue
+						}
+						hit = 0
+						for (i = 1; i <= n; i++) {
+							for (k = 1; k <= t; k++) if (win[k] == w && index(tab[k], want[i]) == 1) { hit++; break }
+						}
+						if (hit == n) { print w; exit 0 }
+					}
+					exit 1
+				}'
+		) && {
+			printf '%s window %s' "$token" "$window"
+			return 0
+		}
+		return 1
+	fi
+	window=$(recorded_window "$group") && [ -n "$window" ] && printf 'window %s' "$window"
+}
+
+record_window() {
+	local group=$1 id=$2 tmp
+	tmp=$(mktemp "$FOUNDATION_STATE_DIR/.browser-groups.XXXXXX") || return 0
+	[ -r "$state_file" ] && awk -F'\t' -v t="$token" -v g="$(foundation_lower "$group")" '!($1 == t && tolower($2) == g)' "$state_file" >"$tmp"
+	printf '%s\t%s\t%s\n' "$token" "$group" "$id" >>"$tmp"
+	mv "$tmp" "$state_file"
+}
+
+status=0
+for group in "${groups[@]}"; do
+	result=$(browser_group_urls "$group") || {
+		log_error "Error: Browser group [$group] not found in browser-groups.conf!"
+		status=1
+		continue
+	}
+	display=$(printf '%s\n' "$result" | head -1)
+	urls=()
+	while IFS= read -r url; do [ -n "$url" ] && urls+=("$url"); done < <(printf '%s\n' "$result" | tail -n +2)
+	if [ "$force" -eq 0 ] && existing=$(open_group "$display" ${urls[@]+"${urls[@]}"}) && [ -n "$existing" ]; then
+		log_step " [$display] is already open ($existing) - skipped"
+		continue
+	fi
+	if [ ${#urls[@]} -eq 0 ]; then
+		log_warning "Warning: No URLs found for selection [$display]"
+		continue
+	fi
+	before=" $(browser_window_ids | tr '\n' ' ') "
+	launched=0
+	if [ ${#urls[@]} -eq 1 ] || [ "$private" -eq 1 ]; then
+		app_browser_launch "$window_arg" "${urls[@]}" || launched=1
+	else
+		app_browser_launch "${urls[@]}" || launched=1
+	fi
+	# A refused or failed launch opens no window to wait for.
+	if [ "$launched" -ne 0 ]; then
+		log_error "Could not open [$display] in $token"
+		status=1
+		continue
+	fi
+	log_step " Opened [$display] (${#urls[@]} URL(s))"
+	# Wait for this group's window before the next group: on a cold start the next group's URLs
+	# would otherwise land as tabs of this window, and the new id is what a rerun checks.
+	new_id=''
+	for _ in $(seq 1 "$polls"); do
+		sleep 0.25
+		for id in $(browser_window_ids); do
+			case $before in *" $id "*) ;; *)
+				new_id=$id
+				break
+				;;
+			esac
+		done
+		[ -n "$new_id" ] && break
+	done
+	if [ -n "$new_id" ]; then
+		record_window "$display" "$new_id"
+		log_debug "[Open-Browser] [$display] => window $new_id"
+	else
+		log_debug "[Open-Browser] no new window seen for [$display]"
+	fi
+	sleep 0.3
+done
+[ "$status" -eq 0 ] && log_success "$token groups opened!"
+exit $status

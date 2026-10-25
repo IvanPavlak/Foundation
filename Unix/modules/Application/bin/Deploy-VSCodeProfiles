@@ -1,0 +1,255 @@
+#!/usr/bin/env bash
+# Deploy-VSCodeProfiles - links the repository's VS Code profiles into VS Code and installs their extensions.
+#
+# Usage: Deploy-VSCodeProfiles [NAME...] [--prune] [--check]
+#
+# The Unix twin of the Windows Deploy-VSCodeProfiles. Profiles live in the repository as one
+# folder per `profile` line of Unix/config/vscode-profiles.conf under its `root`
+# (VSCode/Profiles): settings.json, keybindings.json (keybindings.macos.json wins on the Mac),
+# tasks.json, snippets/ and extensions.txt. The `deploy` line for this machine type names the
+# entries to deploy; NAME deploys those entries instead.
+#
+# First, every local extension under `extensions` (VSCode/Extensions: one unpackaged extension
+# folder with a package.json each, such as a colour theme of your own) is symlinked into
+# ~/.vscode/extensions as <publisher>.<name>-<version>, also when no profile is selected, so VS
+# Code loads it straight from the repository. A correct link is left alone, a link of an older
+# version of the same extension is removed, and a real folder in the way is backed up into
+# Backups/Unix/SymbolicLinks first. Local extensions are never installed from the Marketplace and
+# never pruned, whether extensions.txt lists them or not: an uninstall through the link would
+# delete the repository copy. Then, for each entry:
+#
+#   1. The VS Code profile it deploys onto (its target, the entry name by default) is located:
+#      Default is VS Code's user data folder; any other profile is registered in VS Code's
+#      profile list when VS Code does not know it yet, which is refused while VS Code runs.
+#   2. Every file the folder carries is symlinked into the profile. A real file it replaces is
+#      copied into Backups/Unix/SymbolicLinks first; a link already pointing at the repository
+#      is left as it is, and a file the folder does not carry is left alone.
+#   3. Every extension extensions.txt lists that the profile lacks is installed with
+#      `code --install-extension ID --profile TARGET`; a pinned one (id@version) installed at
+#      another version is reinstalled at the pin. With `settings-sync off` (the default) installs
+#      carry --do-not-sync. Extensions the list does not name stay installed unless --prune or
+#      `prune on` uninstalls them.
+#
+# A name not in the catalogue is an error; an entry without a folder yet is skipped with a
+# warning; a missing `code` command skips the extensions with a warning. Idempotent. --check
+# reports what a run would change and changes nothing. Bootstrap runs it as the opt-in
+# VSCodeProfiles step. `A,B` names two entries.
+# Windows-style names: --name (-Name) is accepted and ignored: the names after it are entries.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config backup vscode
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+prune=0
+check=0
+names=()
+for argument in "$@"; do
+	case $argument in
+		--prune) prune=1 ;;
+		--check) check=1 ;;
+		--name | -v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $argument" ;;
+		*) foundation_split_list names "$argument" ;;
+	esac
+done
+vscode_flag prune && prune=1
+
+log_title "Deploying VS Code Profiles"
+
+failures=0
+pending=0
+
+# Links REPO at LIVE, backing up a real file first. Usage: link_item PROFILE ITEM REPO LIVE
+link_item() {
+	local profile=$1 item=$2 repo=$3 live=$4
+	if [ -e "$live" ] || [ -L "$live" ]; then
+		if [ -L "$live" ]; then
+			rm -f "$live" || return 1
+		else
+			# Into the backup sink first; a file that could not be saved is not replaced.
+			backup_item SymbolicLinks "VSCodeProfiles.$profile.$item" "$live" >/dev/null || return 1
+			rm -rf "$live" || return 1
+			log_step "moved   existing $item into Backups/Unix/SymbolicLinks"
+		fi
+	fi
+	mkdir -p "$(dirname "$live")" && ln -s "$repo" "$live" && log_step "linked  $live"
+}
+
+# Install-VSCodeLocalExtensions: every local extension linked into VS Code's extensions folder.
+local_ids=' '
+extensions_dir=$(vscode_extensions_dir)
+while IFS=$'\t' read -r id _ link_name extension_source; do
+	[ -n "$id" ] || continue
+	local_ids="$local_ids$id "
+	link=$extensions_dir/$link_name
+	# A link under an older name of the same extension (its package.json version was bumped) that
+	# points at the same folder goes, so VS Code never loads it twice. Only a link, never a folder.
+	for stale in "$extensions_dir/$id"-*; do
+		[ -L "$stale" ] && [ "$stale" != "$link" ] && [ "$(readlink "$stale")" = "$extension_source" ] || continue
+		if [ "$check" -eq 1 ]; then
+			log_step "STALE   $stale (would be removed)"
+			pending=$((pending + 1))
+			continue
+		fi
+		rm -f "$stale" && log_warning "Removed the stale link [${stale##*/}] of local extension [$id]"
+	done
+	if [ -L "$link" ] && [ "$(readlink "$link")" = "$extension_source" ]; then
+		log_debug "Local extension [$id] already links to [$extension_source]"
+		continue
+	fi
+	if [ "$check" -eq 1 ]; then
+		log_step "MISSING $link"
+		pending=$((pending + 1))
+		continue
+	fi
+	link_item Extensions "$id" "$extension_source" "$link" || {
+		log_error "Could not link local extension [$id] => [$link]"
+		failures=$((failures + 1))
+	}
+done < <(vscode_local_extensions "$(vscode_local_root)")
+
+if [ ${#names[@]} -eq 0 ]; then
+	while IFS= read -r name; do [ -n "$name" ] && names+=("$name"); done < <(vscode_selected)
+fi
+if [ ${#names[@]} -eq 0 ]; then
+	log_warning "No VS Code profiles selected for machine type [$(foundation_machine_type)] in vscode-profiles.conf - nothing to deploy!"
+	[ "$failures" -eq 0 ] || exit 1
+	exit 0
+fi
+
+root=$(vscode_root)
+user_data=$(vscode_user_data)
+cli=$(vscode_cli) || cli=''
+sync_arguments=()
+vscode_flag settings-sync || sync_arguments=(--do-not-sync)
+
+for requested in "${names[@]}"; do
+	entry=$(vscode_entry "$requested") || {
+		log_error "VS Code profile [$requested] is not a profile line of vscode-profiles.conf - skipped!"
+		failures=$((failures + 1))
+		continue
+	}
+	IFS=$'\t' read -r name target <<<"$entry"
+	source=$root/$name
+	if [ ! -d "$source" ]; then
+		log_warning "VS Code profile [$name] has no folder yet [$source] - skipped (capture one with Export-VSCodeProfile $name)!"
+		continue
+	fi
+
+	log_step "[$name] => VS Code profile [$target]"
+
+	register=1
+	[ "$check" -eq 1 ] && register=0
+	location=$(vscode_profile_location "$target" "$user_data" "$register") || location=''
+	if [ -z "$location" ]; then
+		if [ "$check" -eq 1 ]; then
+			log_step "MISSING VS Code profile [$target] (would be registered)"
+			pending=$((pending + 1))
+			continue
+		fi
+		log_error "VS Code profile [$target] could not be located or registered - [$name] skipped!"
+		failures=$((failures + 1))
+		continue
+	fi
+
+	while IFS=$'\t' read -r item repo live _; do
+		[ -e "$repo" ] || continue
+		if [ -L "$live" ] && [ "$(readlink "$live")" = "$repo" ]; then
+			log_debug "[$live] already links to [$repo]"
+			continue
+		fi
+		if [ "$check" -eq 1 ]; then
+			log_step "MISSING $live"
+			pending=$((pending + 1))
+			continue
+		fi
+		link_item "$name" "$item" "$repo" "$live" || {
+			log_error "Could not link [$live] => [$repo]"
+			failures=$((failures + 1))
+		}
+	done < <(vscode_items "$source" "$location")
+
+	list=$source/extensions.txt
+	if [ ! -f "$list" ]; then
+		log_debug "VS Code profile [$name] has no extensions.txt - no extensions to install"
+		continue
+	fi
+	if [ -z "$cli" ]; then
+		log_warning "VS Code command line (code) not found - the extensions of [$name] were not installed; install VS Code and run Deploy-VSCodeProfiles again!"
+		continue
+	fi
+	installed=$(vscode_installed "$cli" "$target") || {
+		log_error "Could not list the extensions of VS Code profile [$target] - [$name] extensions skipped!"
+		failures=$((failures + 1))
+		continue
+	}
+
+	profile_arguments=()
+	foundation_ieq "$target" Default || profile_arguments=(--profile "$target")
+	wanted_ids=' '
+	while IFS=$'\t' read -r id version; do
+		wanted_ids="$wanted_ids$(foundation_lower "$id") "
+		case $local_ids in *" $(foundation_lower "$id") "*)
+			log_debug "Extension [$id] is a local extension - linked, not installed"
+			continue
+			;;
+		esac
+		is_installed=0
+		if installed_version=$(printf '%s\n' "$installed" | awk -F'\t' -v k="$(foundation_lower "$id")" 'tolower($1) == k { print $2; found = 1; exit } END { exit !found }'); then
+			is_installed=1
+		fi
+		if [ "$is_installed" -eq 1 ] && { [ -z "$version" ] || [ "$installed_version" = "$version" ]; }; then
+			log_debug "Extension [$id] already installed in [$target]"
+			continue
+		fi
+		spec=$id
+		[ -n "$version" ] && spec=$id@$version
+		if [ "$check" -eq 1 ]; then
+			log_step "MISSING extension $spec in [$target]"
+			pending=$((pending + 1))
+			continue
+		fi
+		arguments=(--install-extension "$spec" ${profile_arguments[@]+"${profile_arguments[@]}"} ${sync_arguments[@]+"${sync_arguments[@]}"})
+		[ "$is_installed" -eq 1 ] && arguments+=(--force)
+		if "$cli" "${arguments[@]}" </dev/null >/dev/null 2>&1; then
+			log_success "Installed extension [$spec] in [$target]"
+		else
+			log_error "code --install-extension [$spec] failed - run it by hand to see why!"
+			failures=$((failures + 1))
+		fi
+	done < <(vscode_extension_list "$list")
+
+	[ "$prune" -eq 1 ] || continue
+	while IFS=$'\t' read -r id _; do
+		[ -n "$id" ] || continue
+		case $wanted_ids in *" $(foundation_lower "$id") "*) continue ;; esac
+		# Never uninstall a linked local extension: VS Code would delete the repository copy.
+		case $local_ids in *" $(foundation_lower "$id") "*) continue ;; esac
+		if [ "$check" -eq 1 ]; then
+			log_step "EXTRA   extension $id in [$target] (would be uninstalled)"
+			pending=$((pending + 1))
+			continue
+		fi
+		if "$cli" --uninstall-extension "$id" ${profile_arguments[@]+"${profile_arguments[@]}"} </dev/null >/dev/null 2>&1; then
+			log_success "Uninstalled extension [$id] from [$target] (not in extensions.txt)"
+		else
+			log_error "code --uninstall-extension [$id] failed - run it by hand to see why!"
+			failures=$((failures + 1))
+		fi
+	done <<<"$installed"
+done
+
+if [ "$check" -eq 1 ]; then
+	[ "$pending" -eq 0 ] && log_success "VS Code profiles deployed!" || log_warning "$pending item(s) need deployment - run Deploy-VSCodeProfiles"
+	exit 0
+fi
+[ "$failures" -eq 0 ] || exit 1
+log_success "VS Code profiles deployed!"

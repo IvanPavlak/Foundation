@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# Focus-TerminalTab - brings the terminal window this shell runs in to the front.
+#
+# Usage: Focus-TerminalTab [--quiet] [--target-title TITLE] [-v]
+#
+# Activates this shell's WezTerm pane and focuses its window through AeroSpace (which also
+# switches to the workspace holding it). The window is the one whose title WezTerm built from that
+# pane: "[i/n] TITLE" with the tab's position and the window's tab count (no prefix for a single
+# tab, "[Z] " while zoomed); when several windows fit, the focused one wins. Outside a WezTerm pane
+# (WEZTERM_PANE inherited by an app started from WezTerm does not count) it falls back to the first
+# terminal window. --target-title TITLE focuses the tab titled TITLE (case-insensitive, the tab
+# title Open-ProjectTerminals sets, else the pane title) in whichever window holds it instead of
+# this shell's tab; no such tab is an error (exit 1). A flag it does not know is an error.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps drivers/aerospace drivers/wezterm
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+quiet=0
+target_title=''
+while [ $# -gt 0 ]; do
+	case $1 in
+		--quiet) quiet=1 ;;
+		--target-title)
+			[ -n "${2:-}" ] || foundation_die "--target-title needs a TITLE"
+			target_title=$2
+			shift
+			;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument => $1" ;;
+	esac
+	shift
+done
+
+# The pane to bring forward: the tab titled --target-title, else the one this shell runs in.
+pane=''
+if [ -n "$target_title" ]; then
+	pane=$(wt_panes | awk -F'\t' -v t="$(foundation_lower "$target_title")" '
+		tolower($5) == t && !tab { tab = $3 }
+		tolower($6) == t && !title { title = $3 }
+		END { if (tab != "") print tab; else if (title != "") print title; else exit 1 }') || {
+		[ "$quiet" -eq 1 ] || log_error "No terminal tab titled [$target_title]"
+		exit 1
+	}
+else
+	pane=$(wt_own_pane) || pane=''
+fi
+
+windows=$(as_windows | while IFS=$'\t' read -r id token rest; do app_matches Terminal "$token" && printf '%s\n' "$id"; done)
+if [ -z "$windows" ]; then
+	[ "$quiet" -eq 1 ] || log_warning "No terminal window found to focus"
+	exit 1
+fi
+target=$(printf '%s\n' "$windows" | head -1)
+if [ -n "$pane" ]; then
+	wt_activate_pane "$pane"
+	# The title WezTerm gives the window while this pane's tab is the active one.
+	IFS=$'\t' read -r expected bare < <(wt_panes | awk -F'\t' -v p="$pane" '
+		{ win[NR] = $1; tab[NR] = $2 }
+		$3 == p { w = $1; t = $2; title = $6 }
+		END {
+			n = 0
+			for (i = 1; i <= NR; i++) if (win[i] == w && !seen[tab[i]]++) { n++; if (tab[i] == t) idx = n }
+			prefix = (n > 1) ? "[" idx "/" n "] " : ""
+			printf "%s\t%s\n", prefix title, title
+		}')
+	ids=" $(printf '%s\n' "$windows" | tr '\n' ' ')"
+	focused=$(as_focused_window 2>/dev/null)
+	match=''
+	# The window title follows the activation a moment later; exact matches are retried briefly
+	# before falling back to the bare pane title.
+	for attempt in 1 2 3 4; do
+		candidates=$(as_windows | awk -F'\t' -v ids="$ids" -v e="$expected" -v b="$bare" -v loose="$((attempt == 4))" '
+			!index(ids, " " $1 " ") { next }
+			{ t = $7; sub(/^\[Z\] /, "", t) }
+			t == e { print $1; next }
+			loose == 1 { sub(/^\[[0-9]+\/[0-9]+\] /, "", t); if (t == b) print $1 }')
+		if [ -n "$candidates" ]; then
+			match=$(printf '%s\n' "$candidates" | head -1)
+			printf '%s\n' "$candidates" | grep -qxF -- "$focused" && match=$focused
+			break
+		fi
+		[ "$attempt" -lt 4 ] && sleep 0.15
+	done
+	[ -n "$match" ] && target=$match
+fi
+as_focus_window "$target" || exit 1
+[ "$quiet" -eq 1 ] || log_success "Terminal focused!"

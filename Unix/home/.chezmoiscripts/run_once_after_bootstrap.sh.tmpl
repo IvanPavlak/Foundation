@@ -1,0 +1,8 @@
+{{- if .bootstrapOnFirstApply -}}
+#!/bin/sh
+# The first apply on a Mac hands over to Bootstrap --with-initial-setup. The rendered text is
+# constant on a machine, so chezmoi runs it once; `chezmoi state delete-bucket
+# --bucket=scriptState` re-arms it. bootstrapOnFirstApply false (asked by chezmoi init) renders
+# nothing, and chezmoi skips an empty script.
+exec "{{ .chezmoi.workingTree }}/Unix/modules/Bootstrap/bin/bootstrap-first-run"
+{{ end -}}

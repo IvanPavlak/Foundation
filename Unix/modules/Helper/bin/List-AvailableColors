@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# List-AvailableColors - prints the terminal's colour palette.
+#
+# Usage: List-AvailableColors
+#
+# The Unix twin of the Windows List-AvailableColors (the ConsoleColor names). The 16 ANSI colours,
+# each name printed in its own colour with its SGR code (what `printf '\033[31m'` and the log_*
+# colours use), then the 256-colour palette as numbered swatches (`\033[38;5;Nm`). The terminal
+# theme decides what each one looks like.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+names=(Black Red Green Yellow Blue Magenta Cyan White)
+log_title "Available Colors"
+for bright in 0 1; do
+	for index in "${!names[@]}"; do
+		code=$((30 + index + bright * 60))
+		label=${names[index]}
+		[ "$bright" -eq 1 ] && label="Bright$label"
+		printf '  \033[%sm%-14s\033[0m %s\n' "$code" "$label" "$code"
+	done
+done
+
+log_title "256-Color Palette"
+for number in $(seq 0 255); do
+	printf '\033[48;5;%sm  \033[0m%4s ' "$number" "$number"
+	# 16 system colours, then rows of six (the 6x6x6 cube), then the 24 greys.
+	if [ "$number" -eq 15 ] || { [ "$number" -gt 15 ] && [ $(((number - 15) % 6)) -eq 0 ]; }; then
+		printf '\n'
+	fi
+done

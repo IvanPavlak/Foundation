@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# Set-PowerSettings - applies the sleep and power settings of Unix/config/power.conf with pmset
+# (the Unix counterpart of the PowerPlan and PowerButtonActions steps).
+#
+# Usage: Set-PowerSettings [--list] [--dry-run]
+#
+# power.conf has three sections of `KEY VALUE` lines: [AC] (on the charger, pmset -c), [Battery]
+# (pmset -b) and [All] (every power source, pmset -a); a line may start with @TYPE to apply on one
+# machine type only. Each key is checked against `pmset -g cap`: a key this Mac does not support
+# is skipped with a warning, and [Battery] is skipped on a Mac without a battery. A key that
+# already has its value is left alone, so the administrator password is asked for only when
+# something changes. --list shows every key with its current and configured value; --dry-run
+# prints the pmset commands and changes nothing.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+dry=0
+list_only=0
+for argument in "$@"; do
+	case $argument in
+		--dry-run) dry=1 ;;
+		--list) list_only=1 ;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument [$argument] - usage: Set-PowerSettings [--list] [--dry-run]" ;;
+	esac
+done
+
+command -v pmset >/dev/null 2>&1 || foundation_die "pmset is not available (macOS only)"
+config=$(conf_path power.conf) || foundation_die "Missing Unix/config/power.conf"
+
+# pmset prints its sources as "AC Power" and "Battery Power"; a section maps to one or both.
+# `pmset -g custom` lists every source the Mac has; `pmset -g cap` only the one it runs on now,
+# so the sources come from the first and the supported keys from the second.
+cap=$(pmset -g cap 2>/dev/null)
+custom=$(pmset -g custom 2>/dev/null)
+sources=()
+grep -qx 'AC Power:' <<<"$custom" && sources+=("AC Power")
+grep -qx 'Battery Power:' <<<"$custom" && sources+=("Battery Power")
+[ ${#sources[@]} -gt 0 ] || foundation_die "pmset reported no power source"
+
+# Does this Mac support KEY? Usage: supports KEY
+supports() {
+	awk -v k="$1" '/^Capabilities for / { next } $1 == k { found = 1 } END { exit !found }' <<<"$cap"
+}
+
+# Current value of KEY on SOURCE (empty when not reported). Usage: current SOURCE KEY
+current() {
+	awk -v s="$1:" -v k="$2" '
+		/^[^ ].*:$/ { inside = ($0 == s); next }
+		inside && $1 == k && NF == 2 { print $2; exit }
+	' <<<"$custom"
+}
+
+has_source() {
+	local source
+	for source in "${sources[@]}"; do [ "$source" = "$1" ] && return 0; done
+	return 1
+}
+
+failures=0
+changes=0
+machine=$(foundation_machine_type)
+log_title "Set-PowerSettings ($machine)"
+
+for section in AC Battery All; do
+	case $section in
+		AC)
+			flag=-c
+			targets=("AC Power")
+			;;
+		Battery)
+			flag=-b
+			targets=("Battery Power")
+			;;
+		All)
+			flag=-a
+			targets=("${sources[@]}")
+			;;
+	esac
+	lines=()
+	while IFS= read -r line; do [ -n "$line" ] && lines+=("$line"); done < <(conf_section "$config" "$section" 2>/dev/null)
+	[ ${#lines[@]} -gt 0 ] || continue
+	if [ "$section" != All ] && ! has_source "${targets[0]}"; then
+		log_step "$section skipped (this Mac has no ${targets[0]})"
+		continue
+	fi
+	log_step "$section"
+	pairs=()
+	for line in "${lines[@]}"; do
+		read -r key value _ <<<"$line"
+		if [ -z "$value" ]; then
+			log_warning "No value for [$key] in [$section], skipped"
+			continue
+		fi
+		supported=0
+		pending=0
+		for target in "${targets[@]}"; do
+			has_source "$target" || continue
+			supports "$key" || continue
+			supported=1
+			[ "$(current "$target" "$key")" = "$value" ] || pending=1
+		done
+		if [ "$supported" -eq 0 ]; then
+			log_warning "This Mac does not support [$key] in [$section], skipped"
+			continue
+		fi
+		if [ "$list_only" -eq 1 ]; then
+			now=''
+			for target in "${targets[@]}"; do
+				has_source "$target" && now="$now ${target% Power}=$(current "$target" "$key")"
+			done
+			printf '  %-16s %-6s now:%s\n' "$key" "$value" "$now"
+			continue
+		fi
+		if [ "$pending" -eq 0 ]; then
+			log_debug "[Set-PowerSettings] $section $key is already $value"
+			continue
+		fi
+		pairs+=("$key" "$value")
+	done
+	[ ${#pairs[@]} -gt 0 ] || continue
+	changes=$((changes + ${#pairs[@]} / 2))
+	if [ "$dry" -eq 1 ]; then
+		printf '  sudo pmset %s %s\n' "$flag" "${pairs[*]}"
+	else
+		sudo pmset "$flag" "${pairs[@]}" || {
+			log_warning "failed: pmset $flag ${pairs[*]}"
+			failures=$((failures + 1))
+		}
+	fi
+done
+
+[ "$list_only" -eq 1 ] && exit 0
+if [ "$changes" -eq 0 ]; then
+	log_success "Power settings already match power.conf!"
+elif [ "$dry" -eq 1 ]; then
+	:
+elif [ "$failures" -eq 0 ]; then
+	log_success "Power settings applied!"
+else
+	log_error "Power settings applied with $failures failure(s)"
+	exit 1
+fi

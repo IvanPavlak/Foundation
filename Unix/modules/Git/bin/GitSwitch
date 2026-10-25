@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# GitSwitch - switches to BRANCH, or to master/main when none is given. Alias: gsw
+#
+# Usage: GitSwitch [BRANCH | --branch-name BRANCH]
+#
+# BRANCH may also be given as --branch-name BRANCH (the Windows -BranchName); a flag it does not
+# know is an error, never a branch name. Only local branches count, as on Windows: a branch that
+# exists only on origin is refused (plain git switch BRANCH creates its tracking branch).
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+branch=''
+while [ $# -gt 0 ]; do
+	case $1 in
+		--branch-name | -v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1" ;;
+		*)
+			[ -z "$branch" ] || foundation_die "One branch at a time - got [$branch] and [$1]"
+			branch=$1
+			;;
+	esac
+	shift
+done
+
+# Local branches only, as the Windows BranchExists: a branch that exists only on origin is
+# refused, never created as a tracking branch.
+branch_exists() {
+	git show-ref --verify --quiet "refs/heads/$1"
+}
+if [ -z "$branch" ]; then
+	if branch_exists master; then exec git switch master; fi
+	if branch_exists main; then exec git switch main; fi
+	foundation_die "Neither 'master' nor 'main' branch exists in this repository!"
+fi
+branch_exists "$branch" || foundation_die "Branch '$branch' does not exist!"
+exec git switch "$branch"

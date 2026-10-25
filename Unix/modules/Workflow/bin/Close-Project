@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# Close-Project - closes what Open-Project opened for a project, leaving workspace apps running.
+#
+# Usage: Close-Project [PROJECT...]
+#
+# For each project: the VS Code windows of its `Open-VSCode` folders (the folder name a whole
+# segment of the window title, so a myapp-ui window survives closing MyApp), its WezTerm tabs
+# (Close-ProjectTerminals) and its browser tabs: those whose title or URL names the project or,
+# for a project with a Swagger entry, shows "Swagger UI" or, when that entry's URL is on this
+# machine (localhost, 127.0.0.1), the failed-load page (`problem-page-title` of window.conf,
+# "Problem loading page" without a line), as on Windows. Safari and the Chromium browsers close
+# just those tabs (the browser scripting driver); Firefox, which cannot be scripted, titles a
+# window after its active tab, so a matching window closes as a whole, as does a scriptable
+# browser the terminal may not control (Privacy & Security > Automation). The tab
+# this shell runs in is never closed, and focus then returns to the window the command was typed
+# in (closing windows and tabs moves AeroSpace's focus to whatever comes next). Without a project
+# a menu is shown. `Close-Project A,B` closes both, and a number names that entry of the menu; a
+# flag it does not know is an error.
+# Windows-style names: --project (-Project) is accepted and ignored: the names after it are
+# projects.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps drivers/aerospace drivers/browserscript project browser
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+projects=()
+for argument in "$@"; do
+	case $argument in
+		--project | -v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $argument - nothing was closed" ;;
+		*) foundation_split_list projects "$argument" ;;
+	esac
+done
+all=()
+while IFS= read -r name; do all+=("$name"); done < <(project_names)
+if [ ${#projects[@]} -gt 0 ]; then
+	# A number is that entry of the menu, as -Project 2 is on Windows.
+	mapfile -t projects < <(foundation_resolve_items "${projects[@]}" -- ${all[@]+"${all[@]}"})
+else
+	selection=$(foundation_resolve_selection "[Available projects to close]" "Enter project(s) to close or press Enter to cancel" 1 1 "${all[@]}") || exit 1
+	while IFS= read -r name; do [ -n "$name" ] && projects+=("$name"); done <<<"$selection"
+	[ ${#projects[@]} -gt 0 ] || exit 0
+fi
+
+start_window=$(as_focused_window 2>/dev/null)
+status=0
+folders_file=$(conf_path vscode-folders.conf) || folders_file=''
+for project in "${projects[@]}"; do
+	canonical=$(project_canonical "$project") || {
+		log_error "Project [$project] not found in projects.conf!"
+		status=1
+		continue
+	}
+	log_title "Closing $canonical Project"
+
+	# VS Code folders named by the project's Open-VSCode actions.
+	leaves=()
+	while read -r action folder; do
+		[ "$action" = "Open-VSCode" ] && [ -n "$folder" ] && [ -n "$folders_file" ] || continue
+		path=$(conf_lines "$folders_file" | awk -v n="$(foundation_lower "$folder")" 'tolower($1) == n { sub(/^[^[:space:]]+[[:space:]]+/, ""); print; exit }')
+		[ -n "$path" ] && leaves+=("$(basename "$(foundation_expand_path "$path")")")
+	done < <(project_lines "$canonical" action)
+
+	# A Swagger entry adds "Swagger UI" and, when its URL is on this machine (localhost or
+	# 127.0.0.1, as Get-SwaggerCloseTitlePatterns), the failed-load page of window.conf.
+	swagger=0
+	problem=''
+	if entry=$(browser_swagger_entry "$canonical" 2>/dev/null); then
+		swagger=1
+		if browser_url_is_localhost "${entry#*$'\t'}"; then
+			file=$(conf_path window.conf) && problem=$(conf_value "$file" problem-page-title 2>/dev/null) || problem=''
+			problem=${problem:-Problem loading page}
+		fi
+	fi
+	closed=0
+	# Close-BrowserTabsByPattern: in Safari and the Chromium browsers only the tabs whose title or
+	# URL names the project (or shows the Swagger page) close; a browser that may not be scripted
+	# keeps the window rule below, as Firefox does.
+	needles=("$canonical")
+	[ "$swagger" -eq 1 ] && needles+=("Swagger UI")
+	[ -n "$problem" ] && needles+=("$problem")
+	tabbed=' '
+	tabs=0
+	for token in $(app_role_members Browser); do
+		bs_scriptable "$token" || continue
+		bundle=$(app_bundle "$token") || continue
+		[ -n "$(app_pids "$bundle")" ] || continue
+		count=$(bs_close_tabs "$token" "${needles[@]}") || continue
+		tabbed="$tabbed$token "
+		tabs=$((tabs + count))
+		log_debug "[Close-Project] closed $count $token tab(s)"
+	done
+	while IFS=$'\t' read -r id token _ _ _ name title; do
+		hit=0
+		if [ "$token" = "Code" ]; then
+			[ ${#leaves[@]} -gt 0 ] && foundation_title_has_segment "$title" "${leaves[@]}" && hit=1
+		elif app_matches Browser "$token" && [[ $tabbed != *" $token "* ]]; then
+			case $(foundation_lower "$title") in *"$(foundation_lower "$canonical")"*) hit=1 ;; esac
+			if [ "$swagger" -eq 1 ]; then
+				case $(foundation_lower "$title") in *"swagger ui"*) hit=1 ;; esac
+			fi
+			if [ -n "$problem" ]; then
+				case $(foundation_lower "$title") in *"$(foundation_lower "$problem")"*) hit=1 ;; esac
+			fi
+		fi
+		[ "$hit" -eq 1 ] || continue
+		as_close_window "$id" && closed=$((closed + 1))
+		log_debug "[Close-Project] closed [$token] '$title'"
+	done < <(as_windows)
+	log_step "Closed $closed window(s)$([ "$tabs" -gt 0 ] && printf ' and %s browser tab(s)' "$tabs")"
+	foundation_run Close-ProjectTerminals "$canonical" </dev/null || status=1
+done
+
+# Back to where the command was typed: that window when it is still open, else this shell's own
+# terminal window.
+if [ -n "$start_window" ] && as_windows | cut -f1 | grep -qxF -- "$start_window"; then
+	as_focus_window "$start_window"
+else
+	foundation_run Focus-TerminalTab --quiet </dev/null
+fi
+exit "$status"

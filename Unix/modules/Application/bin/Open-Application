@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Open-Application - launches an application from Unix/config/apps.conf unless it already has a
+# window. The generic launcher behind every `Open-<App>` workspace action without a dedicated
+# command (Open-WhatsApp, Open-Outlook, Open-DBeaver, ...).
+#
+# Usage: Open-Application TOKEN [ARGUMENT...] | --list
+#
+# At the prompt `Open-<TOKEN>` runs it too (Open-Slack is Open-Application Slack), as the Windows
+# Open-<App> functions do: the shell rc defines an alias per apps.conf token (so zsh completes
+# them) and its command-not-found handler catches a token added since the shell started; a token
+# with a command of its own (Open-Obsidian, Open-VSCode) keeps that command. --list prints every
+# apps.conf token, one per line.
+# ARGUMENTs are handed to the application (open -b BUNDLE --args ...). "Already has a window" is
+# what AeroSpace lists: without AeroSpace running there is no window check and the app is always
+# opened, which brings a running instance forward rather than starting a second one.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps drivers/aerospace
+
+foundation_common_flags "$@"
+if [ "${1:-}" = --list ]; then
+	apps_list | cut -f1
+	exit 0
+fi
+[ $# -ge 1 ] || foundation_die "Usage: Open-Application TOKEN [ARGUMENT...]"
+name=$1
+shift
+
+token=$(app_token "$name") || foundation_die "apps.conf has no entry for [$name]"
+bundle=$(app_bundle "$token")
+
+log_step "Opening $token..."
+if as_available && as_windows | awk -F'\t' -v t="$token" '$2 == t { found = 1 } END { exit found ? 0 : 1 }'; then
+	log_warning "$token is already running!"
+	exit 0
+fi
+if app_launch "$bundle" "$@"; then
+	log_success "$token opened!"
+else
+	foundation_die "Could not open $token ($bundle) - is it installed?"
+fi

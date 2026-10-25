@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# DotnetBuildAndRun - builds, then runs the .NET project in the current directory. Alias: dnbr
+#
+# Usage: DotnetBuildAndRun [ARGUMENTS...]
+#
+# dotnet build, then dotnet run even when the build failed, as on Windows (`dotnet build ;
+# dotnet run`); ARGUMENTS go to dotnet run (a Unix addition: Windows takes none). A leading
+# -h or --help prints this header and builds nothing (DotnetBuildAndRun -- --help reaches dotnet run).
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+# A leading --help is this header; it never reaches the tool or starts a build.
+case ${1:-} in -h | --help)
+	foundation_usage "$0"
+	exit 0
+	;;
+esac
+command -v dotnet >/dev/null 2>&1 || foundation_die "dotnet is not installed (brew install --cask dotnet-sdk)"
+dotnet build
+exec dotnet run "$@"

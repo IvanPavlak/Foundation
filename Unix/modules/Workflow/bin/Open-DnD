@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Open-DnD - opens a D&D campaign: the Obsidian vault, the character sheet PDF and the spell list.
+#
+# Usage: Open-DnD [CAMPAIGN] [--campaign NAME] [--foundry-vtt]
+#
+# CAMPAIGN is a section of Unix/config/dnd.conf (CampaignResources); without one a menu of the
+# campaigns is shown in file order; --campaign NAME is the same as CAMPAIGN, and a number names that
+# entry of the menu. Opens Obsidian, then the campaign's `pdf` group with Open-Acrobat and its
+# `browser` group with Open-Browser - one of each per campaign, as on Windows; with several lines
+# the last one wins. --foundry-vtt also starts the FoundryVTT app (the `FoundryVTT` app of apps.conf).
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+campaign=''
+foundry=0
+while [ $# -gt 0 ]; do
+	case $1 in
+		--campaign)
+			campaign=$2
+			shift
+			;;
+		--foundry-vtt) foundry=1 ;;
+		-v | --verbose) ;;
+		*) campaign=$1 ;;
+	esac
+	shift
+done
+
+file=$(conf_path dnd.conf) || foundation_die "Missing Unix/config/dnd.conf"
+available=()
+while IFS= read -r name; do available+=("$name"); done < <(conf_sections "$file")
+if [ -n "$campaign" ]; then
+	# A number is that entry of the menu, as -Campaign 2 is on Windows.
+	campaign=$(foundation_resolve_items "$campaign" -- ${available[@]+"${available[@]}"})
+else
+	campaign=$(foundation_resolve_selection "[Available Campaigns]" "" 1 0 "${available[@]}") || exit 1
+fi
+
+if [ "$foundry" -eq 1 ]; then
+	if app_bundle FoundryVTT >/dev/null 2>&1; then foundation_run Open-Application FoundryVTT; else log_warning "FoundryVTT is not in apps.conf - skipped"; fi
+fi
+if [ -z "$campaign" ]; then
+	log_warning "No campaign selected!"
+	exit 0
+fi
+name=$(conf_section_name "$file" "$campaign") || foundation_die "No campaign [$campaign] in dnd.conf"
+lines=$(conf_section "$file" "$name")
+# One Pdf and one Browser per campaign, as CampaignResources: the last line of each wins.
+pdf=$(printf '%s\n' "$lines" | awk '$1 == "pdf" { v = $2 } END { print v }')
+browser=$(printf '%s\n' "$lines" | awk '$1 == "browser" { v = $2 } END { print v }')
+
+foundation_run Open-Obsidian
+[ -n "$pdf" ] && foundation_run Open-Acrobat "$pdf"
+[ -n "$browser" ] && foundation_run Open-Browser "$browser"
+log_success "DnD Setup completed for $name campaign!"

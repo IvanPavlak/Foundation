@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+# Run-Project - opens a runnable project's tabs and types its run commands into them. Alias: rp
+#
+# Usage: Run-Project [PROJECT...] [--new-window] [--database-provider NAME] [--skip Docker] [--include Docker]
+#
+# The project's tabs are the same ones Open-ProjectTerminals opens; each tab whose KEY has a
+# `run KEY COMMAND` line in Unix/config/projects.conf gets COMMAND typed into its shell (dnr,
+# nir and the other aliases of shellrc.sh work there). A `run KEY` without a `tab KEY` line runs
+# nothing, as on Windows, where a command is looked up per terminal path. Without a project a
+# menu of the runnable projects is shown (Enter takes the first). Windows-style flags also work:
+# --project NAME (the same as a bare NAME) and --in-same-shell (the default; --new-window is
+# -InSameShell:$false).
+#
+# Running a project again does not stack a second set of tabs: its open tabs are closed first
+# (Close-ProjectTerminals, which keeps the tab this shell runs in), and when this shell's tab is
+# one of the project's tabs it is reused - its run command is typed into it last, after this
+# command ends - instead of a duplicate opening.
+#
+# Docker step: before the tabs open, every `docker TARGET` line of the project is brought up -
+# a stack of Unix/config/docker.conf (the shared PostgreSQL container) or a path KEY whose
+# directory holds the project's own compose file. A project with several stacks (its database
+# providers, DatabaseProviders on Windows) starts one: --database-provider NAME names it, else a
+# menu picks it (Enter takes the first); its own compose files always start. Docker Desktop is
+# started when needed. The
+# step's default is `step Docker on|off` in projects.conf (on when absent); --skip Docker and
+# --include Docker override it per call, like RunProject.Steps on Windows: --skip wins over
+# --include (with a warning), and a step name other than Docker stops it before anything runs.
+# When Docker or one of the project's targets cannot be started, the project is skipped with an
+# error (no tab opens, the exit status is 1) and the next one runs, as on Windows.
+# `rp A,B` runs both projects, and a number names that entry of the menu; a flag it does not know
+# is an error.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config steps apps drivers/wezterm terminal project docker
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+projects=()
+target=same
+provider=''
+# shellcheck disable=SC2034 # read by step_on
+{
+	STEP_SKIPS=()
+	STEP_INCLUDES=()
+}
+while [ $# -gt 0 ]; do
+	case $1 in
+		--new-window) target=new ;;
+		--in-same-shell) target=same ;;
+		--skip)
+			steps_add STEP_SKIPS "${2:-}"
+			shift
+			;;
+		--include)
+			steps_add STEP_INCLUDES "${2:-}"
+			shift
+			;;
+		--database-provider)
+			provider=${2:-}
+			shift
+			;;
+		--project) ;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1 - nothing was run" ;;
+		*) foundation_split_list projects "$1" ;;
+	esac
+	shift
+done
+
+# Step toggles (lib/steps.sh): `step Docker` of projects.conf (on when absent), then --include,
+# then --skip, which wins; a step in both is skipped with a warning, as on Windows.
+# shellcheck disable=SC2034 # read by step_on
+STEP_CONFIG=$(conf_path projects.conf) || STEP_CONFIG=''
+steps_validate Docker
+docker_step=off
+step_on Docker on && docker_step=on
+
+# The menu's list, read only for the menu or a number, which is that entry of it (-Project 2): a
+# workspace open names its projects.
+runnable=()
+if [ ${#projects[@]} -eq 0 ] || foundation_has_number "${projects[@]}"; then
+	while IFS= read -r name; do runnable+=("$name"); done < <(project_runnable)
+fi
+if [ ${#projects[@]} -gt 0 ]; then
+	mapfile -t projects < <(foundation_resolve_items "${projects[@]}" -- ${runnable[@]+"${runnable[@]}"})
+else
+	# DefaultOptionIndex 1 of Windows: Enter runs the first project.
+	selection=$(FOUNDATION_SELECTION_DEFAULT=1 foundation_resolve_selection "[Available projects]" "" 0 1 "${runnable[@]}") || exit 1
+	while IFS= read -r name; do [ -n "$name" ] && projects+=("$name"); done <<<"$selection"
+fi
+
+# Brings up one docker TARGET of a project; fails when it cannot.
+start_docker_target() {
+	local project=$1 target=$2 compose dir
+	if compose=$(docker_stack_file "$target"); then
+		[ -f "$compose" ] || {
+			log_error "Compose file for stack [$target] not found => $compose"
+			return 1
+		}
+		log_step "Docker stack [$target] => docker compose up -d"
+		docker compose -f "$compose" up -d </dev/null
+		return
+	fi
+	dir=$(project_path "$project" "$target") || {
+		log_error "[$project] docker [$target] is neither a stack nor a path key"
+		return 1
+	}
+	log_step "Docker compose in [$project.$target] => docker compose up -d"
+	(cd "$dir" && docker compose up -d </dev/null)
+}
+
+# The pane this shell runs in and its tab's title: a project tab of that title is reused.
+own=''
+own_title=''
+if wt_running && own=$(wt_own_pane); then
+	own_title=$(wt_panes | awk -F'\t' -v p="$own" '$3 == p { print $5; exit }')
+else
+	own=''
+fi
+
+status=0
+for project in "${projects[@]}"; do
+	canonical=$(project_canonical "$project") || {
+		log_error "Error: Project [$project] not found in projects.conf!"
+		status=1
+		continue
+	}
+	log_title "Run-Project $canonical"
+
+	targets=$(project_lines "$canonical" docker)
+	# Resolve-ProjectDockerCompose: of several stacks (database providers) only one starts.
+	stacks=()
+	while read -r docker_target; do
+		[ -n "$docker_target" ] && docker_stack_file "$docker_target" >/dev/null && stacks+=("$docker_target")
+	done <<<"$targets"
+	if [ ${#stacks[@]} -gt 1 ] && [ "$docker_step" = on ]; then
+		chosen=''
+		if [ -n "$provider" ]; then
+			for docker_target in "${stacks[@]}"; do foundation_ieq "$docker_target" "$provider" && chosen=$docker_target; done
+			[ -n "$chosen" ] || foundation_die "[$canonical] has no database provider [$provider] (its stacks: ${stacks[*]})"
+		else
+			chosen=$(foundation_resolve_selection "[Database providers of $canonical]" "Enter the provider, or press [Enter] for ${stacks[0]}" 1 0 "${stacks[@]}") || exit 1
+			[ -n "$chosen" ] || chosen=${stacks[0]}
+		fi
+		log_step "Database provider => $chosen"
+		targets=$(while read -r docker_target; do
+			[ -n "$docker_target" ] || continue
+			if docker_stack_file "$docker_target" >/dev/null && [ "$docker_target" != "$chosen" ]; then continue; fi
+			printf '%s\n' "$docker_target"
+		done <<<"$targets")
+	elif [ -n "$provider" ] && [ ${#stacks[@]} -le 1 ]; then
+		log_debug "[Run-Project] --database-provider [$provider] ignored: [$canonical] has ${#stacks[@]} stack(s)"
+	fi
+	if [ -n "$targets" ]; then
+		if [ "$docker_step" = "on" ]; then
+			docker_ok=0
+			if docker_start; then
+				docker_ok=1
+				while read -r docker_target; do
+					[ -n "$docker_target" ] || continue
+					start_docker_target "$canonical" "$docker_target" || docker_ok=0
+				done <<<"$targets"
+			fi
+			if [ "$docker_ok" -eq 0 ]; then
+				log_error "Docker is required but could not be started! Skipping [$canonical]!"
+				status=1
+				continue
+			fi
+		else
+			log_step "Docker step skipped"
+		fi
+	fi
+
+	specs=''
+	reused=0
+	own_command=''
+	while IFS=$'\t' read -r title dir key; do
+		command=$(project_run_command "$canonical" "$key") || command=''
+		[ -n "$command" ] && log_step "[$title] => $command"
+		if [ -n "$own_title" ] && foundation_ieq "$title" "$own_title"; then
+			log_debug "[Run-Project] reusing this shell's tab for [$title]"
+			reused=1
+			own_command=$command
+			continue
+		fi
+		specs+="$title"$'\t'"$dir"$'\t'"$command"$'\n'
+	done < <(project_tabs "$canonical")
+	if [ -z "$specs" ] && [ "$reused" -eq 0 ]; then
+		log_warning "[$canonical] has no tabs to open"
+		continue
+	fi
+	# The project's tabs from an earlier run go first (the tab this shell runs in stays).
+	prefix=$(foundation_lower "$canonical.")
+	if wt_running && wt_tab_titles | awk -v p="$prefix" -v own="$(foundation_lower "$own_title")" \
+		'{ t = tolower($0) } index(t, p) == 1 && t != own { found = 1 } END { exit !found }'; then
+		foundation_run Close-ProjectTerminals "$canonical" || status=1
+	fi
+	if [ -n "$specs" ]; then
+		printf '%s' "$specs" | term_open_tabs "$target" 0 >/dev/null || status=1
+	fi
+	# Typed last: this shell reads it once Run-Project has ended.
+	[ -z "$own_command" ] || wt_send_line "$own" "$own_command"
+done
+[ "$status" -eq 0 ] && log_success "Projects started!"
+exit $status

@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Countdown - shows a coloured countdown, used before destructive operations.
+#
+# Usage: Countdown SECONDS [--message TEXT]
+#
+# Counts down on one line: above 3 in cyan, 3 and below in red. Ctrl+C aborts with exit status
+# 130, so `Countdown 5 --message "Deleting..." && rm ...` stops the operation. The Windows-style
+# --seconds N works as well as a bare SECONDS.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+seconds=''
+message=''
+while [ $# -gt 0 ]; do
+	case $1 in
+		--message)
+			message=$2
+			shift
+			;;
+		--seconds)
+			seconds=$2
+			shift
+			;;
+		-v | --verbose) ;;
+		*) seconds=$1 ;;
+	esac
+	shift
+done
+case $seconds in '' | *[!0-9]*) foundation_die "Usage: Countdown SECONDS [--message TEXT]" ;; esac
+
+cyan='' red='' reset=''
+if log_use_color 1; then cyan=$'\033[36m' red=$'\033[31m' reset=$'\033[0m'; fi
+trap 'printf "\n"; log_warning "Cancelled"; exit 130' INT
+[ -n "$message" ] && log_step "$message"
+for ((i = seconds; i > 0; i--)); do
+	colour=$cyan
+	[ "$i" -le 3 ] && colour=$red
+	printf '\r  %s%d...%s  ' "$colour" "$i" "$reset"
+	sleep 1
+done
+printf '\r            \r'

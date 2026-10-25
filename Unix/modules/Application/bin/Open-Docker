@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Open-Docker - starts Docker Desktop in the background and returns at once.
+#
+# Usage: Open-Docker [--stop]
+#
+# The macOS Open-Docker: `open -g -a Docker` (no window, as Windows' --minimized) and back, without
+# waiting for the daemon, so a workspace line does not hold up the actions after it; a Docker
+# Desktop that already runs is a warning and nothing is started, as on Windows. The commands that
+# need the daemon (Start-Containers, Docker-Cleanup, Run-Project, as DockerWizard on Windows) wait
+# for it themselves, up to `timeout start` seconds of Unix/config/docker.conf. --stop
+# stops the running containers and quits Docker Desktop, waiting up to `timeout stop` seconds (60
+# without a line) before it kills it - what Kill-All's Docker step does. Any other argument is an
+# error and starts nothing.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config docker
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+stop=0
+for argument in "$@"; do
+	case $argument in
+		--stop) stop=1 ;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument => $argument - Docker was not touched" ;;
+	esac
+done
+if [ "$stop" -eq 1 ]; then
+	docker_stop && log_success "Docker stopped!"
+else
+	if docker_app_running || docker_running; then
+		log_warning "Docker Desktop is already running!"
+	else
+		docker_launch && log_success "Docker Desktop opened!"
+	fi
+fi

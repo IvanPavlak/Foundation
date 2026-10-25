@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+# Set-DockPins - pins the apps and folders of Unix/config/dock.conf to the Dock with dockutil
+# (the Unix counterpart of Configure-Taskbar).
+#
+# Usage: Set-DockPins [--list] [--dry-run]
+#
+# dock.conf lists `pin PATH` (apps, left side, in order), `spacer` and `folder PATH [OPTION...]`
+# (right side, dockutil options such as --view fan --display stack --sort dateadded); a line may
+# start with @TYPE to apply on one machine type only. With `clear on` the Dock is made to hold
+# exactly that list: when it already does nothing happens, otherwise every pin is removed and the
+# list added in order; a list with a spacer is rebuilt on every run, because dockutil --list
+# cannot show spacers to compare. Before the Dock is emptied its preferences (com.apple.dock) are
+# backed up into Backups/Unix/System/DockLayout; when that fails the Dock is left as it is.
+# Restore: defaults import com.apple.dock <backup>/com.apple.dock.plist; killall Dock. With `clear off`, or without a clear line (as the base file
+# ships it), only the missing pins are added and spacers are not. An app or folder that
+# does not exist is skipped with a warning. The Dock restarts once, only when something changed.
+# Without dockutil (brew install dockutil) the command warns and changes nothing. --list shows
+# the Dock today next to dock.conf; --dry-run prints the dockutil commands and changes nothing.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config backup
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+dry=0
+list_only=0
+for argument in "$@"; do
+	case $argument in
+		--dry-run) dry=1 ;;
+		--list) list_only=1 ;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument [$argument] - usage: Set-DockPins [--list] [--dry-run]" ;;
+	esac
+done
+
+config=$(conf_path dock.conf) || foundation_die "Missing Unix/config/dock.conf"
+log_title "Set-DockPins"
+if ! command -v dockutil >/dev/null 2>&1; then
+	log_warning "dockutil is not installed (brew install dockutil) - the Dock was left as it is"
+	exit 0
+fi
+
+# The Dock today, one "SECTION|PATH" per item (apps, others), in Dock order. dockutil prints
+# file URLs ("file:///Applications/Visual%20Studio%20Code.app/"), decoded here.
+current_items() {
+	local url section path
+	while IFS=$'\t' read -r _ url section _; do
+		case $url in file://*) ;; *) continue ;; esac
+		path=${url#file://}
+		path=${path%/}
+		path=$(printf '%b' "${path//%/\\x}")
+		case $section in
+			persistentApps) printf 'apps|%s\n' "$path" ;;
+			persistentOthers) printf 'others|%s\n' "$path" ;;
+		esac
+	done < <(dockutil --list 2>/dev/null)
+}
+
+# dock.conf, parsed: the clear switch and one entry per wanted item, apps first, then folders.
+# Per item: its key (SECTION|PATH, or "spacer") and its dockutil arguments as one string with
+# \x1f separators (an empty argument stays visible that way). Without a clear line the base
+# file's `clear off` applies; the last clear line wins.
+clear=off
+spacers=0
+sep=$'\x1f'
+app_keys=()
+app_commands=()
+other_keys=()
+other_commands=()
+while IFS= read -r line; do
+	read -r kind rest <<<"$line"
+	case $kind in
+		clear) clear=$(foundation_lower "$rest") ;;
+		pin)
+			path=$(foundation_expand_path "$rest")
+			if [ ! -e "$path" ]; then
+				log_warning "Not installed, not pinned => $path"
+				continue
+			fi
+			app_keys+=("apps|${path%/}")
+			app_commands+=("--add${sep}${path}")
+			;;
+		spacer)
+			spacers=$((spacers + 1))
+			app_keys+=(spacer)
+			app_commands+=("--add${sep}${sep}--type${sep}spacer${sep}--section${sep}apps")
+			;;
+		folder)
+			# PATH may contain spaces; the dockutil options start at the first " --".
+			options=''
+			case $rest in *" --"*)
+				options=${rest#*" --"}
+				options="--$options"
+				rest=${rest%%" --"*}
+				;;
+			esac
+			path=$(foundation_expand_path "$rest")
+			if [ ! -d "$path" ]; then
+				log_warning "No such folder, not pinned => $path"
+				continue
+			fi
+			other_keys+=("others|${path%/}")
+			command="--add${sep}${path}${sep}--section${sep}others"
+			for option in $options; do command="$command$sep$option"; done
+			other_commands+=("$command")
+			;;
+		*) log_warning "Unknown line kind [$kind], skipped => $line" ;;
+	esac
+done < <(conf_lines "$config")
+keys=(${app_keys[@]+"${app_keys[@]}"} ${other_keys[@]+"${other_keys[@]}"})
+commands=(${app_commands[@]+"${app_commands[@]}"} ${other_commands[@]+"${other_commands[@]}"})
+# What dockutil --list can show: every key but the spacers.
+wanted=()
+for key in ${keys[@]+"${keys[@]}"}; do [ "$key" = spacer ] || wanted+=("$key"); done
+
+present=()
+while IFS= read -r item; do present+=("$item"); done < <(current_items)
+
+if [ "$list_only" -eq 1 ]; then
+	log_step "In the Dock now"
+	for item in ${present[@]+"${present[@]}"}; do printf '  %-7s %s\n' "${item%%|*}" "${item#*|}"; done
+	log_step "In dock.conf (clear $clear)"
+	for item in ${wanted[@]+"${wanted[@]}"}; do printf '  %-7s %s\n' "${item%%|*}" "${item#*|}"; done
+	[ "$spacers" -eq 0 ] || printf '  %d spacer(s)\n' "$spacers"
+	exit 0
+fi
+
+# Runs one dockutil call given as a \x1f-separated string (or prints it under --dry-run).
+dockutil_call() {
+	local args=()
+	IFS=$sep read -r -a args <<<"$1"
+	args+=(--no-restart)
+	if [ "$dry" -eq 1 ]; then
+		local shown='' arg
+		for arg in "${args[@]}"; do
+			case $arg in '' | *[[:space:]]*) shown="$shown \"$arg\"" ;; *) shown="$shown $arg" ;; esac
+		done
+		printf '  dockutil%s\n' "$shown"
+		return 0
+	fi
+	dockutil "${args[@]}" >/dev/null || {
+		log_warning "failed: dockutil ${args[*]}"
+		failures=$((failures + 1))
+	}
+}
+
+# Copies the Dock's preferences into the sink before the Dock is emptied (the TaskbarLayout
+# backup of Configure-Taskbar). Fails, so nothing is changed, when the export or the copy fails.
+backup_dock() {
+	if [ "$dry" -eq 1 ]; then
+		printf '  would back up com.apple.dock => System/DockLayout\n'
+		return 0
+	fi
+	local dir folder
+	dir=$(mktemp -d) || return 1
+	if ! defaults export com.apple.dock "$dir/com.apple.dock.plist" || ! folder=$(backup_item System DockLayout "$dir/com.apple.dock.plist"); then
+		rm -rf "$dir"
+		log_error "Could not back up the Dock - it was left as it is"
+		return 1
+	fi
+	rm -rf "$dir"
+	log_step "Backed up the Dock => $folder"
+}
+
+in_present() {
+	local item
+	for item in ${present[@]+"${present[@]}"}; do [ "$item" = "$1" ] && return 0; done
+	return 1
+}
+
+failures=0
+changed=0
+if [ "$clear" = on ]; then
+	# Spacers cannot be compared through dockutil --list, so a list with spacers is always rebuilt.
+	if [ "$spacers" -eq 0 ] && [ "${wanted[*]+${wanted[*]}}" = "${present[*]+${present[*]}}" ] && [ ${#wanted[@]} -eq ${#present[@]} ]; then
+		log_success "The Dock already matches dock.conf!"
+		exit 0
+	fi
+	log_step "Replacing the Dock with the ${#wanted[@]} item(s) of dock.conf"
+	backup_dock || exit 1
+	dockutil_call "--remove${sep}all"
+	for command in ${commands[@]+"${commands[@]}"}; do dockutil_call "$command"; done
+	changed=1
+else
+	for index in "${!commands[@]}"; do
+		key=${keys[$index]}
+		# A spacer cannot be found in the Dock, so adding missing pins never adds spacers.
+		[ "$key" = spacer ] && continue
+		in_present "$key" && continue
+		log_step "Adding ${key#*|}"
+		dockutil_call "${commands[$index]}"
+		changed=1
+	done
+	[ "$changed" -eq 1 ] || {
+		log_success "Every pin of dock.conf is already in the Dock!"
+		exit 0
+	}
+fi
+
+if [ "$dry" -eq 1 ]; then
+	printf '  killall Dock\n'
+	exit 0
+fi
+killall Dock >/dev/null 2>&1
+if [ "$failures" -eq 0 ]; then
+	log_success "Dock pins applied!"
+else
+	log_error "Dock pins applied with $failures failure(s)"
+	exit 1
+fi

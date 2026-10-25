@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# GitPull - git pull, passing every argument through. Alias: gp
+#
+# Usage: GitPull [GIT-PULL-ARGUMENTS...]
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+case ${1:-} in -h | --help)
+	foundation_usage "$0"
+	exit 0
+	;;
+esac
+
+exec git pull "$@"

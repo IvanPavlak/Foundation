@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# Export-VSCodeProfile - captures a live VS Code profile into its catalogue folder in the repository.
+#
+# Usage: Export-VSCodeProfile NAME
+#
+# The Unix twin of the Windows Export-VSCodeProfile and the capture side of
+# Deploy-VSCodeProfiles, run by hand - never by Bootstrap. For the `profile NAME` entry of
+# Unix/config/vscode-profiles.conf, the VS Code profile it deploys onto is located without
+# registering anything, and its folder under `root` is created when missing. Then:
+#
+#   - A profile file (settings.json, keybindings.json, tasks.json, snippets/) that is a symlink
+#     already is left alone - it points at the repository. A link pointing elsewhere is reported.
+#   - A real file is copied into the folder, replacing the repository copy; keybindings land in
+#     keybindings.macos.json when the folder carries one. An empty snippets folder is skipped.
+#   - extensions.txt is merged with what the profile has installed: comments, pins and entries
+#     still installed are kept, uninstalled entries removed, new extensions appended sorted. The
+#     command line cannot tell a disabled extension apart, so delete its line to stop deploying it.
+#
+# Review the result with git diff before committing it. Nothing in VS Code changes.
+# Windows-style names: --name (-Name) NAME is the same as a bare NAME.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config backup vscode
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+requested=''
+for argument in "$@"; do
+	case $argument in
+		--name | -v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $argument" ;;
+		*)
+			[ -z "$requested" ] || foundation_die "One profile at a time - got [$requested] and [$argument]"
+			requested=$argument
+			;;
+	esac
+done
+[ -n "$requested" ] || foundation_die "Name the profile to export - Export-VSCodeProfile NAME"
+
+log_title "Exporting VS Code Profile [$requested]"
+
+entry=$(vscode_entry "$requested") || foundation_die "VS Code profile [$requested] is not a profile line of vscode-profiles.conf - add it there first!"
+IFS=$'\t' read -r name target <<<"$entry"
+source=$(vscode_root)/$name
+
+location=$(vscode_profile_location "$target" "$(vscode_user_data)" 0) || location=''
+[ -n "$location" ] && [ -d "$location" ] || foundation_die "VS Code has no profile [$target] on this machine - nothing to export!"
+
+mkdir -p "$source" || foundation_die "Could not create $source"
+
+failures=0
+while IFS=$'\t' read -r item repo live kind; do
+	[ -e "$live" ] || [ -L "$live" ] || continue
+	if [ -L "$live" ]; then
+		link=$(readlink "$live")
+		if [ "$link" = "$repo" ]; then
+			log_debug "[$item] is linked into the repository already"
+		else
+			log_warning "[$live] links to [$link], not to the repository [$repo] - left alone!"
+		fi
+		continue
+	fi
+	if [ "$kind" = dir ]; then
+		[ -n "$(ls -A "$live" 2>/dev/null)" ] || continue
+		mkdir -p "$repo" && cp -R "$live/." "$repo/" || {
+			log_error "Could not capture [$item] => [$repo]"
+			failures=$((failures + 1))
+			continue
+		}
+	else
+		cp "$live" "$repo" || {
+			log_error "Could not capture [$item] => [$repo]"
+			failures=$((failures + 1))
+			continue
+		}
+	fi
+	log_success "Captured [$item] => [$repo]"
+done < <(vscode_items "$source" "$location")
+
+cli=$(vscode_cli) || {
+	log_warning "VS Code command line (code) not found - extensions.txt was not updated!"
+	exit "$((failures > 0))"
+}
+installed=$(vscode_installed "$cli" "$target") || foundation_die "Could not list the extensions of VS Code profile [$target] - extensions.txt was not updated!"
+
+list=$source/extensions.txt
+merged=$(printf '%s\n' "$installed" | cut -f1 | vscode_merge_extensions "$list") || foundation_die "Could not merge $list"
+# An empty merge writes an empty file, not one blank line.
+{ [ -z "$merged" ] || printf '%s\n' "$merged"; } >"$list.foundation.$$" && mv "$list.foundation.$$" "$list" || {
+	rm -f "$list.foundation.$$"
+	foundation_die "Could not write $list"
+}
+count=$(printf '%s\n' "$installed" | awk 'NF' | wc -l | tr -d ' ')
+log_success "Captured $count extension(s) => [$list]"
+[ "$failures" -eq 0 ] || exit 1

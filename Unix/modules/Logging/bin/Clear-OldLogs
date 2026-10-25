@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Clear-OldLogs - prunes the session logs and trims the error log by the limits of logging.conf.
+#
+# Usage: Clear-OldLogs [--dry-run] [--max-age-days N] [--max-session-files N] [--max-total-size-mb N]
+#                      [--max-error-file-size-mb N]
+#
+# The limits of Unix/config/logging.conf (each 0 = off, a flag overrides it for one run): session
+# logs older than max-age-days, more than max-session-files (oldest first), the oldest while all
+# together exceed max-total-size-mb, and the error log, once past max-error-file-size-mb, trimmed
+# to its newest half of that size. Unix/logs/Pinned is never touched. Every new session already
+# runs this in the background; --dry-run (or --what-if, the Windows -WhatIf) lists what would go,
+# each file once.
+export FOUNDATION_LOGGING=off
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+dry=0
+age=''
+count=''
+size=''
+cap=''
+while [ $# -gt 0 ]; do
+	case $1 in --max-*) case ${2-} in '' | *[!0-9]*) foundation_die "$1 takes a whole number (0 = off)" ;; esac ;; esac
+	case $1 in
+		--dry-run | --what-if) dry=1 ;;
+		--max-age-days)
+			age=$((10#$2))
+			shift
+			;;
+		--max-session-files)
+			count=$((10#$2))
+			shift
+			;;
+		--max-total-size-mb)
+			size=$((10#$2))
+			shift
+			;;
+		--max-error-file-size-mb)
+			cap=$((10#$2))
+			shift
+			;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument => $1" ;;
+	esac
+	shift
+done
+log_title "Clearing Old Logs"
+result=$(logfile_prune "$dry" "$age" "$count" "$size" "$cap")
+if [ -z "$result" ]; then
+	dir=$(logfile_dir)
+	log_success "Nothing to prune in ${dir#"$DOTFILES_ROOT"/}"
+else
+	printf '%s\n' "$result" | sed 's/^/  /'
+	log_success "Log retention applied"
+fi

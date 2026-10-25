@@ -1,0 +1,67 @@
+# Foundation: shellcheck, shfmt and the bats suites on macOS, the only Unix it runs on.
+# Only the pure helpers and file checks run here; AeroSpace and WezTerm are exercised by hand.
+name: Unix
+
+# Every push and pull request runs it: the repository is all Unix, so the required `Unix Tests`
+# check always reports.
+on:
+  push:
+  pull_request:
+  # Manual escape hatch: re-fires the run when GitHub drops the push or
+  # pull_request event. GitHub restricts workflow_dispatch to collaborators with write access.
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref (macOS runners are the costly ones).
+concurrency:
+  group: unix-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Unix Tests
+    # Never in a private repository: macOS runners bill at ten times the Linux rate, so a private
+    # fork runs the suites locally through Run-Tests. Foundation is public, where the job always runs.
+    if: ${{ !github.event.repository.private }}
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Full history (blobless) so Run-Tests --audit-since can find the merge base.
+          fetch-depth: 0
+          filter: blob:none
+      - name: Install tools
+        run: brew install bash bats-core shellcheck shfmt chezmoi
+      # The file list comes from Run-Tests --lint-files, the one Run-Tests --lint checks; the
+      # other shellcheck settings are in Unix/.shellcheckrc (only the severity is a flag).
+      - name: shellcheck
+        run: |
+          files=()
+          while IFS= read -r f; do files+=("$f"); done < <("$(brew --prefix)/bin/bash" Unix/modules/Tests/bin/Run-Tests --lint-files)
+          [ ${#files[@]} -gt 0 ] || { echo "::error::Run-Tests --lint-files printed no file"; exit 1; }
+          shellcheck -S warning "${files[@]}"
+      # The style (tabs, case branches indented) is in Unix/.editorconfig, which shfmt reads only
+      # when no formatting flag is given.
+      - name: shfmt
+        run: shfmt -d $(shfmt -f Unix)
+      # The full suite through Run-Tests (its queue and run log), plus the selector audit: every
+      # failing suite Run-Tests --changed would have left out for this push or pull request
+      # becomes a warning annotation. The audit never fails the job.
+      - name: bats
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
+        run: |
+          audit=()
+          case $BASE in '' | 0000000000000000000000000000000000000000) ;; *) audit=(--audit-since "$BASE") ;; esac
+          "$(brew --prefix)/bin/bash" Unix/modules/Tests/bin/Run-Tests --no-lint --detailed "${audit[@]}"
+      # The run log (Unix/tests/Results, gitignored): conditions, slowest tests and every suite's
+      # TAP output. Missing only when an earlier step failed, so that warns instead of failing.
+      - name: Upload run log
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: unix-run-log
+          path: Unix/tests/Results/TestRun_*.log
+          if-no-files-found: warn

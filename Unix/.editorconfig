@@ -1,0 +1,13 @@
+# The shell style of the Unix half, read by shfmt (CI, Run-Tests, the mkhl.shfmt extension) and by
+# editors: tabs, case branches indented (shfmt -ci). shfmt applies it only when no formatting flag
+# is given on its command line. [[shell]] is shfmt's own section for scripts with a shebang and no
+# extension (the commands in modules/*/bin); editors skip it.
+root = true
+
+[*.{sh,bash,bats}]
+indent_style = tab
+switch_case_indent = true
+
+[[shell]]
+indent_style = tab
+switch_case_indent = true

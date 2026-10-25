@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# Get-ActiveWindowInfo - prints the open windows with their frames and a ready-to-paste layout line.
+#
+# Usage: Get-ActiveWindowInfo [PATTERN] [--continuous]
+#
+# The Unix twin of the Windows Get-ActiveWindowInfo, for writing layouts. For every window AeroSpace
+# manages (or only those whose title matches PATTERN: wildcard, regex or exact, as in the layout
+# files) it prints the app, its bundle and PID, the window id and desktop, the frame (x, y, width,
+# height in points, read from the window server by window id, so same-titled windows each show
+# their own; no permission needed) and a line for
+# Unix/config/layouts/<Type>/<Workspace>_<Type>.conf: `DESKTOP Zone APP TITLE`, the zone a
+# placeholder to replace, as on Windows. --continuous watches the focused window instead and
+# prints a block each time focus moves to another window (that matches PATTERN), until Ctrl+C.
+# Prints to the terminal only; redirect it or pipe it to pbcopy for a file.
+# Windows-style names: --window (-Window) is accepted and ignored: the PATTERN after it is the window.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps drivers/aerospace
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+pattern=''
+continuous=0
+for argument in "$@"; do
+	case $argument in
+		--continuous) continuous=1 ;;
+		--window | -v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $argument" ;;
+		*) pattern=$argument ;;
+	esac
+done
+
+# One window's block. Usage: window_block ID TOKEN BUNDLE PID DESKTOP NAME TITLE
+window_block() {
+	local id=$1 token=$2 bundle=$3 pid=$4 desktop=$5 name=$6 title=$7 frame x y w h
+	log_segments info "[$token]" '' " ${title:-(untitled)}"
+	printf '  App       %s (%s), PID %s\n' "${name:-$token}" "$bundle" "$pid"
+	printf '  Window    %s on desktop %s\n' "$id" "$desktop"
+	if frame=$(as_window_frame "$id"); then
+		read -r x y w h <<<"$frame"
+		printf '  Frame     x %s  y %s  width %s  height %s\n' "$x" "$y" "$w" "$h"
+	else
+		printf '  Frame     (could not be read)\n'
+	fi
+	printf '  Layout    %s Zone %s %s\n' "$desktop" "$token" "$title"
+}
+
+# Does the window title match PATTERN (always, without one)? Usage: wanted TITLE
+wanted() {
+	[ -z "$pattern" ] || foundation_match_title "$pattern" "$1"
+}
+
+log_title "Active Window Information"
+as_available || as_start || exit 1
+
+if [ "$continuous" -eq 0 ]; then
+	found=0
+	while IFS=$'\t' read -r id token bundle pid desktop name title; do
+		[ -n "$id" ] || continue
+		wanted "$title" || continue
+		window_block "$id" "$token" "$bundle" "$pid" "$desktop" "$name" "$title"
+		found=$((found + 1))
+	done < <(as_windows)
+	[ "$found" -gt 0 ] || log_warning "No window${pattern:+ matches [$pattern]}"
+	exit 0
+fi
+
+log_step "Focus different windows to capture their info. Press Ctrl+C to stop."
+trap 'exit 0' INT
+# FOUNDATION_ACTIVE_WINDOW_POLLS stops after that many polls (the suites); unset, it runs until Ctrl+C.
+polls=0
+last=''
+while [ -z "${FOUNDATION_ACTIVE_WINDOW_POLLS:-}" ] || [ "$polls" -lt "$FOUNDATION_ACTIVE_WINDOW_POLLS" ]; do
+	polls=$((polls + 1))
+	focused=$(as_focused_window)
+	if [ -n "$focused" ] && [ "$focused" != "$last" ]; then
+		last=$focused
+		row=$(as_windows | awk -F'\t' -v i="$focused" '$1 == i { print; exit }')
+		if [ -n "$row" ]; then
+			IFS=$'\t' read -r id token bundle pid desktop name title <<<"$row"
+			if wanted "$title"; then
+				window_block "$id" "$token" "$bundle" "$pid" "$desktop" "$name" "$title"
+			fi
+		fi
+	fi
+	sleep 0.2
+done

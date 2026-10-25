@@ -1,0 +1,388 @@
+#!/usr/bin/env bash
+# Test-ConfigurationSchema - checks that the Unix config files agree with each other.
+#
+# Usage: Test-ConfigurationSchema [--strict] [--quiet]
+#
+# The Unix config is several files that refer to each other, so its failures are broken
+# references rather than missing keys. Checks:
+#   workspaces.conf       a template instance resolves (known template, every placeholder has a
+#                         value, replace/drop/add keys match, no cycle) with its defaults; every
+#                         action is a Foundation command, an Open-<App> of apps.conf or Return;
+#                         Open-Project names projects, Open-Browser names browser groups,
+#                         Set-WorkspaceWindowLayout names a layout present in every layout set a
+#                         machine uses (the sets machines.conf maps a host, the default or the
+#                         small display to); +A,B project scopes name projects; %A,B layout-set
+#                         scopes name machine types or layout sets; default-workspace exists
+#   workspace-templates.conf  templates are checked through the workspaces that use them; a
+#                         template no workspace uses is reported
+#   layouts/<Type>/       each file is <Workspace>_<Type>.conf holding one [Workspace] section;
+#                         zone sets exist in zones.conf, every zone is in its desktop's zone set,
+#                         every app is an apps.conf token or role - for the base layout and for
+#                         each `project` variant, whose projects must be projects.conf sections
+#   projects.conf         action lines are commands, tab keys name a path key (or DEFAULT),
+#                         run keys name a tab key (Run-Project types only into tabs), docker
+#                         lines name a docker.conf stack or a path key
+#   machines.conf         every machine type it names, every @TYPE prefix of any file and every
+#                         layouts/<Type>/ set is one of its `type` lines; the dev root ($DEV) is
+#                         a folder
+#   dnd.conf              pdf groups are pdfs.conf sections, browser groups are
+#                         browser-groups.conf groups (path, last segment or URL label)
+#   vscode-workspaces.conf  each default names a workspaces.conf section and a .code-workspace
+#                         file in its directory
+#   ai-artifacts.conf     every harness of the deploy line is an ai-harnesses.conf section; exclude
+#                         entries are KIND/NAME or KIND/SOURCE/NAME, use lines KIND NAME
+#   ai-harnesses.conf     every destination line is KIND PLACEMENT FILES [+HOOK...] PATH with a
+#                         known kind, placement and hook
+#   git.conf              a note (not a problem) when neither it, its overlay nor the global git
+#                         config has the name or email; --quiet leaves it out
+# apps.conf (tokens and roles), docker.conf (stacks), pdfs.conf (groups), zones.conf (zone sets),
+# browser-groups.conf (groups and labels) are read as the targets of those references; their own
+# lines are not checked. The other files (backups.conf,
+# translate.conf, spinners.conf, bootstrap.conf, ...) are checked only for their @TYPE prefixes,
+# as Windows checks only framework keys and section shapes: a bad line there shows up when its
+# command runs.
+# Reports every problem as a warning and exits 0 (the shell keeps working with a degraded
+# config), or 1 with --strict when there are any, for tests and bootstrap. --quiet prints only
+# the problems.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps browser project drivers/aerospace layout workspace artifacts
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+strict=0
+quiet=0
+for argument in "$@"; do
+	case $argument in
+		--strict) strict=1 ;;
+		--quiet) quiet=1 ;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument => $argument" ;;
+	esac
+done
+
+problems=0
+problem() {
+	log_warning "$1"
+	problems=$((problems + 1))
+}
+cfg=$FOUNDATION_CONFIG_DIR
+[ "$quiet" -eq 1 ] || log_title "Checking Unix configuration (${cfg#"$DOTFILES_ROOT"/})"
+
+# Lookups, built once.
+lower_list() { tr '[:upper:]' '[:lower:]'; }
+projects=$(project_names 2>/dev/null | lower_list)
+sections_of() { [ -f "$cfg/$1" ] && conf_sections "$cfg/$1" | lower_list; }
+groups=$(sections_of browser-groups.conf)
+# Open-Browser resolves a name like browser_group_urls: the group path, its last segment, then a
+# labelled URL (`Name URL`) of any group.
+labels=$([ -f "$cfg/browser-groups.conf" ] && conf_effective "$cfg/browser-groups.conf" | awk '!/^\[/ && NF >= 2 { print tolower($1) }')
+groups_all=$(
+	printf '%s\n' "$groups"
+	printf '%s\n' "$groups" | awk -F. '{ print $NF }'
+	printf '%s\n' "$labels"
+)
+tokens=$(apps_list | cut -f1 | lower_list)
+in_list() { printf '%s\n' "$2" | grep -qxF -- "$(foundation_lower "$1")"; }
+# Layout sets some machine uses: the types machines.conf maps a host, the default or the small
+# display to, each through its layout-override. A set nothing uses (the Test set of a fork whose
+# Macs are all mapped) need not hold every layout. Without machines.conf, every set.
+used_layout_sets() {
+	local file
+	file=$(conf_path machines.conf) || {
+		layout_types
+		return 0
+	}
+	conf_lines "$file" | awk '
+		$1 == "host" && NF >= 3 { used[tolower($3)] = $3 }
+		$1 == "default" && NF >= 2 { fallback = $2 }
+		$1 == "small-display" && NF >= 2 { small = $2 }
+		$1 == "layout-override" && NF >= 3 { over[tolower($2)] = $3 }
+		END {
+			# One default and one small-display set: the last line wins, as in foundation_machine_type.
+			if (fallback != "") used[tolower(fallback)] = fallback
+			if (small != "") used[tolower(small)] = small
+			for (t in used) { k = tolower(t); print (k in over) ? over[k] : used[t] }
+		}
+	' | sort -u
+}
+known_action() { # NAME
+	[ "$1" = Return ] && return 0
+	foundation_has_command "$1" && return 0
+	case $1 in Open-*) in_list "${1#Open-}" "$tokens" && return 0 ;; esac
+	return 1
+}
+
+# workspaces.conf
+file=$cfg/workspaces.conf
+if [ -f "$file" ]; then
+	default=$(conf_value "$file" default-workspace 2>/dev/null) || default=''
+	[ -z "$default" ] || conf_section_name "$file" "$default" >/dev/null || problem "workspaces.conf: default-workspace [$default] has no section"
+	layout_names=$(while IFS= read -r t; do layout_names "$t"; done < <(layout_types) | lower_list | sort -u)
+	used_sets=$(used_layout_sets)
+	layout_set_names=$({
+		foundation_machine_types
+		layout_types
+	} | lower_list | sort -u)
+	used_templates=''
+	while IFS= read -r ws; do
+		if ! workspace_resolve "$file" "$ws"; then
+			for message in "${WORKSPACE_ERRORS[@]}"; do problem "workspaces.conf [$ws]: $message"; done
+			continue
+		fi
+		[ -z "$WORKSPACE_TEMPLATE" ] || used_templates+=" $(foundation_lower "$WORKSPACE_TEMPLATE") "
+		for line in ${WORKSPACE_LINES[@]+"${WORKSPACE_LINES[@]}"}; do
+			scope=$(workspace_layout_scope "$line")
+			if [ -n "$scope" ]; then
+				line=$(foundation_trim "${line#"$scope"}")
+				while IFS= read -r token; do
+					in_list "$token" "$layout_set_names" || problem "workspaces.conf [$ws]: layout-set scope [$scope] names [$token], which is no type line of machines.conf or layouts/<Set>/"
+				done < <(printf '%s\n' "${scope#%}" | tr ',' '\n' | grep -v '^$')
+			fi
+			scope=$(workspace_scope "$line")
+			if [ -n "$scope" ]; then
+				line=$(foundation_trim "${line#"$scope"}")
+				while IFS= read -r token; do
+					in_list "$token" "$projects" || problem "workspaces.conf [$ws]: scope [$scope] names unknown project [$token]"
+				done < <(workspace_scope_projects "$scope")
+			fi
+			read -r -a words <<<"$line"
+			action=${words[0]}
+			known_action "$action" || {
+				problem "workspaces.conf [$ws]: unknown action [$action] (not a command, an apps.conf app or Return)"
+				continue
+			}
+			skip_value=0
+			for arg in "${words[@]:1}"; do
+				# A flag's value (--instances 33) names nothing.
+				if [ "$skip_value" -eq 1 ]; then
+					skip_value=0
+					continue
+				fi
+				case $arg in --no-* | --force | --all | --only-current | --include-current) continue ;; -*)
+					skip_value=1
+					continue
+					;;
+				'{SelectedProjects}') continue ;; esac
+				case $action in
+					Open-Project) in_list "$arg" "$projects" || problem "workspaces.conf [$ws]: Open-Project names unknown project [$arg]" ;;
+					Open-Browser) in_list "$arg" "$groups_all" || problem "workspaces.conf [$ws]: Open-Browser names unknown browser group [$arg]" ;;
+					Set-WorkspaceWindowLayout)
+						if ! in_list "$arg" "$layout_names"; then
+							problem "workspaces.conf [$ws]: no layout [$arg] in any layouts/<Type>/"
+						else
+							# A layout missing from one set only fails on the machines (or display size) using it.
+							while IFS= read -r set; do
+								[ -d "$cfg/layouts/$set" ] || continue
+								layout_file "$arg" "$set" >/dev/null || problem "workspaces.conf [$ws]: layout [$arg] is missing from layouts/$set/ (opens without a layout there)"
+							done <<<"$used_sets"
+						fi
+						;;
+				esac
+				# Only the first positional of these names something; the rest are values of flags.
+				[ "$action" = Set-WorkspaceWindowLayout ] && break
+			done
+		done
+	done < <(conf_sections "$file")
+	if templates_file=$(workspace_templates_file); then
+		while IFS= read -r template; do
+			case $used_templates in *" $(foundation_lower "$template") "*) ;; *) problem "workspace-templates.conf: template [$template] is used by no workspace (and so is not checked)" ;; esac
+		done < <(conf_sections "$templates_file")
+	fi
+else
+	problem "Missing workspaces.conf"
+fi
+
+# layouts/<Type>/<Workspace>_<Type>.conf
+check_layout() { # LABEL, layout_entries lines on stdin
+	local label=$1 messages message
+	messages=$(layout_entry_problems)
+	while IFS= read -r message; do
+		[ -n "$message" ] && problem "$label: $message"
+	done <<<"$messages"
+}
+for file in "$cfg"/layouts/*.conf; do
+	[ -f "$file" ] && problem "layouts/${file##*/}: layouts are one file per workspace now - move its sections to layouts/<Type>/<Workspace>_<Type>.conf"
+done
+while IFS= read -r set; do
+	while IFS= read -r file; do
+		rel=${file#"$cfg"/}
+		mapfile -t names < <(conf_sections "$file")
+		if [ ${#names[@]} -ne 1 ]; then
+			problem "$rel: holds ${#names[@]} sections (one [Workspace] per file)"
+		elif [ "${file##*/}" != "${names[0]}_$set.conf" ]; then
+			problem "$rel: section [${names[0]}] belongs in ${names[0]}_$set.conf"
+		fi
+		while IFS= read -r ws; do
+			check_layout "$rel [$ws]" < <(layout_entries "$file" "$ws")
+			while IFS= read -r message; do
+				[ -n "$message" ] && problem "$rel [$ws]: $message"
+			done < <(layout_variant_problems "$file" "$ws")
+			# Each variant as the open would see it: the base with that variant merged in.
+			while IFS=$'\t' read -r scope _; do
+				[ -n "$scope" ] || continue
+				first=${scope%%,*}
+				in_list "$first" "$projects" || continue
+				check_layout "$rel [$ws] project variant [$scope]" < <(layout_entries "$file" "$ws" "$first")
+			done < <(layout_variants "$file" "$ws")
+		done < <(conf_sections "$file")
+	done < <(layout_files "$set")
+done < <(layout_types)
+
+# projects.conf
+file=$cfg/projects.conf
+stacks=$([ -f "$cfg/docker.conf" ] && conf_lines "$cfg/docker.conf" | awk '$1 == "stack" { print tolower($2) }')
+if [ -f "$file" ]; then
+	while IFS= read -r project; do
+		lines=$(conf_section "$file" "$project")
+		keys=$(
+			printf '%s\n' "$lines" | awk '$1 == "path" { print tolower($2) }'
+			echo default
+		)
+		tab_keys=$(printf '%s\n' "$lines" | awk '$1 == "tab" { print tolower($2) }')
+		while read -r kind key rest; do
+			case $kind in
+				action) known_action "$key" || problem "projects.conf [$project]: unknown action [$key]" ;;
+				tab) [ -n "$rest" ] || in_list "$key" "$keys" || problem "projects.conf [$project]: tab [$key] has no path line (and no directory of its own)" ;;
+				# Run-Project types a command only into a tab, so a run key that is only a path runs nothing.
+				run)
+					in_list "$key" "$tab_keys" && continue
+					if in_list "$key" "$keys"; then
+						problem "projects.conf [$project]: run [$key] has no tab [$key] line (Run-Project types commands only into tabs, so it runs nothing)"
+					else
+						problem "projects.conf [$project]: run [$key] names no tab"
+					fi
+					;;
+				docker) in_list "$key" "$stacks" || in_list "$key" "$keys" || problem "projects.conf [$project]: docker [$key] is neither a docker.conf stack nor a path key" ;;
+			esac
+		done <<<"$lines"
+	done < <(conf_sections "$file")
+fi
+
+# Machine types: every type machines.conf or an @TYPE prefix names is a `type` line. A layout set
+# (the target of small-display and layout-override, a layouts/<set>/ folder) need not be one, as
+# Windows' LayoutMachineTypeOverrides may name a set such as Temp: a target is a machine type or
+# an existing layouts/<set>/ folder.
+if [ -f "$cfg/machines.conf" ]; then
+	types=$(foundation_machine_types | lower_list)
+	layout_sets=$(layout_types | lower_list)
+	if [ -z "$types" ]; then
+		problem "machines.conf: no type lines (type NAME, one per machine type)"
+	else
+		while read -r kind first second _; do
+			case $kind in
+				host) named=$second ;;
+				default) named=$first ;;
+				layout-override) named=$first ;;
+				*) named='' ;;
+			esac
+			for type in $named; do
+				in_list "$type" "$types" || problem "machines.conf: $kind names unknown machine type [$type]"
+			done
+			case $kind in
+				small-display) target=$first ;;
+				layout-override) target=$second ;;
+				*) continue ;;
+			esac
+			[ -z "$target" ] || in_list "$target" "$types" || in_list "$target" "$layout_sets" ||
+				problem "machines.conf: $kind names unknown layout set [$target] (neither a machine type nor a layouts/$target/ folder)"
+		done < <(conf__lines_raw "$cfg/machines.conf")
+		while IFS=$'\t' read -r rel type; do
+			in_list "$type" "$types" || problem "$rel: @$type names an unknown machine type"
+		done < <(
+			for file in "$cfg"/*.conf "$cfg"/layouts/*/*.conf; do
+				[ -f "$file" ] || continue
+				awk -v rel="${file#"$cfg"/}" '/^[[:space:]]*@/ { t = $1; sub(/^@/, "", t); n = split(t, a, ","); for (i = 1; i <= n; i++) if (a[i] != "") print rel "\t" a[i] }' "$file"
+			done
+		)
+	fi
+	# The dev root this machine type resolves ($DEV of every configured path) must be a folder.
+	dev_root=$(foundation_dev_root)
+	[ -d "$dev_root" ] || problem "machines.conf: dev-root [$dev_root] is not a folder (\$DEV of every configured path)"
+fi
+
+# Smaller cross-references.
+if [ -f "$cfg/dnd.conf" ]; then
+	pdf_groups=$(sections_of pdfs.conf)
+	while IFS= read -r campaign; do
+		while read -r kind value; do
+			case $kind in
+				pdf) in_list "$value" "$pdf_groups" || problem "dnd.conf [$campaign]: pdf group [$value] is not in pdfs.conf" ;;
+				browser) in_list "$value" "$groups_all" || problem "dnd.conf [$campaign]: browser group [$value] is not in browser-groups.conf" ;;
+			esac
+		done < <(conf_section "$cfg/dnd.conf" "$campaign")
+	done < <(conf_sections "$cfg/dnd.conf")
+fi
+if [ -f "$cfg/vscode-workspaces.conf" ]; then
+	dir=$(foundation_expand_path "$(conf_value "$cfg/vscode-workspaces.conf" directory 2>/dev/null || echo '$DOTFILES_ROOT/VSCode/Workspaces')")
+	while read -r kind ws name; do
+		[ "$kind" = default ] || continue
+		conf_section_name "$cfg/workspaces.conf" "$ws" >/dev/null || problem "vscode-workspaces.conf: default names unknown workspace [$ws]"
+		[ -f "$dir/$name.code-workspace" ] || problem "vscode-workspaces.conf: no $name.code-workspace in ${dir#"$DOTFILES_ROOT"/}"
+	done < <(conf_lines "$cfg/vscode-workspaces.conf")
+fi
+
+# AI artifacts: every harness of the deploy line is an ai-harnesses.conf section, every
+# destination line of a section has the KIND PLACEMENT FILES [+HOOK...] PATH shape with a known
+# hook, every exclude entry names a known kind, every `use` line a known kind.
+if [ -f "$cfg/ai-artifacts.conf" ] || [ -f "$cfg/ai-harnesses.conf" ]; then
+	harnesses=$(sections_of ai-harnesses.conf)
+	while IFS= read -r harness; do
+		in_list "$harness" "$harnesses" || problem "ai-artifacts.conf: deploy names [$harness], no section of ai-harnesses.conf"
+	done < <(ai_deployed_harnesses)
+	if [ -f "$cfg/ai-harnesses.conf" ]; then
+		while IFS= read -r harness; do
+			while IFS=$'\t' read -r kind placement _ hooks _; do
+				if [ "$kind" = INVALID ]; then
+					problem "ai-harnesses.conf [$harness]: not KIND PLACEMENT FILES [+HOOK...] PATH => $placement"
+					continue
+				fi
+				for hook in ${hooks//,/ }; do
+					case $hook in - | claude-plugin-dirs | managed-settings) ;; *) problem "ai-harnesses.conf [$harness]: unknown hook +$hook" ;; esac
+				done
+			done < <(ai_harness_destinations "$harness")
+		done < <(conf_sections "$cfg/ai-harnesses.conf")
+	fi
+	if [ -f "$cfg/ai-artifacts.conf" ]; then
+		while read -r key rest; do
+			read -r first second _ <<<"$rest"
+			case $(foundation_lower "$key") in
+				exclude)
+					for entry in $rest; do
+						ai_kind_folder "${entry%%/*}" >/dev/null && [[ $entry == */* ]] ||
+							problem "ai-artifacts.conf: exclude [$entry] is not KIND/NAME or KIND/SOURCE/NAME"
+					done
+					;;
+				use) ai_kind_folder "$first" >/dev/null && [ -n "$second" ] || problem "ai-artifacts.conf: use [$first $second] is not KIND NAME" ;;
+			esac
+		done < <(conf_lines "$cfg/ai-artifacts.conf")
+	fi
+fi
+
+# Git identity, as Windows warns about an empty GitConfig.UserName / UserEmail: a note, not a
+# problem (a fresh clone has none until Initialize-Configuration asks for it), so neither --strict
+# nor --quiet sees it. Set when git.conf / git.local.conf or the global git config has it.
+if [ "$quiet" -eq 0 ]; then
+	git_conf=$(conf_path git.conf) || git_conf=''
+	for key in name email; do
+		value=''
+		[ -n "$git_conf" ] && value=$(conf_value "$git_conf" "$key" 2>/dev/null)
+		[ -n "$value" ] || value=$(git config --global "user.$key" 2>/dev/null)
+		[ -n "$value" ] || log_warning "Note: git $key is set in neither git.local.conf nor the global git config - Initialize-Configuration asks for it (not counted as a problem)"
+	done
+fi
+
+if [ "$problems" -eq 0 ]; then
+	[ "$quiet" -eq 1 ] || log_success "Configuration is consistent!"
+	exit 0
+fi
+log_warning "$problems configuration problem(s)"
+[ "$strict" -eq 1 ] && exit 1
+exit 0

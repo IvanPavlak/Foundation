@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# Enable-ObsidianCli - turns on the Obsidian command line interface for this machine.
+#
+# Usage: Enable-ObsidianCli [--create-if-missing] [--check] [--settings-path FILE]
+#
+# Sets "cli": true in ~/Library/Application Support/obsidian/obsidian.json (Linux:
+# ~/.config/obsidian/obsidian.json), the file Obsidian also keeps its vault list in - the same
+# switch as Settings > General > Advanced > Command line interface. Refuses while Obsidian runs
+# (it rewrites that file on every settings change); a file that does not exist yet (Obsidian never
+# started here) is only created with --create-if-missing. The file is backed up into
+# Backups/Unix/Config/obsidian.json first. --check reports the current state and changes nothing.
+# --settings-path FILE works on FILE instead of that obsidian.json, the -SettingsPath of Windows.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config backup obsidian
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+create=0
+check=0
+file=''
+while [ $# -gt 0 ]; do
+	case $1 in
+		--create-if-missing) create=1 ;;
+		--check) check=1 ;;
+		--settings-path)
+			[ -n "${2:-}" ] || foundation_die "--settings-path needs a FILE"
+			file=$2
+			shift
+			;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument => $1" ;;
+	esac
+	shift
+done
+
+if [ -z "$file" ]; then
+	case $(uname) in
+		Darwin) file="$HOME/Library/Application Support/obsidian/obsidian.json" ;;
+		*) file="${XDG_CONFIG_HOME:-$HOME/.config}/obsidian/obsidian.json" ;;
+	esac
+fi
+enabled() { [ -r "$file" ] && python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("cli") is True else 1)' "$file" 2>/dev/null; }
+
+log_title "Enable Obsidian CLI"
+if enabled; then
+	log_success "The Obsidian CLI is already enabled"
+	exit 0
+fi
+if [ "$check" -eq 1 ]; then
+	log_warning "The Obsidian CLI is off (${file/#$HOME/\~})"
+	exit 1
+fi
+obsidian_running && foundation_die "Quit Obsidian first - it rewrites obsidian.json on every settings change"
+if [ ! -f "$file" ]; then
+	[ "$create" -eq 1 ] || foundation_die "${file/#$HOME/\~} does not exist yet - start Obsidian once, or pass --create-if-missing"
+	mkdir -p "$(dirname "$file")" && printf '{"cli":true}\n' >"$file" || foundation_die "Could not create $file"
+	log_success "Created ${file/#$HOME/\~} with the CLI enabled"
+	exit 0
+fi
+backup_item Config obsidian.json "$file" >/dev/null || foundation_die "Could not back up $file - not changing it"
+python3 - "$file" <<'PY' || foundation_die "Could not update $file"
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path))
+data["cli"] = True
+with open(path, "w") as f:
+    json.dump(data, f, separators=(",", ":"))
+PY
+log_success "The Obsidian CLI is enabled - start Obsidian and it answers the obsidian command"

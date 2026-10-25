@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# Display-SystemLanguageSettings - prints the display languages, the region and the keyboard layouts.
+#
+# Usage: Display-SystemLanguageSettings
+#
+# The Unix twin of the Windows Display-SystemLanguageSettings. Display Language(s): AppleLanguages
+# in order. Region: AppleLocale, its region and the units (they follow the region unless
+# AppleMeasurementUnits is set). Keyboard Layouts: every enabled layout with its input-source id
+# (the id a keyboard-layout line of Unix/config/language.conf takes), the selected one marked.
+# Each value configured in language.conf shows its name there; the configured defaults close the
+# listing. Changes nothing.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config language drivers/inputsource
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+# The configured name of VALUE among the entries of KIND (compared by FIELD: value or region),
+# as " (NAME)", or nothing. Usage: configured_as KIND VALUE [region]
+configured_as() {
+	local name value
+	while IFS=$'\t' read -r name value; do
+		if [ "${3:-}" = region ]; then
+			[ "$(lang_code_region "$value")" = "$2" ] || continue
+		else
+			foundation_ieq "$value" "$2" || continue
+		fi
+		printf ' (%s)' "$name"
+		return 0
+	done < <(lang_entries "$1")
+}
+
+log_title "System Language Settings"
+
+log_segments info "[Display Language(s)]"
+languages=$(lang_current_languages)
+if [ -z "$languages" ]; then
+	printf '  (not set - the system default)\n'
+else
+	while IFS= read -r language; do
+		printf '  %s%s\n' "$language" "$(configured_as display-language "$language")"
+	done <<<"$languages"
+fi
+
+log_segments info "[Region]"
+locale=$(lang_current_locale)
+region=$(lang_locale_region "$locale")
+printf '  AppleLocale  %s\n' "${locale:-(not set)}"
+printf '  Region       %s%s\n' "${region:-(none)}" "$(configured_as locale "$region" region)"
+units=$(defaults read -g AppleMeasurementUnits 2>/dev/null) || units=''
+printf '  Units        %s\n' "${units:-follow the region}"
+
+log_segments info "[Keyboard Layouts]"
+if layouts=$(is_layouts); then
+	while IFS=$'\t' read -r id selected name; do
+		[ -n "$id" ] || continue
+		mark=''
+		[ "$selected" = 1 ] && mark=' [selected]'
+		printf '  %s  %s%s%s\n' "$id" "$name" "$(configured_as keyboard-layout "$id")" "$mark"
+	done <<<"$layouts"
+else
+	log_warning "Could not read the keyboard layouts"
+fi
+
+display_default=$(lang_default display-language)
+locale_default=$(lang_default locale)
+set_default=$(lang_default keyboard-set)
+if [ -n "$display_default$locale_default$set_default" ]; then
+	log_segments info "[Defaults (language.conf)]"
+	printf '  Display language  %s\n' "${display_default:-(none)}"
+	printf '  Locale            %s\n' "${locale_default:-(none)}"
+	printf '  Keyboard set      %s\n' "${set_default:-(none)}"
+fi

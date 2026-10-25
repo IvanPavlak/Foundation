@@ -1,0 +1,68 @@
+#!/bin/sh
+# bootstrap-first-run - what chezmoi's first apply runs (Unix/home/.chezmoiscripts): makes sure
+# Homebrew and Homebrew bash exist, then hands over to Bootstrap --with-initial-setup under that
+# bash. POSIX sh on purpose: on a fresh Mac only the stock bash 3.2 exists, and Bootstrap needs
+# bash 4.4+. chezmoi sets CHEZMOI=1, so Bootstrap's Dotfiles step leaves the links to chezmoi.
+# -h / --help prints this header and provisions nothing; any other argument is an error. Its lines
+# also go to the session log bootstrap.sh opened (FOUNDATION_LOG_FILE, passed down by chezmoi).
+#
+# Usage: bootstrap-first-run [-h | --help]
+set -u
+
+# Before anything else: a help request (or a typo) must never install or provision.
+case ${1:-} in
+	-h | --help)
+		awk 'NR == 1 && /^#!/ { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
+		exit 0
+		;;
+	'') ;;
+	*)
+		printf 'bootstrap-first-run: unknown argument => %s (it takes none; --help shows the usage)\n' "$1" >&2
+		exit 1
+		;;
+esac
+here=$(cd "$(dirname "$0")" && pwd -P)
+
+# Prints MESSAGE (to stderr for ERROR) and appends it to the session log bootstrap.sh opened, which
+# chezmoi passes down in FOUNDATION_LOG_FILE (none when run on its own). Usage: say LEVEL MESSAGE
+say() {
+	if [ "$1" = ERROR ]; then printf '\n=> %s\n' "$2" >&2; else printf '\n=> %s\n' "$2"; fi
+	[ -n "${FOUNDATION_LOG_FILE:-}" ] || return 0
+	printf '%s [%s] %s\n' "$(date +%H:%M:%S)" "$1" "$2" >>"$FOUNDATION_LOG_FILE" 2>/dev/null
+	return 0
+}
+
+# Homebrew's brew. BOOTSTRAP_BREW, when set, is the only candidate (the test suite's seam, as
+# Bootstrap has).
+brew_path() {
+	if [ -n "${BOOTSTRAP_BREW:-}" ]; then
+		[ -x "$BOOTSTRAP_BREW" ] && printf '%s' "$BOOTSTRAP_BREW"
+		return
+	fi
+	for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+		[ -x "$candidate" ] && {
+			printf '%s' "$candidate"
+			return 0
+		}
+	done
+	return 1
+}
+
+if ! brew=$(brew_path); then
+	say STEP "Homebrew is missing - installing it (it asks for the administrator password)"
+	/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || exit 1
+	brew=$(brew_path) || {
+		say ERROR "Homebrew is still missing - install it, then run: Bootstrap --with-initial-setup"
+		exit 1
+	}
+fi
+prefix=$("$brew" --prefix) || exit 1
+if [ ! -x "$prefix/bin/bash" ]; then
+	say STEP "Installing Homebrew bash"
+	"$brew" install bash || {
+		say ERROR "brew install bash failed - install it, then run: Bootstrap --with-initial-setup"
+		exit 1
+	}
+fi
+say STEP "Handing over to Bootstrap --with-initial-setup under $prefix/bin/bash"
+exec "$prefix/bin/bash" "$here/Bootstrap" --with-initial-setup

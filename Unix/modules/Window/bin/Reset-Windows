@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# Reset-Windows - retiles the desktops into a clean, balanced state, the AeroSpace way.
+#
+# Usage: Reset-Windows [--desktop | --virtual-desktop N | N | --current] [--gather N] [--center] [--monitor M]
+#
+# Windows needs a clean slate (one desktop, centered windows) before a layout can be applied;
+# AeroSpace does not - `w <Workspace>` lays windows out from any state. So the reset is done in
+# place: on every desktop (--desktop N or --current: only that one) floating windows - the ones
+# Center-Windows, Resize-Windows or Center-Terminal took out - go back into the tiling, the tree
+# is flattened into one row and the tiles are balanced. Windows stay on their desktops. Each
+# desktop is shown while it is retiled (AeroSpace changes the layout of a window on a hidden
+# desktop only once it is shown) and the desktop focused before comes back at the end; a desktop
+# AeroSpace refuses is reported and fails the run.
+# --gather N first moves every window to desktop N, the Windows Move-Windows step, when one
+# desktop is really wanted; a window that cannot be moved there stops the run before anything is
+# retiled. A desktop is a whole number from 1 to 100. --center and --monitor M
+# (the Windows flags) are accepted and ignored with a warning: they have no AeroSpace counterpart.
+# Any other flag is an error before anything changes.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps drivers/aerospace windows
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+only=''
+gather=''
+while [ $# -gt 0 ]; do
+	case $1 in
+		--desktop | --virtual-desktop)
+			only=$2
+			shift
+			;;
+		--current) only=__focused ;;
+		--gather)
+			gather=$2
+			shift
+			;;
+		--center | --monitor)
+			log_warning "$1 has no AeroSpace counterpart - Center-Windows floats single windows"
+			[ "$1" = --monitor ] && shift
+			;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1 - nothing was reset" ;;
+		*) only=$1 ;;
+	esac
+	shift
+done
+# The ValidateRange(1, 100) of Windows, checked before anything changes.
+for value in "$only" "$gather"; do
+	[ -z "$value" ] || [ "$value" = __focused ] || foundation_whole_number "$value" 1 100 || foundation_die "The desktop must be a whole number from 1 to 100 => $value"
+done
+as_available || as_start || exit 1
+log_title "Reset Windows"
+[ "$only" = __focused ] && only=$(as_focused_workspace)
+if [ -n "$gather" ]; then
+	foundation_run Move-Windows --desktop "$gather" >/dev/null || foundation_die "Not every window could be moved to desktop $gather - nothing was reset"
+	only=$gather
+fi
+
+total=0
+desktops=0
+failed=()
+# AeroSpace refuses `layout --window-id` on a window of a hidden workspace (the driver's header),
+# so each desktop is shown before its windows are retiled, and the one focused before comes back
+# at the end.
+start=$(as_focused_workspace)
+for desktop in $(as_windows | cut -f5 | sort -u); do
+	[ -z "$only" ] || [ "$desktop" = "$only" ] || continue
+	ids=()
+	while IFS=$'\t' read -r id _; do ids+=("$id"); done < <(windows_select '' '' "$desktop")
+	[ ${#ids[@]} -gt 0 ] || continue
+	as_focus_workspace "$desktop"
+	ok=1
+	for id in "${ids[@]}"; do
+		[ "$(as_window_layout "$id")" = floating ] || continue
+		as_set_tiling "$id" || ok=0
+	done
+	as_flatten "$desktop"
+	as_layout "${ids[0]}" h_tiles || ok=0
+	as_balance "$desktop"
+	if [ "$ok" -eq 0 ]; then
+		log_warning "Desktop $desktop => AeroSpace refused to retile it"
+		failed+=("$desktop")
+		continue
+	fi
+	log_step "Desktop $desktop => ${#ids[@]} window(s) tiled and balanced"
+	total=$((total + ${#ids[@]}))
+	desktops=$((desktops + 1))
+done
+[ -z "$start" ] || as_focus_workspace "$start"
+[ ${#failed[@]} -eq 0 ] || foundation_die "Reset $total window(s) on $desktops desktop(s); desktop(s) ${failed[*]} could not be retiled - Reset-Windows --desktop N tries one again"
+if [ -n "$only" ] && [ "$desktops" -eq 0 ]; then
+	log_warning "Desktop $only has no window - nothing was reset"
+	exit 1
+fi
+log_success "Reset $total window(s) on $desktops desktop(s)! (w <Workspace> applies a layout again)"

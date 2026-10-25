@@ -1,0 +1,8 @@
+{
+	// Recommended extensions for this repository's shell tooling (lint + formatting).
+	// VS Code prompts to install them when the folder is opened.
+	"recommendations": [
+		"timonwong.shellcheck",
+		"mkhl.shfmt"
+	]
+}

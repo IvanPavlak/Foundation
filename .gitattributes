@@ -1,0 +1,38 @@
+# .gitattributes - fork protection for Foundation and its forks.
+#
+# Foundation is meant to be forked. Your fork keeps its own version of the files listed below while
+# still merging engine, command and documentation improvements from upstream. The "ours" merge
+# driver makes `git merge upstream/master` (or Merge-Upstream) keep YOUR copy of a listed file
+# whenever both you and upstream changed it. Git only runs a merge driver when both sides changed
+# the file: a listed file you never edited simply follows upstream (it is still the generic one)
+# until you do, and an upstream deletion of a file you edited is a modify/delete conflict you
+# resolve by hand. Mirrored and root files of a fork of both WinuX and Foundation need more than
+# this: Merge-Upstream --owned-only (docs/unix/fork-model.md).
+#
+# The driver must be registered before git runs it: Foundation's git overrides
+# (Git/Unix/gitconfig.local, linked to ~/.gitconfig.local by chezmoi) set merge.ours.driver, so a
+# bootstrapped Mac needs nothing more. Without the bootstrap, run once:
+#   git config --global merge.ours.driver true
+# Git never registers a merge driver from a cloned repository (a security boundary).
+#
+# Personal CONFIG needs no attribute: the base Unix/config/NAME.conf files stay generic and SHOULD
+# track upstream, and your values go in the NAME.local.conf overlays, which upstream never tracks.
+#
+# NOTE for maintainers: these rules apply to this repository too, so a LOCAL merge of a pull request
+# that edits one of these files keeps the repository's version. Merge such pull requests on GitHub,
+# or reconcile by hand.
+
+# Payloads a tool reads whole, with no overlay: Foundation ships sensible defaults, your fork edits
+# them in place.
+Unix/aerospace/aerospace.toml                                  merge=ours
+Btop/Unix/btop.conf                                            merge=ours
+
+# Payloads mirrored from WinuX (generic templates there too).
+Git/.gitconfig                                                 merge=ours
+NuGet/nuget.config                                             merge=ours
+Firefox/user.js                                                merge=ours
+
+# Custom-area docs landing page - upstream ships it saying "None yet"; your fork lists its own
+# custom pages there. (Custom commands and per-module custom pages need no attribute: upstream
+# never tracks those paths.)
+docs/unix/custom/README.md                                     merge=ours

@@ -1,0 +1,417 @@
+#!/usr/bin/env bash
+# List-Functions - lists the Unix commands from their module pages, laid out as on Windows.
+#
+# Usage: List-Functions [PATTERN...] [--module NAME...] [--category [NAME...]] [--function [NAME...]] [--list-discrepancies] [--quiet] [--names]
+#
+# Parses the man-style entries of the module pages docs/unix/modules/<Module>.md - a
+# `## [Name](url)` heading followed by `- **Key:** value` bullets - exactly as the Windows
+# List-Functions parses docs/modules; the fork-only modules of the Custom area
+# (Unix/modules/Custom/<Module>) are documented in docs/unix/custom/<module>.md and listed as
+# Custom/<Module>. Every module gets a centered `[Module]` border; each entry shows its name, its
+# description and then every other bullet as `Key => value`, one more indent and the next colour
+# each; a `[Total function count => N]` border closes the list and the discrepancy report follows
+# when there is one.
+#
+#   PATTERN...           only the commands whose name matches (wildcards, case-insensitive)
+#   --module NAME...     only those modules (wildcards)
+#   --category [NAME...] the named modules, or a menu of them, each with its own count border
+#   --function [NAME...] the named commands, or a menu of them, each under its module border
+#   --list-discrepancies check each module three ways - its bin and functions.sh, its module.conf
+#                        manifest and its page - and that each page lists its entries in
+#                        alphabetical order, and exit 1 on any mismatch
+#   --quiet             with --list-discrepancies: print nothing when there is none
+#   --names              command names only, one per line
+#
+# Colours and the names the discrepancy check ignores come from Unix/config/list-functions.conf
+# (ListFunctionsColors, ShowFunctionDetailsColors and FunctionDiscrepancyExclusions on Windows).
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+patterns=()
+modules=()
+categories=()
+functions_wanted=()
+mode=all
+discrepancies=0
+quiet=0
+names_only=0
+list=patterns
+for argument in "$@"; do
+	case $argument in
+		--list-discrepancies) discrepancies=1 ;;
+		--quiet) quiet=1 ;;
+		--names) names_only=1 ;;
+		--module) list=modules ;;
+		--category)
+			mode=category
+			list=categories
+			;;
+		--function)
+			mode=function
+			list=functions_wanted
+			;;
+		-v | --verbose) ;;
+		*)
+			case $list in
+				modules) modules+=("$argument") ;;
+				categories) categories+=("$argument") ;;
+				functions_wanted) functions_wanted+=("$argument") ;;
+				*) patterns+=("$argument") ;;
+			esac
+			;;
+	esac
+done
+
+pages=$DOTFILES_ROOT/docs/unix/modules
+[ -d "$pages" ] || foundation_die "Missing docs/unix/modules"
+# The Custom area's pages, without its README (the area's overview, no module).
+custom_pages=()
+for page in "$DOTFILES_ROOT"/docs/unix/custom/*.md; do
+	[ -f "$page" ] && [ "${page##*/}" != README.md ] && custom_pages+=("$page")
+done
+
+# Colours (List-AvailableColors names) and exclusions of list-functions.conf.
+settings=$(conf_path list-functions.conf) || settings=''
+setting() { # KEY DEFAULT
+	local value=''
+	[ -n "$settings" ] && value=$(conf_value "$settings" "$1" 2>/dev/null)
+	printf '%s' "${value:-$2}"
+}
+# SGR code of a colour name: Black Red Green Yellow Blue Magenta Cyan White, Bright<Name>, or a
+# 256-colour number.
+sgr() { # NAME
+	local names=(black red green yellow blue magenta cyan white) name index bright=0
+	name=$(foundation_lower "$1")
+	case $name in [0-9] | [0-9][0-9] | [0-9][0-9][0-9])
+		printf '38;5;%s' "$name"
+		return
+		;;
+	esac
+	case $name in bright*)
+		bright=1
+		name=${name#bright}
+		;;
+	esac
+	for index in "${!names[@]}"; do
+		[ "${names[index]}" = "$name" ] && {
+			printf '%s' $((30 + index + bright * 60))
+			return
+		}
+	done
+	printf '0'
+}
+# Decided once, here: inside $(...) stdout is a pipe, so a paint call there would never colour.
+use_color=0
+log_use_color 1 && use_color=1
+paint() { # NAME
+	[ "$use_color" -eq 1 ] && printf '\033[%sm' "$(sgr "$1")"
+}
+reset=''
+[ "$use_color" -eq 1 ] && reset=$'\033[0m'
+c_border=$(paint "$(setting border Cyan)")
+c_error=$(paint "$(setting discrepancy-error BrightRed)")
+c_success=$(paint "$(setting discrepancy-success BrightGreen)")
+c_name=$(paint "$(setting function-name Cyan)")
+c_description=$(paint "$(setting description White)")
+c_parameters=()
+for colour in $(setting parameters 'BrightCyan Cyan BrightBlue Blue'); do c_parameters+=("$(paint "$colour")"); done
+exclusions=''
+[ -n "$settings" ] && exclusions=$(conf_lines "$settings" | awk '$1 == "exclude" && NF >= 2 { print $2 }')
+
+# Create-CenteredBorder: the terminal's width of =, with " [TITLE] " centered in it.
+border() { # [TITLE]
+	local width=${COLUMNS:-} line title left right
+	[ -n "$width" ] || width=$(tput cols 2>/dev/null) || width=''
+	case $width in '' | *[!0-9]*) width=120 ;; esac
+	if [ -z "${1:-}" ]; then
+		printf -v line '%*s' "$width" ''
+		printf '%s%s%s\n' "$c_border" "${line// /=}" "$reset"
+		return
+	fi
+	title=" [$1] "
+	left=$(((width - ${#title}) / 2))
+	right=$((width - ${#title} - left))
+	[ "$left" -ge 0 ] || left=0
+	[ "$right" -ge 0 ] || right=0
+	printf -v line '%*s' "$left" ''
+	printf '%s%s%s' "$c_border" "${line// /=}" "$title"
+	printf -v line '%*s' "$right" ''
+	printf '%s%s\n' "${line// /=}" "$reset"
+}
+
+# The page key of a module: its name for an engine module, Custom/<module> (lowercase, as the
+# page file is named) for a Custom one. Usage: page_key MODULE-NAME
+page_key() {
+	case $1 in
+		Custom/*) printf 'Custom/%s\n' "$(foundation_lower "${1#Custom/}")" ;;
+		*) printf '%s\n' "$1" ;;
+	esac
+}
+
+# One line per entry: MODULE, NAME, DESCRIPTION and the other bullets as KEY<GS>VALUE pairs joined
+# by RS, the fields separated by the unit separator (tab would not do: read merges consecutive
+# whitespace separators, so an empty field would vanish).
+entries=$(awk '
+	function flush() { if (name != "") printf "%s\037%s\037%s\037%s\n", module, name, desc, pairs; name = "" }
+	FNR == 1 { flush(); custom = (FILENAME ~ /\/docs\/unix\/custom\//); module = FILENAME; sub(/.*\//, "", module); sub(/\.md$/, "", module); if (custom) module = "Custom/" module }
+	/^## \[/ { flush(); name = $0; sub(/^## \[/, "", name); sub(/\].*/, "", name); desc = pairs = ""; inblock = 1; seen = 0; next }
+	# The bullet block may be preceded by one blank line; it ends at the first other line.
+	inblock && /^[[:space:]]*$/ { if (seen) inblock = 0; next }
+	inblock && /^- \*\*[^*:]+:\*\*/ {
+		key = $0; sub(/^- \*\*/, "", key); sub(/:\*\*.*/, "", key)
+		value = $0; sub(/^- \*\*[^*:]+:\*\* */, "", value); gsub(/`/, "", value)
+		# A Markdown link prints as its text: a relative path means nothing in a terminal. A loop,
+		# since BSD awk has no back-references in gsub.
+		while (match(value, /\[[^\]]*\]\([^)]*\)/)) {
+			link = substr(value, RSTART, RLENGTH); sub(/\]\(.*/, "", link)
+			value = substr(value, 1, RSTART - 1) substr(link, 2) substr(value, RSTART + RLENGTH)
+		}
+		if (key == "Description") desc = value; else pairs = pairs (pairs == "" ? "" : "\036") key "\035" value
+		seen = 1; next
+	}
+	inblock { inblock = 0 }
+	END { flush() }' "$pages"/*.md ${custom_pages[@]+"${custom_pages[@]}"})
+
+# Lines of KIND (command, function, helper) in a module manifest.
+manifest() { # MODULE-DIR KIND
+	awk -v k="$2" '$1 == k { print $2 }' "$1/module.conf"
+}
+
+in_list() { # NAME LIST
+	printf '%s\n' "$2" | grep -qxF -- "$1"
+}
+
+# The three-way check: every mismatch between a module's bin and functions.sh, its module.conf
+# and its page, one per line; the names of list-functions.conf's exclude lines are skipped.
+discrepancy_report() {
+	local dir module key page commands functions helpers documented defined name f found_module
+	# A problem without a NAME is never excluded (an empty name would match the empty line of an
+	# empty exclusion list).
+	problem() { { [ -n "$2" ] && in_list "$2" "$exclusions"; } || printf '%s\n' "$1"; }
+	while IFS= read -r dir; do
+		module=$(foundation_module_name "$dir")
+		key=$(page_key "$module")
+		page=$DOTFILES_ROOT/$(foundation_module_page "$module")
+		[ -r "$dir/module.conf" ] || {
+			problem "[$module] has no module.conf" ''
+			continue
+		}
+		commands=$(manifest "$dir" command)
+		functions=$(manifest "$dir" function)
+		helpers=$(manifest "$dir" helper)
+		documented=$(printf '%s\n' "$entries" | awk -F'\037' -v m="$key" '$1 == m { print $2 }')
+		defined=''
+		[ -r "$dir/functions.sh" ] && defined=$(sed -n 's/^\([A-Za-z][A-Za-z-]*\)() {.*/\1/p' "$dir/functions.sh")
+		[ -r "$page" ] || problem "[$module] has no page $(foundation_module_page "$module")" ''
+		for f in "$dir"/bin/*; do
+			[ -f "$f" ] || continue
+			name=${f##*/}
+			in_list "$name" "$commands" || in_list "$name" "$helpers" || problem "[$module] $name is not in module.conf" "$name"
+		done
+		while IFS= read -r name; do
+			[ -n "$name" ] || continue
+			[ -f "$dir/bin/$name" ] || problem "[$module] manifest command without an executable => $name" "$name"
+			in_list "$name" "$documented" || problem "[$module] undocumented command => $name" "$name"
+		done <<<"$commands"
+		while IFS= read -r name; do
+			[ -n "$name" ] || continue
+			[ -f "$dir/bin/$name" ] || problem "[$module] manifest helper without an executable => $name" "$name"
+		done <<<"$helpers"
+		while IFS= read -r name; do
+			[ -n "$name" ] || continue
+			in_list "$name" "$defined" || problem "[$module] manifest function not defined in functions.sh => $name" "$name"
+			in_list "$name" "$documented" || problem "[$module] undocumented function => $name" "$name"
+		done <<<"$functions"
+		while IFS= read -r name; do
+			[ -n "$name" ] || continue
+			in_list "$name" "$functions" || problem "[$module] functions.sh defines $name, which module.conf does not list" "$name"
+		done <<<"$defined"
+		while IFS= read -r name; do
+			[ -n "$name" ] || continue
+			in_list "$name" "$commands" || in_list "$name" "$functions" || problem "[$module] documented but not in module.conf => $name" "$name"
+		done <<<"$documented"
+	done < <(foundation_module_dirs)
+	# Each page lists its entries in alphabetical order, case-insensitively (OrdinalIgnoreCase on
+	# Windows, where Infrastructure-FunctionReference checks it).
+	while IFS= read -r name; do
+		[ -n "$name" ] && problem "$name" ''
+	done < <(printf '%s\n' "$entries" | LC_ALL=C awk -F'\037' 'NF >= 2 {
+		if ($1 == module && toupper(previous) > toupper($2)) print "[" $1 "] " $2 " belongs before " previous " (a page lists its entries alphabetically)"
+		module = $1; previous = $2 }')
+	for page in "$pages"/*.md; do
+		module=$(basename "$page" .md)
+		[ "$module" != Custom ] && [ -d "$FOUNDATION_UNIX/modules/$module" ] || problem "Page without a module => docs/unix/modules/$module.md" ''
+	done
+	for page in ${custom_pages[@]+"${custom_pages[@]}"}; do
+		module=$(basename "$page" .md)
+		found_module=0
+		for dir in "$FOUNDATION_UNIX"/modules/Custom/*/; do
+			[ -d "$dir" ] && foundation_ieq "$(basename "$dir")" "$module" && found_module=1
+		done
+		[ "$found_module" -eq 1 ] || problem "Page without a module => docs/unix/custom/$module.md" ''
+	done
+}
+
+# Prints the report under its border, in the error colour.
+print_report() { # REPORT
+	printf '\n'
+	c_border=$c_error border "Discrepancy Report"
+	printf '%s\n' "$1" | while IFS= read -r line; do printf '%s=> %s%s\n' "$c_error" "$line" "$reset"; done
+}
+
+if [ "$discrepancies" -eq 1 ]; then
+	report=$(discrepancy_report)
+	if [ -n "$report" ]; then
+		print_report "$report"
+		exit 1
+	fi
+	[ "$quiet" -eq 1 ] || printf '\n%s=> No discrepancies between the Unix modules, their manifests and docs/unix/modules!%s\n' "$c_success" "$reset"
+	exit 0
+fi
+
+# The heading of a module: a Custom page key (Custom/workflow) shows its folder's own spelling
+# (Custom/Workflow). Usage: display_name PAGE-KEY
+display_name() {
+	local dir
+	case $1 in Custom/*)
+		for dir in "$FOUNDATION_UNIX"/modules/Custom/*/; do
+			[ -d "$dir" ] || continue
+			dir=${dir%/}
+			foundation_ieq "${dir##*/}" "${1#Custom/}" && {
+				printf 'Custom/%s\n' "${dir##*/}"
+				return 0
+			}
+		done
+		;;
+	esac
+	printf '%s\n' "$1"
+}
+
+matches() { # MODULE NAME
+	local pattern hit=0
+	if [ ${#modules[@]} -gt 0 ]; then
+		for pattern in "${modules[@]}"; do foundation_match_process "$pattern" "$1" && hit=1; done
+		[ "$hit" -eq 1 ] || return 1
+	fi
+	[ ${#patterns[@]} -gt 0 ] || return 0
+	for pattern in "${patterns[@]}"; do
+		foundation_match_process "$pattern" "$2" && return 0
+	done
+	return 1
+}
+
+# Show-FunctionDetails: the name, the description, then every other bullet as KEY => VALUE, each
+# one indent deeper and in the next colour of the palette.
+show_details() { # NAME DESCRIPTION PAIRS
+	local indent='  ' pair key value index=0 pairs=()
+	printf '%s %s%s\n' "$c_name" "$1" "$reset"
+	[ -n "$2" ] && printf '%s  %s%s\n' "$c_description" "$2" "$reset"
+	[ -n "$3" ] && IFS=$'\036' read -r -a pairs <<<"$3"
+	for pair in ${pairs[@]+"${pairs[@]}"}; do
+		key=${pair%%$'\035'*}
+		value=${pair#*$'\035'}
+		indent+='  '
+		printf '%s%s%s => %s%s\n' "${c_parameters[index % ${#c_parameters[@]}]}" "$indent" "$key" "$value" "$reset"
+		index=$((index + 1))
+	done
+	printf '\n'
+}
+
+# Categories (display names) and commands that have entries, in page order.
+all_categories=$(printf '%s\n' "$entries" | cut -d$'\037' -f1 | awk 'NF && !seen[$0]++' | while IFS= read -r key; do display_name "$key"; done)
+all_names=$(printf '%s\n' "$entries" | cut -d$'\037' -f2 | grep . | sort -u)
+
+# Resolve-Selection: the given names matched against OPTIONS as the menu would (a number is that
+# entry of it, a name matches in any case), else (none, or only empty ones: --function "") a menu.
+resolve() { # TITLE PROMPT OPTIONS GIVEN...
+	local title=$1 prompt=$2 options=$3 given option hit names=() list=()
+	shift 3
+	for given in "$@"; do [ -n "$given" ] && names+=("$given"); done
+	while IFS= read -r option; do [ -n "$option" ] && list+=("$option"); done <<<"$options"
+	if [ ${#names[@]} -eq 0 ]; then
+		foundation_resolve_selection "$title" "$prompt" 0 1 "${list[@]}"
+		return
+	fi
+	mapfile -t names < <(foundation_resolve_items "${names[@]}" -- ${list[@]+"${list[@]}"})
+	for given in "${names[@]}"; do
+		hit=''
+		while IFS= read -r option; do foundation_ieq "$option" "$given" && hit=$option; done <<<"$options"
+		if [ -n "$hit" ]; then printf '%s\n' "$hit"; else log_warning "No [$given] to list" >&2; fi
+	done
+}
+
+if [ "$names_only" -eq 1 ]; then
+	while IFS=$'\037' read -r module name _ _; do
+		[ -n "$name" ] && matches "$module" "$name" && printf '%s\n' "$name"
+	done <<<"$entries"
+	exit 0
+fi
+
+printf '\n'
+case $mode in
+	category)
+		selected=$(resolve "[Available Categories]" "Enter category(s) to list by number or name" "$all_categories" ${categories[@]+"${categories[@]}"}) || exit 1
+		while IFS= read -r category; do
+			[ -n "$category" ] || continue
+			key=$(page_key "$category")
+			border "$category"
+			printf '\n'
+			count=0
+			while IFS=$'\037' read -r module name desc pairs; do
+				[ "$module" = "$key" ] || continue
+				show_details "$name" "$desc" "$pairs"
+				count=$((count + 1))
+			done <<<"$entries"
+			border "Function count => $count"
+			printf '\n'
+		done <<<"$selected"
+		;;
+	function)
+		selected=$(resolve "[Available Functions]" "Enter function(s) to view by number or name" "$all_names" ${functions_wanted[@]+"${functions_wanted[@]}"}) || exit 1
+		while IFS= read -r wanted; do
+			[ -n "$wanted" ] || continue
+			while IFS=$'\037' read -r module name desc pairs; do
+				[ "$name" = "$wanted" ] || continue
+				border "$(display_name "$module")"
+				printf '\n'
+				show_details "$name" "$desc" "$pairs"
+				border
+				printf '\n'
+				break
+			done <<<"$entries"
+		done <<<"$selected"
+		;;
+	*)
+		count=0
+		current=''
+		while IFS=$'\037' read -r module name desc pairs; do
+			[ -n "$name" ] || continue
+			matches "$module" "$name" || continue
+			if [ "$module" != "$current" ]; then
+				border "$(display_name "$module")"
+				printf '\n'
+				current=$module
+			fi
+			show_details "$name" "$desc" "$pairs"
+			count=$((count + 1))
+		done <<<"$entries"
+		border "Total function count => $count"
+		printf '\n'
+		# The report follows the full listing only, as on Windows.
+		if [ ${#patterns[@]} -eq 0 ] && [ ${#modules[@]} -eq 0 ]; then
+			report=$(discrepancy_report)
+			[ -z "$report" ] || print_report "$report"
+		fi
+		;;
+esac
+exit 0

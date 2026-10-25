@@ -1,0 +1,10 @@
+Battery Power:
+ Sleep On Power Button 1
+ displaysleep         10
+ womp                 0
+ sleep                1
+AC Power:
+ Sleep On Power Button 1
+ displaysleep         10
+ womp                 1
+ sleep                1

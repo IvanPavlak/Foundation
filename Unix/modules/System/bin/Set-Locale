@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Set-Locale - sets the macOS region (date, number and unit formats) from Unix/config/language.conf.
+#
+# Usage: Set-Locale [NAME | --locale NAME]
+#
+# The Unix twin of the Windows Set-Locale (Set-Culture and Set-WinHomeLocation). NAME is a
+# `locale` name of language.conf; without it a menu of them is shown, where Enter picks
+# `default-locale`. The region of the locale's code (hr-HR is HR) goes into AppleLocale as
+# System Settings writes it: the display language with @rg=<region>zzzz (en_US@rg=hrzzzz), or the
+# language alone when its own country is the region. The units follow the region. Nothing changes
+# when the region already matches, or when language.conf has no locales. Apps opened afterwards
+# use the new formats.
+# Windows-style names: --locale (-Locale) NAME is the same as a bare NAME.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config language
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+name=''
+for argument in "$@"; do
+	case $argument in
+		--locale | -v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $argument" ;;
+		*) name=$argument ;;
+	esac
+done
+
+if [ -z "$(lang_entries locale)" ]; then
+	log_warning "No locale lines in language.conf - leaving the region as it is!"
+	exit 0
+fi
+entry=$(lang_choose locale "[Available Locales]" "$name") || exit 1
+IFS=$'\t' read -r target code <<<"$entry"
+region=$(lang_code_region "$code")
+[ -n "$region" ] || foundation_die "Locale [$target] has no region in its code [$code] (expected language-REGION, e.g. hr-HR)"
+
+log_title "Setting the Locale to [$target]"
+
+locale=$(lang_current_locale)
+if [ -n "$locale" ] && [ "$(lang_locale_region "$locale")" = "$region" ]; then
+	log_warning "Locale already set to [$target]!"
+	exit 0
+fi
+
+# The language part stays: the current AppleLocale's, else the first display language's.
+language=$(lang_locale_language "$locale")
+[ -n "$language" ] || language=$(lang_current_languages | head -n 1)
+[ -n "$language" ] || language=en_US
+new_locale=$(lang_build_locale "$language" "$region")
+defaults write -g AppleLocale -string "$new_locale" || foundation_die "Could not write AppleLocale"
+
+[ "$(lang_locale_region "$(lang_current_locale)")" = "$region" ] || foundation_die "Locale was attempted to be set but verification failed!"
+log_success "Locale successfully set to [$target] => $new_locale"
+log_warning "Apps opened from now on use the new formats; quit and reopen the ones already running!"

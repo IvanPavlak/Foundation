@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+# Get-WorkspaceBenchmark - shows how long workspace opens took and where the time went.
+#
+# Usage: Get-WorkspaceBenchmark [WORKSPACE...] [--last N] [--summary] [--csv] [--include-measured] [--source NAME...]
+#
+# Reads the rows Open-Workspace appends to $XDG_STATE_HOME/foundation/WorkspaceBenchmark.csv (one per
+# workspace open): the mode (Plain or Alongside), total, launch actions, layout (its wait for
+# windows and arrange), windows found of expected, the layout's attempts (Tries; 1 at the first
+# try), the outcome and whether layout-early-move was on. Oldest first; WORKSPACE keeps those
+# workspaces (case-insensitive), --last N the most recent N rows (default: benchmark-history of
+# workspaces.conf, else 10; 0 shows every row). A median line per workspace, mode and early-move
+# mode closes the table, with its clean runs (Applied at the first try), retries and runs not
+# applied - medians, so one slow cold start does not decide a comparison; read Outcome and the
+# retries before the seconds. --summary (the Windows -Summary) prints only the median lines, and
+# --formatted (-Formatted) is accepted and ignored, the table being the only output here. --csv
+# prints the selected rows as CSV; it does not combine with --summary. Rows of Measure-WorkspaceOpen
+# experiments are left out unless --include-measured; --source NAME keeps only the rows of that
+# source (repeatable, or a comma list; a Measure-WorkspaceOpen session id such as 20260101-100000
+# names its "Measure-WorkspaceOpen 20260101-100000" rows), the measured ones included. A row
+# written before the Mode and Attempts columns shows as Plain with no attempt count.
+# Windows-style names: --workspace (-Workspace) is accepted and ignored: the names after it are
+# workspaces.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config benchmark
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+names=()
+last=$(conf_path workspaces.conf >/dev/null && conf_value "$(conf_path workspaces.conf)" benchmark-history 2>/dev/null) || last=''
+[ -n "$last" ] || last=10
+csv=0
+summary=0
+measured=0
+sources=()
+while [ $# -gt 0 ]; do
+	case $1 in
+		--last)
+			last=$2
+			shift
+			;;
+		--csv) csv=1 ;;
+		--summary) summary=1 ;;
+		# The table is the only output here: -Formatted of Windows asks for nothing more.
+		--formatted) ;;
+		--include-measured) measured=1 ;;
+		--source)
+			[ $# -gt 1 ] || foundation_die "--source needs a name"
+			IFS=, read -r -a list <<<"$2"
+			sources+=("${list[@]}")
+			# The rows of a source are experiment rows: --source implies --include-measured.
+			measured=1
+			shift
+			;;
+		--workspace | -v | --verbose) ;;
+		*)
+			IFS=, read -r -a list <<<"$1"
+			names+=("${list[@]}")
+			;;
+	esac
+	shift
+done
+case $last in '' | *[!0-9]*) foundation_die "--last needs a number" ;; esac
+[ "$csv" -eq 0 ] || [ "$summary" -eq 0 ] || foundation_die "--summary and --csv do not combine: --csv prints the rows"
+
+file=$(benchmark_file)
+[ -s "$file" ] || {
+	log_warning "No workspace open recorded yet (${file/#$HOME/\~})"
+	exit 0
+}
+# Comma-joined: the names were split on commas, and BSD awk rejects a newline in a -v value.
+wanted=$(
+	IFS=,
+	printf '%s' "${names[*]}" | tr '[:upper:]' '[:lower:]'
+)
+# The sources the same way; a bare session id also names its Measure-WorkspaceOpen source.
+source_list=$(
+	IFS=,
+	printf '%s' "${sources[*]-}"
+)
+rows=$(tail -n +2 "$file" | awk -F, -v w="$wanted" -v m="$measured" -v s="$source_list" '
+	BEGIN {
+		n = split(w, a, ","); for (i = 1; i <= n; i++) if (a[i] != "") { keep[a[i]] = 1; k++ }
+		n = split(s, b, ","); for (i = 1; i <= n; i++) if (b[i] != "") { src[b[i]] = 1; src["Measure-WorkspaceOpen " b[i]] = 1; ks++ }
+	}
+	(ks > 0 ? ($14 in src) : (m == 1 || $14 == "")) && (k == 0 || (tolower($2) in keep))')
+# --last 0 keeps every row, as -Last 0 on Windows.
+[ "$last" -eq 0 ] || rows=$(printf '%s\n' "$rows" | tail -n "$last")
+if [ -z "$rows" ]; then
+	if [ ${#sources[@]} -gt 0 ]; then
+		log_warning "No recorded open of source [$(printf '%s, ' "${sources[@]}" | sed 's/, $//')]${names[*]:+ in [${names[*]}]}"
+	elif [ ${#names[@]} -gt 0 ]; then log_warning "No recorded open of [${names[*]}]"; else log_warning "No everyday open recorded yet"; fi
+	[ "$measured" -eq 1 ] || log_step "Measure-WorkspaceOpen runs are left out - add --include-measured"
+	exit 0
+fi
+if [ "$csv" -eq 1 ]; then
+	head -n 1 "$file"
+	printf '%s\n' "$rows"
+	exit 0
+fi
+
+log_title "Workspace Benchmark"
+printf '%s\n' "$rows" | awk -F, -v summary="$summary" '
+	function median(list,   n, v, i, j, t) {
+		n = split(list, v, " ")
+		for (i = 1; i <= n; i++) for (j = i + 1; j <= n; j++) if (v[j] + 0 < v[i] + 0) { t = v[i]; v[i] = v[j]; v[j] = t }
+		return n % 2 ? v[(n + 1) / 2] : (v[n / 2] + v[n / 2 + 1]) / 2
+	}
+	BEGIN { if (!summary) printf "  %-19s %-14s %-9s %7s %8s %7s %6s %8s %7s %5s  %-9s %s\n", "Time", "Workspace", "Mode", "Total", "Actions", "Layout", "Wait", "Arrange", "Found", "Tries", "Outcome", "Early" }
+	{
+		early = ($13 == "") ? "-" : $13
+		# Rows from before the Mode and Attempts columns: a plain open, attempt count unknown.
+		mode = ($15 == "") ? "Plain" : $15
+		tries = ($16 == "") ? "-" : $16
+		if (!summary) printf "  %-19s %-14s %-9s %6ss %7ss %6ss %5ss %7ss %7s %5s  %-9s %s\n", $1, substr($2, 1, 14), mode, $5, $6, $7, $8, $9, $10 "/" $11, tries, $12, early
+		k = $2 SUBSEP mode SUBSEP early
+		total[k] = total[k] " " $5; actions[k] = actions[k] " " $6; layout[k] = layout[k] " " $7; wait[k] = wait[k] " " $8
+		count[k]++
+		# Clean: Applied at the first try (Windows reads Attempts before the seconds).
+		if ($12 == "Applied" && $16 + 0 <= 1) clean[k]++
+		if ($16 + 0 > 1) retries[k] += $16 - 1
+		if ($12 != "Applied" && $12 != "NoLayout") notapplied[k]++
+	}
+	END {
+		if (!summary) print ""
+		for (k in count) {
+			split(k, part, SUBSEP)
+			printf "  median %-14s %-9s early %-3s total %.1fs, actions %.1fs, layout %.1fs (wait %.1fs) over %d run(s), %d applied cleanly, %d retries, %d not applied\n", part[1], part[2], part[3], median(total[k]), median(actions[k]), median(layout[k]), median(wait[k]), count[k], clean[k] + 0, retries[k] + 0, notapplied[k] + 0
+		}
+	}'

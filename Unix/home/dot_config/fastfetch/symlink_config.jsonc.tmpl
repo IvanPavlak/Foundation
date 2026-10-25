@@ -1,0 +1,3 @@
+{{- $file := printf "FastFetch/Unix/config_%s.jsonc" .machineType -}}
+{{- if not (stat (joinPath .chezmoi.workingTree $file)) }}{{ $file = "FastFetch/Unix/config_Test.jsonc" }}{{ end -}}
+{{ joinPath .chezmoi.workingTree $file }}

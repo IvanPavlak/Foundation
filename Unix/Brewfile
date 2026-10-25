@@ -1,0 +1,23 @@
+# Brewfile - the Unix counterpart of WinuX's base WinGetApps.csv: only what the Unix half needs
+# to work end to end (the bash its commands run on, the AeroSpace and WezTerm drivers, the menus,
+# the dotfile links, the Dock pins, the test tools). Installed by the bootstrap (step packages)
+# with `brew bundle --file Unix/Brewfile`, then Brewfile.local.
+#
+# DO NOT add your own apps here: they belong in Unix/Brewfile.local, the WinGetApps.local.csv
+# analog, bundled right after this file. Mapping and every name's verification:
+# Backlog/MacOS/Research/PackageMapping.md. Casks cannot be version-pinned; formulae can be held
+# with `brew pin`.
+
+tap "nikitabobko/tap"             # AeroSpace's tap (the aerospace cask)
+
+brew "bash"                       # every Unix/modules command needs bash 4.4+
+brew "jq"                         # JSON for the WezTerm driver, foundation.sh and Invoke-GoogleTranslate
+brew "fzf"                        # fuzzy finder for the shell; no Unix command uses it yet
+brew "chezmoi"                    # dotfile links of Unix/home (Bootstrap's Dotfiles step)
+brew "dockutil"                   # Dock pins (Set-DockPins)
+cask "aerospace"                  # tiling and desktops, the FancyZones and virtual desktop analog
+cask "wezterm"                    # orchestrated terminal (wezterm cli), the Windows Terminal analog
+
+brew "shellcheck"                 # lint of the Unix half (Run-Tests, CI)
+brew "shfmt"                      # format check of the Unix half (Run-Tests, CI)
+brew "bats-core"                  # test runner of the Unix suites (Run-Tests, CI)

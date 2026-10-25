@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# Terminate-WindowsTerminalTabs - closes WezTerm tabs (the name is kept from Windows so workspace
+# files and muscle memory carry over).
+#
+# Usage: Terminate-WindowsTerminalTabs [--include-current | --only-current] [--close-wait-seconds N]
+#
+# Default: every other tab (all of its panes), keeping the tab this shell runs in whole, its split
+# panes included. --include-current closes this tab too (its other panes, then this one, last);
+# --only-current closes only this pane.
+# --close-wait-seconds N (0-300, as the Windows -CloseWaitSeconds) counts down N seconds
+# (Countdown) before this tab closes, so its last output can be read. A tab still open after the
+# pass is reported in a warning. Any other argument is an error and closes nothing.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps drivers/wezterm drivers/aerospace
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+mode=others
+wait_seconds=0
+while [ $# -gt 0 ]; do
+	case $1 in
+		--include-current) mode=all ;;
+		--only-current) mode=current ;;
+		--close-wait-seconds)
+			wait_seconds=${2:-}
+			shift
+			case $wait_seconds in '' | *[!0-9]*) foundation_die "--close-wait-seconds takes 0-300 - no tab was closed" ;; esac
+			[ "$wait_seconds" -le 300 ] || foundation_die "--close-wait-seconds takes 0-300 - no tab was closed"
+			;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument => $1 - no tab was closed" ;;
+	esac
+	shift
+done
+
+# The countdown before this tab closes, as Windows gives the caller time to read the output.
+close_wait() {
+	[ "$wait_seconds" -gt 0 ] || return 0
+	foundation_run Countdown "$wait_seconds" --message "Closing this terminal tab in:"
+}
+
+if ! wt_running; then
+	log_debug "[Terminate-WindowsTerminalTabs] WezTerm is not running - nothing to close"
+	exit 0
+fi
+current=$(wt_own_pane) || current=
+
+if [ "$mode" = "current" ]; then
+	[ -n "$current" ] || {
+		log_debug "Not running inside WezTerm - nothing to close"
+		exit 0
+	}
+	log_step "Closing the current terminal tab..."
+	close_wait || exit 0
+	# Closing a tab raises the WezTerm window, and AeroSpace follows it to its desktop, which
+	# undoes the workspace's Focus-VirtualDesktop landing. This process dies with the tab, so a
+	# detached child refocuses the desktop that was focused before the close.
+	workspace=$(as_focused_workspace 2>/dev/null)
+	if [ -n "$workspace" ]; then
+		nohup "${BASH:-bash}" -c 'sleep 0.6; . "$1/lib/foundation.sh" && foundation_load drivers/aerospace && as_focus_workspace "$2"' \
+			_ "$FOUNDATION_UNIX" "$workspace" >/dev/null 2>&1 </dev/null &
+		disown 2>/dev/null
+	fi
+	wt_kill_pane "$current"
+	exit 0
+fi
+
+log_step "Closing terminal tabs..."
+# A tab closes with its last pane: every pane of every other tab goes, the panes of this shell's
+# tab (a split sibling too) stay - with --include-current they go last, this pane after them.
+current_tab=''
+[ -n "$current" ] && current_tab=$(wt_panes | awk -F'\t' -v p="$current" '$3 == p { print $2; exit }')
+tabs=' '
+siblings=()
+while IFS=$'\t' read -r _ tab pane _; do
+	[ -n "$pane" ] || continue
+	if [ -n "$current_tab" ] && [ "$tab" = "$current_tab" ]; then
+		[ "$pane" != "$current" ] && siblings+=("$pane")
+		continue
+	fi
+	wt_kill_pane "$pane"
+	case $tabs in *" $tab "*) ;; *) tabs+="$tab " ;; esac
+done < <(wt_panes)
+closed=$(printf '%s' "$tabs" | wc -w | tr -d ' ')
+# Windows' leftover check: a tab of the pass still listed did not close.
+left=$(wt_panes | awk -F'\t' -v tabs="$tabs" -v current="$current_tab" '$2 != current && index(tabs, " " $2 " ") && !seen[$2]++' | grep -c .)
+if [ "$left" -gt 0 ]; then
+	log_warning "Closed $((closed - left)) terminal tab(s), but the cleanup left $left tab(s) open"
+else
+	log_success "Closed $closed terminal tab(s)!"
+fi
+if [ "$mode" = "all" ] && [ -n "$current" ]; then
+	close_wait || exit 0
+	for pane in ${siblings[@]+"${siblings[@]}"}; do wt_kill_pane "$pane"; done
+	wt_kill_pane "$current"
+fi
+exit 0

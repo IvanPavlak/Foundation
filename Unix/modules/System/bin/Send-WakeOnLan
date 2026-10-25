@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# Send-WakeOnLan - sends a Wake-on-LAN magic packet to one or more machines.
+#
+# Usage: Send-WakeOnLan [MACHINE...|All|None] [--all] [--timeout-seconds N] [--no-wait]
+#
+# Machines come from Unix/config/wake-on-lan.conf; without a name a menu of the machines, then
+# All (every machine) and None (cancel), is shown, and an empty Enter wakes the `default` machine
+# (sends nothing when there is none), as on Windows. All and None may also be given as names, in
+# any case (`w Server --machine None` opens the workspace and wakes nothing). A workspace action without a name and
+# without a terminal wakes the default machine. For a machine with an `address`, the packet is
+# skipped when the machine already answers a ping, and after sending it is pinged until it
+# answers or --timeout-seconds (default 120) pass, so the result says whether it actually woke;
+# a machine without an address gets a warning that its wake cannot be confirmed. --no-wait skips
+# both pings: the packet is sent and nothing is verified. The packet (6 x 0xFF, then the MAC 16
+# times) is sent by the system python3, because bash cannot set SO_BROADCAST.
+# `A,B` names two machines; a flag it does not know is an error, never a machine.
+# Windows-style names: --machine (-Machine) is accepted and ignored: the names after it are
+# machines.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config network
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+file=$(conf_path wake-on-lan.conf) || foundation_die "Missing Unix/config/wake-on-lan.conf"
+machines=()
+all=0
+timeout=120
+wait_up=1
+while [ $# -gt 0 ]; do
+	case $1 in
+		--all) all=1 ;;
+		--timeout-seconds)
+			timeout=$2
+			shift
+			;;
+		--no-wait) wait_up=0 ;;
+		--machine | -v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1 - no packet was sent" ;;
+		*) foundation_split_list machines "$1" ;;
+	esac
+	shift
+done
+
+available=()
+while IFS= read -r name; do available+=("$name"); done < <(conf_sections "$file")
+[ ${#available[@]} -gt 0 ] || foundation_die "No machines in wake-on-lan.conf"
+# Names as the menu reads them: a number picks that menu entry, All and None included.
+if [ ${#machines[@]} -gt 0 ]; then
+	mapfile -t machines < <(foundation_resolve_items "${machines[@]}" -- "${available[@]}" All None)
+fi
+if [ "$all" -eq 1 ]; then
+	machines=("${available[@]}")
+elif [ ${#machines[@]} -eq 0 ]; then
+	default=$(conf_value "$file" default) || default=''
+	if [ ! -t 0 ] && [ -n "${FOUNDATION_WORKSPACE_OPEN:-}" ]; then
+		# A workspace action without arguments wakes the default machine, as on Windows.
+		[ -n "$default" ] || {
+			log_warning "No default machine in wake-on-lan.conf"
+			exit 0
+		}
+		machines=("$default")
+	else
+		# The menu of Windows: the machines, then All and None; Enter takes the default.
+		prompt="Select machine to wake (press [Enter] for default => $default)"
+		[ -n "$default" ] || prompt="Select machine to wake (press [Enter] to cancel)"
+		selection=$(foundation_resolve_selection "[Available Machines for Wake-on-LAN]" "$prompt" 1 1 "${available[@]}" All None) || exit 1
+		while IFS= read -r name; do [ -n "$name" ] && machines+=("$name"); done <<<"$selection"
+		if [ ${#machines[@]} -eq 0 ]; then
+			[ -n "$default" ] || exit 0
+			machines=("$default")
+		fi
+	fi
+fi
+# None and All are options of the menu, not machines, and a name argument may give them too, in
+# any case, as -Machine None does on Windows: None cancels, All wakes every configured machine.
+for name in "${machines[@]}"; do
+	if foundation_ieq "$name" None; then
+		log_warning "Wake-on-LAN cancelled!"
+		exit 0
+	fi
+done
+for name in "${machines[@]}"; do
+	if foundation_ieq "$name" All; then
+		log_step "Waking all configured machines..."
+		machines=("${available[@]}")
+		break
+	fi
+done
+
+command -v python3 >/dev/null 2>&1 || foundation_die "python3 is required to send the magic packet (xcode-select --install)"
+
+send_packet() { # MAC BROADCAST PORT
+	python3 - "$1" "$2" "$3" <<'PY'
+import socket, sys
+mac = sys.argv[1].replace("-", "").replace(":", "")
+if len(mac) != 12:
+    sys.exit("invalid MAC address")
+payload = bytes.fromhex("ff" * 6 + mac * 16)
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+s.sendto(payload, (sys.argv[2], int(sys.argv[3])))
+PY
+}
+
+log_title "Send-WakeOnLan"
+status=0
+for machine in "${machines[@]}"; do
+	name=$(conf_section_name "$file" "$machine") || {
+		log_error "No machine [$machine] in wake-on-lan.conf"
+		status=1
+		continue
+	}
+	lines=$(conf_section "$file" "$name")
+	mac=$(printf '%s\n' "$lines" | awk '$1 == "mac" { print $2 }')
+	broadcast=$(printf '%s\n' "$lines" | awk '$1 == "broadcast" { print $2 }')
+	port=$(printf '%s\n' "$lines" | awk '$1 == "port" { print $2 }')
+	address=$(printf '%s\n' "$lines" | awk '$1 == "address" { print $2 }')
+	[ -n "$mac" ] && [ -n "$broadcast" ] || {
+		log_error "[$name] needs mac and broadcast"
+		status=1
+		continue
+	}
+
+	# --no-wait verifies nothing, the pre-check ping included, as on Windows.
+	if [ "$wait_up" -eq 1 ] && [ -n "$address" ] && net_ping "$address"; then
+		log_success "[$name] is already online ($address) - no packet sent"
+		continue
+	fi
+	if ! send_packet "$mac" "$broadcast" "${port:-9}"; then
+		log_error "[$name] could not send the magic packet"
+		status=1
+		continue
+	fi
+	log_step "[$name] magic packet sent to $broadcast:${port:-9}"
+	[ "$wait_up" -eq 1 ] || continue
+	if [ -z "$address" ]; then
+		log_warning "[$name] has no address in wake-on-lan.conf - cannot confirm it woke up (add an address line to enable the check)"
+		continue
+	fi
+	log_step "[$name] waiting up to ${timeout}s for $address..."
+	if net_wait_online "$address" "$timeout"; then
+		log_success "[$name] is online!"
+	else
+		log_warning "[$name] did not answer within ${timeout}s"
+		status=1
+	fi
+done
+exit $status

@@ -1,0 +1,313 @@
+#!/usr/bin/env bash
+# Update-AiArtifacts - vendors AI skills, mods, rules, prompts and agents from their upstream
+# repositories into the artifacts root.
+#
+# Usage: Update-AiArtifacts [SOURCE...] [--check]
+#
+# For each [section] of Unix/config/ai-artifacts.conf (all, or the named ones): resolves `ref` to an
+# exact commit through the GitHub API, downloads that commit's archive and, for every kind the
+# section names (`skills PATH...`, `mods PATH...`, ...; none: `skills skills`), copies the items
+# found under those upstream folders into <root>/<Kind>/<source>/ (`root` of the file, default AI):
+#   skills   every folder holding SKILL.md (the category level dropped)
+#   mods     a folder that itself holds .claude-plugin/plugin.json is one mod, else each subfolder
+#            holding it is; named by its plugin.json `name` (else the folder name, or the repository
+#            name for a root mod)
+#   rules, prompts, agents
+#            every subfolder is one item; a top-level NAME.md file becomes item NAME holding it as
+#            RULES.md, PROMPT.md or AGENT.md
+# without the `exclude` items and without the top-level entries of an item listed in `skip`
+# (default .git .github tests design docs). Writes UPSTREAM.md per kind folder (repository, commit,
+# fetch time, folders, exclusions, skipped paths, item table) and the upstream license, the files
+# the Windows Update-AiArtifacts writes, its re-run line naming this command. Removes only the items
+# the previous UPSTREAM.md lists, so hand-made folders survive. --check compares each pinned
+# commit with the upstream head and changes nothing. Private repositories: with a GitHub token
+# (GITHUB_TOKEN, else GH_TOKEN, else `gh auth token` when the GitHub CLI is signed in) both
+# requests authenticate and the archive comes from the API's tarball endpoint; the token goes only
+# to api.github.com, never to the log.
+# Windows-style names: --source (-Source) is accepted and ignored: the names after it are sources.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config skills artifacts
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+names=()
+check=0
+while [ $# -gt 0 ]; do
+	case $1 in
+		--check) check=1 ;;
+		--source | -v | --verbose) ;;
+		*)
+			IFS=, read -r -a list <<<"$1"
+			names+=("${list[@]}")
+			;;
+	esac
+	shift
+done
+
+log_title "Updating AI Artifacts"
+file=$(conf_path ai-artifacts.conf) || {
+	log_warning "No AI artifact sources configured (ai-artifacts.conf) - nothing to vendor!"
+	exit 0
+}
+configured=()
+while IFS= read -r section; do configured+=("$section"); done < <(conf_sections "$file")
+[ ${#configured[@]} -gt 0 ] || {
+	log_warning "No AI artifact sources configured (ai-artifacts.conf) - nothing to vendor!"
+	exit 0
+}
+[ ${#names[@]} -gt 0 ] || names=("${configured[@]}")
+command -v curl >/dev/null 2>&1 || foundation_die "curl is required"
+command -v python3 >/dev/null 2>&1 || foundation_die "python3 is required (reads each mod's plugin.json)"
+
+# One token for every source, so a private upstream resolves and downloads; never logged.
+token=${GITHUB_TOKEN:-${GH_TOKEN:-}}
+if [ -z "$token" ] && command -v gh >/dev/null 2>&1; then
+	token=$(gh auth token 2>/dev/null | head -n 1) || token=
+fi
+auth=()
+[ -n "$token" ] && auth=(-H "Authorization: Bearer $token")
+
+# Name and description of a mod's plugin.json, one per line; the name only when it is a safe folder
+# name, else FALLBACK. Usage: mod_meta PLUGIN-JSON FALLBACK
+mod_meta() {
+	python3 - "$1" "$2" <<'PY'
+import json, re, sys
+name, description = sys.argv[2], ""
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        plugin = json.load(handle)
+    if isinstance(plugin.get("name"), str) and re.fullmatch(r"[A-Za-z0-9._-]+", plugin["name"]):
+        name = plugin["name"]
+    if isinstance(plugin.get("description"), str):
+        description = " ".join(plugin["description"].split()).replace("|", "\\|")
+except (OSError, ValueError, AttributeError):
+    pass
+print(name)
+print(description)
+PY
+}
+
+# The items of KIND under FOLDER-PATH: ITEM<TAB>PATH<TAB>DESCRIPTION per line (PATH a folder, or a
+# NAME.md file for rules, prompts and agents). Usage: find_items KIND FOLDER-PATH
+find_items() {
+	local kind=$1 path=$2 dir fallback meta
+	case $kind in
+		skills)
+			[ -f "$path/SKILL.md" ] && printf '%s\t%s\t%s\n' "${path##*/}" "$path" "$(skill_description "$path/SKILL.md")"
+			while IFS= read -r dir; do
+				[ -f "$dir/SKILL.md" ] && printf '%s\t%s\t%s\n' "${dir##*/}" "$dir" "$(skill_description "$dir/SKILL.md")"
+			done < <(find "$path" -mindepth 1 -maxdepth 1 -type d | LC_ALL=C sort)
+			;;
+		mods)
+			local candidates=()
+			if [ -f "$path/.claude-plugin/plugin.json" ]; then
+				candidates=("$path")
+			else
+				while IFS= read -r dir; do
+					[ -f "$dir/.claude-plugin/plugin.json" ] && candidates+=("$dir")
+				done < <(find "$path" -mindepth 1 -maxdepth 1 -type d | LC_ALL=C sort)
+			fi
+			for dir in "${candidates[@]}"; do
+				fallback=${dir##*/}
+				[ "$dir" = "$source_root" ] && fallback=${repository#*/}
+				mapfile -t meta < <(mod_meta "$dir/.claude-plugin/plugin.json" "$fallback")
+				printf '%s\t%s\t%s\n' "${meta[0]:-$fallback}" "$dir" "${meta[1]:-}"
+			done
+			;;
+		*)
+			while IFS= read -r dir; do
+				case ${dir##*/} in .*) continue ;; esac
+				printf '%s\t%s\t%s\n' "${dir##*/}" "$dir" "$(skill_description "$(find "$dir" -mindepth 1 -maxdepth 1 -type f -name '*.md' | LC_ALL=C sort | head -n 1)" 2>/dev/null)"
+			done < <(find "$path" -mindepth 1 -maxdepth 1 -type d | LC_ALL=C sort)
+			while IFS= read -r dir; do
+				case ${dir##*/} in README.md | CHANGELOG.md | LICENSE* | .*) continue ;; esac
+				printf '%s\t%s\t%s\n' "$(basename "$dir" .md)" "$dir" "$(skill_description "$dir")"
+			done < <(find "$path" -mindepth 1 -maxdepth 1 -type f -name '*.md' | LC_ALL=C sort)
+			;;
+	esac
+}
+
+# Copies one item into DESTINATION/ITEM: a folder without the skip entries, or a NAME.md file as
+# the kind's portable file. Usage: copy_item KIND PATH DESTINATION ITEM
+copy_item() {
+	local kind=$1 path=$2 destination=$3 item=$4 child
+	mkdir -p "$destination/$item"
+	if [ -f "$path" ]; then
+		cp "$path" "$destination/$item/$(ai_kind_file "$kind")"
+		return
+	fi
+	for child in "$path"/* "$path"/.[!.]* "$path"/..?*; do
+		[ -e "$child" ] || [ -L "$child" ] || continue
+		printf '%s\n' "${skip[@]}" | grep -qxF -- "${child##*/}" && continue
+		cp -R "$child" "$destination/$item/"
+	done
+}
+
+# Vendors KIND of the current source from FOLDERS into <root>/<Kind>/<source>/; fails when no item
+# is found. Usage: vendor_kind KIND FOLDER...
+vendor_kind() {
+	local kind=$1 folder folder_path item path description seen=' ' destination manifest label singular
+	shift
+	local folders=("$@") incoming=() rows=()
+	destination=$root/$(ai_kind_folder "$kind")/$name
+	manifest=$destination/UPSTREAM.md
+	singular=${kind%s}
+	label="$(printf '%s' "${singular:0:1}" | tr '[:lower:]' '[:upper:]')${singular:1}"
+	for folder in "${folders[@]}"; do
+		folder_path=$source_root
+		[ "$folder" = . ] || folder_path=$source_root/$folder
+		if [ ! -d "$folder_path" ]; then
+			log_warning "[$name] Upstream $kind folder not found - skipped => [$folder]"
+			continue
+		fi
+		while IFS=$'\t' read -r item path description; do
+			[ -n "$item" ] || continue
+			if printf '%s\n' "${exclude[@]}" | grep -qixF -- "$item"; then
+				log_step "[$name] Excluded => $kind/$item"
+				continue
+			fi
+			case $seen in *" $item "*)
+				log_warning "[$name] Duplicate $singular name across upstream folders - keeping the first => [$item]"
+				continue
+				;;
+			esac
+			seen="$seen$item "
+			incoming+=("$item"$'\t'"$folder"$'\t'"$path"$'\t'"$description")
+		done < <(find_items "$kind" "$folder_path")
+	done
+	if [ ${#incoming[@]} -eq 0 ]; then
+		log_error "[$name] No $kind found under [${folders[*]}] - vendored copy left untouched!"
+		return 1
+	fi
+
+	mkdir -p "$destination"
+	# Only what the previous manifest vendored, plus what arrives now, is replaced.
+	while IFS= read -r item; do
+		[ -n "$item" ] && [ -d "$destination/$item" ] && rm -rf "${destination:?}/$item"
+	done < <({
+		skill_manifest_skills "$manifest"
+		printf '%s\n' "${incoming[@]}" | cut -f1
+	} | sort -u)
+
+	while IFS=$'\t' read -r item folder path description; do
+		copy_item "$kind" "$path" "$destination" "$item"
+		rows+=("| \`$item\` | \`$folder\` | $description |")
+	done < <(printf '%s\n' "${incoming[@]}" | LC_ALL=C sort -f)
+	[ -n "$upstream_license" ] && cp "$upstream_license" "$destination/$license"
+
+	local excluded=none skipped=none folders_text removed
+	[ ${#exclude[@]} -gt 0 ] && excluded=$(printf '`%s`, ' "${exclude[@]}" | sed 's/, $//')
+	[ ${#skip[@]} -gt 0 ] && skipped=$(printf '`%s`, ' "${skip[@]}" | sed 's/, $//')
+	folders_text=$(printf '`%s`, ' "${folders[@]}" | sed 's/, $//')
+	removed=$(comm -23 <(skill_manifest_skills "$manifest" | sort) <(printf '%s\n' "${incoming[@]}" | cut -f1 | sort) | paste -sd, - | sed 's/,/, /g')
+	{
+		printf '# Vendored AI %s: %s\n\n' "$kind" "$name"
+		printf 'Generated by `Update-AiArtifacts` - do not edit by hand, re-run `Update-AiArtifacts %s` to refresh. Deployed into the AI harnesses by `Deploy-AiArtifacts`.\n\n' "$name"
+		printf -- '- **Source:** https://github.com/%s\n' "$repository"
+		printf -- '- **Commit:** `%s` (ref `%s`)\n' "$sha" "$ref"
+		printf -- '- **Fetched:** %s\n' "$(date +%Y-%m-%dT%H:%M:%S)"
+		printf -- '- **Upstream folders:** %s\n' "$folders_text"
+		printf -- '- **Excluded:** %s\n' "$excluded"
+		printf -- '- **Skipped paths:** %s\n' "$skipped"
+		printf -- '- **License:** `%s` (upstream LICENSE, verbatim)\n\n' "$license"
+		printf '| %s | Upstream folder | Description |\n| %s | --------------- | ----------- |\n' "$label" "$(printf '%*s' "${#label}" '' | tr ' ' -)"
+		printf '%s\n' "${rows[@]}"
+	} >"$manifest"
+	[ -n "$removed" ] && log_warning "[$name] Removed $kind no longer vendored => [$removed]"
+	log_success "[$name] Vendored ${#incoming[@]} $kind from [$repository@${sha:0:7}]"
+}
+
+root=$(ai_root)
+failures=0
+for requested in "${names[@]}"; do
+	name=$(conf_section_name "$file" "$requested") || {
+		log_error "Unknown AI artifact source => [$requested] (configured: $(printf '%s, ' "${configured[@]}" | sed 's/, $//'))"
+		failures=$((failures + 1))
+		continue
+	}
+	lines=$(conf_section "$file" "$name")
+	value() { printf '%s\n' "$lines" | awk -v k="$1" 'tolower($1) == k { $1 = ""; sub(/^ +/, ""); print; exit }'; }
+	repository=$(value repository)
+	ref=$(value ref)
+	[ -n "$ref" ] || ref=main
+	read -r -a exclude <<<"$(value exclude)"
+	if printf '%s\n' "$lines" | awk 'tolower($1) == "skip" { found = 1 } END { exit !found }'; then
+		read -r -a skip <<<"$(value skip)"
+	else
+		skip=(.git .github tests design docs)
+	fi
+	# KIND<TAB>FOLDERS per kind the section names; `skills skills` when it names none.
+	kind_lines=()
+	for kind in $(ai_kinds); do
+		folders_line=$(value "$kind")
+		[ -n "$folders_line" ] && kind_lines+=("$kind"$'\t'"$folders_line")
+	done
+	[ ${#kind_lines[@]} -gt 0 ] || kind_lines=("skills"$'\t'"skills")
+	if ! [[ $repository =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+		log_error "Source [$name] needs repository in owner/name form => [$repository]"
+		failures=$((failures + 1))
+		continue
+	fi
+	log_step "[$name] $repository @ $ref => $(printf '%s ' "${kind_lines[@]%%$'\t'*}")"
+
+	sha=$(curl -fsSL "${auth[@]}" -H 'Accept: application/vnd.github.sha' "https://api.github.com/repos/$repository/commits/$ref" 2>/dev/null)
+	if ! [[ $sha =~ ^[0-9a-f]{40}$ ]]; then
+		hint=
+		[ -n "$token" ] || hint=" - if it is private, set GITHUB_TOKEN or sign in with 'gh auth login'"
+		log_error "[$name] Could not resolve [$ref] to a commit in [$repository]!$hint"
+		failures=$((failures + 1))
+		continue
+	fi
+	first_kind=${kind_lines[0]%%$'\t'*}
+	previous=$(skill_manifest_commit "$root/$(ai_kind_folder "$first_kind")/$name/UPSTREAM.md")
+	if [ "$check" -eq 1 ]; then
+		if [ -z "$previous" ]; then
+			log_warning "[$name] Not vendored yet - upstream head is ${sha:0:7}"
+		elif [ "$previous" = "$sha" ]; then
+			log_success "[$name] Up to date at ${sha:0:7}"
+		else
+			log_warning "[$name] Behind upstream: vendored ${previous:0:7}, head ${sha:0:7} - run Update-AiArtifacts $name"
+		fi
+		continue
+	fi
+
+	temp=$(mktemp -d) || foundation_die "mktemp failed"
+	# Anonymous: the public archive. Authenticated: the API's tarball, which takes the token and
+	# redirects to a signed download URL (curl drops the header on that cross-host redirect).
+	archive=https://codeload.github.com/$repository/tar.gz/$sha
+	[ -n "$token" ] && archive=https://api.github.com/repos/$repository/tarball/$sha
+	# Both sides count: a failed curl writes nothing, and tar takes an empty stream as an empty
+	# archive, so the status of the pipeline alone would report a failed download as an empty one.
+	curl -fsSL "${auth[@]}" "$archive" | tar -xzf - -C "$temp"
+	download=("${PIPESTATUS[@]}")
+	if [ "${download[0]}" -ne 0 ] || [ "${download[1]}" -ne 0 ]; then
+		log_error "[$name] Downloading the archive failed!"
+		rm -rf "$temp"
+		failures=$((failures + 1))
+		continue
+	fi
+	source_root=$(find "$temp" -mindepth 1 -maxdepth 1 -type d | head -n 1)
+	[ -n "$source_root" ] || {
+		log_error "[$name] The downloaded archive is empty!"
+		rm -rf "$temp"
+		failures=$((failures + 1))
+		continue
+	}
+	license=LICENSE.${repository//\//-}.txt
+	upstream_license=$(find "$source_root" -mindepth 1 -maxdepth 1 -type f -name 'LICENSE*' | head -n 1)
+
+	for entry in "${kind_lines[@]}"; do
+		read -r -a folders <<<"${entry#*$'\t'}"
+		vendor_kind "${entry%%$'\t'*}" "${folders[@]}" || failures=$((failures + 1))
+	done
+	rm -rf "$temp"
+done
+[ "$failures" -eq 0 ] || exit 1

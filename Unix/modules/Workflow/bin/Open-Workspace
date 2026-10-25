@@ -1,0 +1,561 @@
+#!/usr/bin/env bash
+# Open-Workspace - opens a workspace: launches its applications and lays their windows out
+# across desktops. Alias: w
+#
+# Usage: Open-Workspace [WORKSPACE[,WORKSPACE...]] [PROJECT[,PROJECT...]...] [--project NAME...] [--VARIABLE VALUE...] [--timeout-seconds N] [--vscode-workspace [NAME]] [--alongside] [-v]
+#
+# Runs the actions of each WORKSPACE section of Unix/config/workspaces.conf top to bottom. An
+# action is a Foundation command (Unix/modules/*/bin) (Open-Project, Open-Browser, Set-WorkspaceWindowLayout,
+# Focus-VirtualDesktop, ...) or `Open-<App>` for an app in config/apps.conf (generic launcher);
+# anything else is reported and skipped, and the rest of the workspace still opens; an action that
+# fails is reported, and the closing line then names the failed actions in a warning instead of
+# the success line (the exit status stays 0). Without a
+# name a numbered menu of the workspaces is shown (pick by number or name, several at once);
+# an empty Enter opens the default-workspace of workspaces.conf. A WORKSPACE given as a number is
+# that entry of the menu. A named WORKSPACE with no section is reported and skipped before anything
+# opens (an --alongside open of it opens no window); with none left the open exits 1.
+#
+# A workspace may be a template instance (`template NAME` of config/workspace-templates.conf, see
+# docs/unix/configuration.md): its actions are the template's, with the workspace's set, replace,
+# drop and add lines applied and {Workspace} and the variables substituted. A template error is
+# reported and that workspace opens nothing (nothing is recorded for it).
+#
+# The projects of an open are known before anything launches: the PROJECT arguments, else - when
+# the workspace has an Open-Project without a project - the project menu, shown up front (an
+# empty Enter skips that Open-Project), else the projects its Open-Project lines name. They pick
+# the `+A,B` / `+!A,B` project-scoped lines that run, feed {SelectedProjects} and a bare
+# Open-Project, and reach Set-WorkspaceWindowLayout (--project), whose layout file's project
+# variants then apply.
+#
+# Before the first action the open windows and terminal panes are recorded; what the open
+# creates (plus the windows its layout adopted) becomes the workspace's ownership record that
+# Close-Workspace (cw) tears down. Project tabs spawned during the open draw their fastfetch
+# panel only after the layout placed the terminal window.
+#
+#   PROJECT, --project NAME  the open's projects: fill every Open-Project that names none (a
+#                        fixed project and the line's flags stay), {SelectedProjects} and the
+#                        layout, and no project menu is shown; like
+#                        Windows the first word is the workspace and the following words are
+#                        projects (w MyWorkspace MyProject); commas separate several names
+#   --timeout-seconds N  how long Set-WorkspaceWindowLayout waits for windows (default 60, as on Windows)
+#   --alongside          open next to the workspaces already open (see below)
+#   --vscode-workspace [NAME]  open NAME.code-workspace in place of the project folder the
+#                        Open-VSCode action would open (bare: a menu); without it, the workspace's
+#                        `default` line of config/vscode-workspaces.conf applies
+#   -v, --verbose        debug output of every step
+#   --VARIABLE VALUE     sets a template variable for this open only (w MyProject --repository Other);
+#                        it is not forwarded to the actions
+#   any other --flag [VALUE] is forwarded to every action that documents that flag, like the
+#                        ExtraArgs of Windows: w Example --browser Chrome reaches Open-Browser
+#
+# A `Return` action stops the open where it stands (later actions and workspaces are skipped).
+# Terminate-WindowsTerminalTabs --only-current / --include-current closes the tab the open runs in,
+# so the record and the summary are written before it runs, as on Windows; --only-current is
+# skipped when that tab is one of this open's project tabs (<Project>.<KEY> of a project its
+# Open-Project lines open), so rerunning a workspace from its own project tab keeps the tab.
+#
+# A workspace line may start with %SET[,SET] (before a +project scope): it runs only when SET is the
+# layout set this machine applies (see lib/workspace.sh).
+#
+# --alongside opens the workspace next to the ones already open, as on Windows. The whole open is
+# relaunched in a new WezTerm window (the calling shell gets its prompt back at once; without a
+# running WezTerm it runs here), so its terminal tabs join that window; the new window clears the
+# relaunch line typed into it. Its layout lands on the
+# desktops to the right of the highest one holding a window of another recorded workspace
+# (AeroSpace creates desktops past 10 as needed), places only the windows this open created and
+# never touches another workspace's; --alongside and --desktop-offset N reach every action that
+# documents them (Open-Browser opens new windows instead of counting the open ones,
+# Focus-VirtualDesktop shifts too). The record marks the workspace as alongside. A plain open
+# leaves the windows of a live alongside workspace alone (never claimed, moved, parked or
+# recorded); a plain open of that same workspace adopts it instead. An alongside open of a workspace
+# that is already recorded is a second instance with a record of its own (Close-Workspace offers
+# each). macOS runs most apps once, so an app that already has a window (VS Code for the same
+# folder, Slack, ...) keeps it on its desktop and only the alongside open's new windows are placed.
+#
+# Windows-style flags work too: w Dotfiles -TimeoutSeconds 45, w Example -Browser Chrome
+# Windows-style names: --workspace (-Workspace) NAME... names the workspace(s) like a bare WORKSPACE.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps drivers/aerospace drivers/wezterm terminal state layout benchmark workspace project
+
+original_args=("$@")
+# The start of the open: this invocation, or - in the shell an --alongside open relaunched - the
+# start the original invocation handed over, so the reported time includes the relaunch. Unset
+# either way, so no app or tab the open starts inherits it (a later open there would count from it).
+invocation_ms=$(foundation_now_ms)
+if [ -n "${FOUNDATION_ALONGSIDE_SHELL:-}" ] && [ "${FOUNDATION_OPEN_START_MS:-}" -gt 0 ] 2>/dev/null; then
+	invocation_ms=$FOUNDATION_OPEN_START_MS
+fi
+unset FOUNDATION_OPEN_START_MS
+# The relaunch typed this command into the new window's shell; clearing the screen takes the
+# typed line (and the prompt before it) away, so the window shows only the open's own output.
+if [ -n "${FOUNDATION_ALONGSIDE_SHELL:-}" ] && [ -t 1 ]; then
+	clear 2>/dev/null || printf '\033[H\033[2J\033[3J'
+fi
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+workspaces=()
+projects=()
+timeout=60
+alongside=0
+vscode_workspace=''
+positional=0
+extra=()
+while [ $# -gt 0 ]; do
+	case $1 in
+		--project)
+			shift
+			while [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; do
+				projects+=("$1")
+				shift
+			done
+			continue
+			;;
+		--workspace)
+			shift
+			while [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; do
+				IFS=, read -r -a names <<<"$1"
+				workspaces+=("${names[@]}")
+				shift
+			done
+			continue
+			;;
+		--timeout-seconds)
+			timeout=$2
+			shift
+			;;
+		--alongside) alongside=1 ;;
+		--vscode-workspace)
+			# A value is optional: bare means "ask" (the Open-VSCodeWorkspace menu).
+			if [ $# -gt 1 ] && [ "${2#-}" = "$2" ]; then
+				vscode_workspace=$2
+				shift
+			else vscode_workspace='?'; fi
+			;;
+		-v | --verbose) ;;
+		-*)
+			# ExtraArgs: -Name Value or -Switch, forwarded to every action that documents the
+			# flag (w Example -Browser Chrome reaches Open-Browser only).
+			# Stored as FLAG<TAB>VALUE (VALUE empty for a switch).
+			if [ $# -gt 1 ] && [ "${2#-}" = "$2" ]; then
+				extra+=("$1"$'\t'"$2")
+				shift
+			else
+				extra+=("$1"$'\t')
+			fi
+			;;
+		*)
+			# Positional binding of Windows: -Workspace is position 0 and -Project position 1, so
+			# `w MyWorkspace MyProject` opens MyWorkspace with project MyProject. Comma lists work in both
+			# positions (w Dotfiles,AI; w MyWorkspace MyProject,Other); further words are more projects.
+			IFS=, read -r -a names <<<"$1"
+			if [ "$positional" -eq 0 ]; then workspaces+=("${names[@]}"); else projects+=("${names[@]}"); fi
+			positional=$((positional + 1))
+			;;
+	esac
+	shift
+done
+
+log_debug "[Open-Workspace] workspaces [${workspaces[*]}] projects [${projects[*]}]"
+
+file=$(conf_path workspaces.conf) || foundation_die "Missing Unix/config/workspaces.conf"
+start_ms=$invocation_ms
+
+available=()
+while IFS= read -r name; do available+=("$name"); done < <(conf_sections "$file")
+if [ ${#workspaces[@]} -gt 0 ]; then
+	# A number is that entry of the menu, as -Workspace 2 is on Windows.
+	mapfile -t workspaces < <(foundation_resolve_items "${workspaces[@]}" -- ${available[@]+"${available[@]}"})
+	# A name with no section is reported and dropped here, before an --alongside open relaunches,
+	# so it opens no window and is not reported twice; none left ends the open.
+	known=()
+	for workspace in "${workspaces[@]}"; do
+		if conf_section_name "$file" "$workspace" >/dev/null; then
+			known+=("$workspace")
+		elif [ -z "${FOUNDATION_ALONGSIDE_SHELL:-}" ]; then
+			log_warning "No actions configured for workspace [$workspace]"
+		fi
+	done
+	[ ${#known[@]} -gt 0 ] || exit 1
+	workspaces=("${known[@]}")
+fi
+
+# --alongside always runs in a new WezTerm window: this invocation is replayed there, marked so
+# it does not relaunch again, with the new window's AeroSpace id and pane so the open owns them
+# (the layout's Terminal entry takes that window, cw closes its tabs). The line is typed with a
+# leading space, which keeps it out of the shell history (HIST_IGNORE_SPACE in shellrc.sh), and
+# the relaunched open clears it from the screen. Fails without WezTerm.
+alongside_relaunch() {
+	local before pane terminal='' id token waited=0 command
+	wt_running && as_available || return 1
+	before=" $(as_windows | cut -f1 | tr '\n' ' ') "
+	pane=$(wt_spawn new "$PWD") || return 1
+	[ -n "$pane" ] || return 1
+	while [ -z "$terminal" ] && [ "$waited" -lt 40 ]; do
+		sleep 0.25
+		waited=$((waited + 1))
+		while IFS=$'\t' read -r id token _; do
+			case $before in *" $id "*) continue ;; esac
+			app_matches Terminal "$token" && terminal=$id && break
+		done < <(as_windows)
+	done
+	command=" FOUNDATION_ALONGSIDE_SHELL=1 FOUNDATION_ALONGSIDE_PANE=$pane FOUNDATION_ALONGSIDE_TERMINAL=$terminal FOUNDATION_OPEN_START_MS=$invocation_ms"
+	command="$command $(printf '%q ' "$(foundation_command_path Open-Workspace)" "${original_args[@]}")"
+	wt_send_line "$pane" "$command"
+	log_success "Opening alongside in a new WezTerm window!"
+}
+if [ "$alongside" -eq 1 ] && [ -z "${FOUNDATION_ALONGSIDE_SHELL:-}" ]; then
+	alongside_relaunch && exit 0
+	log_warning "WezTerm is not running - the alongside open runs in this shell"
+fi
+if [ ${#workspaces[@]} -eq 0 ]; then
+	# Resolve-Selection, as on Windows: pick one or more by number or name; an empty Enter
+	# opens default-workspace (or cancels when none is configured).
+	default=$(conf_value "$file" default-workspace) || default=''
+	conf_section "$file" "$default" >/dev/null 2>&1 || default=''
+	if [ -n "$default" ]; then
+		prompt="Enter workspace(s) or press [Enter] to open default workspace => $default"
+	else
+		prompt="Enter workspace(s), or press [Enter] to cancel"
+	fi
+	selection=$(foundation_resolve_selection "[Available workspaces]" "$prompt" 1 1 "${available[@]}") || exit 1
+	while IFS= read -r name; do [ -n "$name" ] && workspaces+=("$name"); done <<<"$selection"
+	if [ ${#workspaces[@]} -eq 0 ]; then
+		if [ -z "$default" ]; then
+			log_warning "No workspace selected"
+			exit 0
+		fi
+		workspaces=("$default")
+		log_debug "[Open-Workspace] empty selection - opening default-workspace [$default]"
+	fi
+fi
+
+as_start || foundation_die "AeroSpace is required for window placement - aborting"
+
+returned=0
+run_dir=$(foundation_run_dir) || foundation_die "Cannot create a run directory"
+# Exported here: foundation_run_dir ran in a command substitution, whose export does not reach this
+# shell, and Set-WorkspaceWindowLayout reads the pre-open window list and writes its timings there.
+export FOUNDATION_RUN_DIR=$run_dir
+export FOUNDATION_WORKSPACE_OPEN=1 FOUNDATION_LAYOUT_TIMEOUT=$timeout
+trap 'rm -rf "$run_dir"' EXIT
+
+# Save-WorkspaceState: the ownership record of the workspace being opened (NAME) - windows and
+# panes that appeared, plus windows the layout adopted (except the apps Kill-All keeps, such as
+# the terminal this was typed in) - and its benchmark row. Called once per workspace: after its
+# actions, or before an action that closes the tab this runs in.
+record_open() {
+	pre_windows=" $(tr '\n' ' ' <"$run_dir/pre-windows") "
+	placed=" $(tr '\n' ' ' <"$run_dir/placed") "
+	keep_file=$(conf_path kill-all.conf) || keep_file=''
+	# An alongside open of a workspace already recorded is a further instance (NAME#N), as Windows
+	# appends one; a plain open replaces every instance of its name.
+	if [ "$alongside" -eq 1 ]; then
+		record_key=$(state_next_key "$name")
+	else
+		state_forget_workspace "$name"
+		record_key=$name
+	fi
+	{
+		while IFS=$'\t' read -r id token bundle _ _ _ title; do
+			new=0
+			case $pre_windows in *" $id "*) ;; *) new=1 ;; esac
+			if [ "$new" -eq 0 ]; then
+				case $placed in *" $id "*) ;; *) continue ;; esac
+				kept=0
+				if [ -n "$keep_file" ]; then
+					while read -r kind keep_token; do
+						[ "$kind" = "keep" ] && app_matches "$keep_token" "$token" && kept=1
+					done < <(conf_lines "$keep_file")
+				fi
+				[ "$kept" -eq 1 ] && continue
+			fi
+			printf 'window\t%s\t%s\t%s\t%s\n' "$id" "$token" "$bundle" "$title"
+		done < <(as_windows)
+		if wt_running; then
+			pre_panes=" $(tr '\n' ' ' <"$run_dir/pre-panes") "
+			while IFS=$'\t' read -r _ _ pane _ tab_title title _; do
+				case $pre_panes in *" $pane "*) continue ;; esac
+				printf 'pane\t%s\t%s\n' "$pane" "$tab_title"
+			done < <(wt_panes)
+		fi
+		[ "$alongside" -eq 1 ] && printf 'meta\talongside\n'
+	} | state_replace "$record_key"
+	log_debug "[Open-Workspace] recorded $(state_entries "$record_key" | grep -c .) owned object(s) for [$record_key]"
+	bench_mode=Plain
+	[ "$alongside" -eq 1 ] && bench_mode=Alongside
+	benchmark_record "$name" $(($(foundation_now_ms) - ws_start)) "$actions_ms" "$layout_ms" "$run_dir/layout-timings" "$bench_mode"
+	recorded=1
+}
+
+# The closing line: the success line of Windows, or, when an action failed, a warning naming the
+# failed actions instead (exit status 0 either way, as Kill-All ends with its survivors), so the
+# open never reads clean when part of it was not.
+failed_actions=()
+open_summary() {
+	local seconds
+	elapsed=$((($(foundation_now_ms) - start_ms) / 100))
+	seconds="$((elapsed / 10)).$((elapsed % 10))"
+	if [ ${#failed_actions[@]} -gt 0 ]; then
+		log_warning "Workspace(s) opened in $seconds seconds, but $(printf '%s\n' "${failed_actions[@]}" | sort -u | paste -sd, - | sed 's/,/, /g') failed - see above!"
+	else
+		log_success "Workspace(s) opened in $seconds seconds!"
+	fi
+}
+
+# Does this shell run in a project tab of this open - a <Project>.<KEY> tab of a project one of
+# its Open-Project lines opens (named, else the open's projects)? Rerunning a workspace from its
+# own project tab keeps that tab, as on Windows; the alongside shell's tab is never one. Sets
+# own_tab to the title. Reads $actions and workspace_projects.
+in_own_project_tab() {
+	local pane line word project names words
+	own_tab=''
+	[ -z "${FOUNDATION_ALONGSIDE_SHELL:-}" ] || return 1
+	pane=$(wt_own_pane) || return 1
+	own_tab=$(wt_panes | awk -F'\t' -v p="$pane" '$3 == p { print $5; exit }')
+	[ -n "$own_tab" ] || return 1
+	while IFS= read -r line; do
+		read -r -a words <<<"$line"
+		[ "${words[0]:-}" = Open-Project ] || continue
+		names=()
+		for word in "${words[@]:1}"; do
+			case $word in -* | '{'*'}') continue ;; esac
+			foundation_split_list names "$word"
+		done
+		[ ${#names[@]} -gt 0 ] || names=(${workspace_projects[@]+"${workspace_projects[@]}"})
+		for project in ${names[@]+"${names[@]}"}; do
+			project_tab_titles "$project" | grep -qixF -- "$own_tab" && return 0
+		done
+	done <<<"$actions"
+	return 1
+}
+
+summary_printed=0
+for workspace in "${workspaces[@]}"; do
+	recorded=0
+	name=$(conf_section_name "$file" "$workspace") || {
+		log_warning "No actions configured for workspace [$workspace]"
+		continue
+	}
+	log_title "Opening $name Workspace"
+	# DefaultVSCodeWorkspaces: Open-VSCode reroutes to Open-VSCodeWorkspace while this is set.
+	FOUNDATION_VSCODE_WORKSPACE=$vscode_workspace
+	if [ -z "$FOUNDATION_VSCODE_WORKSPACE" ] && vsw_file=$(conf_path vscode-workspaces.conf); then
+		FOUNDATION_VSCODE_WORKSPACE=$(conf_lines "$vsw_file" | awk -v w="$(foundation_lower "$name")" '$1 == "default" && tolower($2) == w { print $3; exit }')
+	fi
+	export FOUNDATION_VSCODE_WORKSPACE
+	# The -CurrentWorkspace injection of Windows: Open-Obsidian loads the Obsidian workspace of the
+	# same name when the vault has one (w Server lands on Server).
+	export FOUNDATION_CURRENT_WORKSPACE=$name
+	[ -z "$FOUNDATION_VSCODE_WORKSPACE" ] || log_debug "[Open-Workspace] Open-VSCode opens workspace [$FOUNDATION_VSCODE_WORKSPACE] instead"
+
+	# The workspace's actions: its template expanded, with the extra flags that name a template
+	# variable as values (those are not forwarded to the actions afterwards).
+	variable_args=()
+	for pair in ${extra[@]+"${extra[@]}"}; do variable_args+=("${pair%%$'\t'*}=${pair#*$'\t'}"); done
+	if ! workspace_resolve "$file" "$name" ${variable_args[@]+"${variable_args[@]}"}; then
+		for message in "${WORKSPACE_ERRORS[@]}"; do log_error "workspaces.conf [$name]: $message"; done
+		log_error "Workspace [$name] not opened - fix its template (Test-ConfigurationSchema)"
+		continue
+	fi
+	forward=()
+	for pair in ${extra[@]+"${extra[@]}"}; do
+		applied=0
+		for used in ${WORKSPACE_APPLIED[@]+"${WORKSPACE_APPLIED[@]}"}; do
+			[ "$used" = "${pair%%$'\t'*}=${pair#*$'\t'}" ] && applied=1
+		done
+		if [ "$applied" -eq 1 ]; then
+			log_debug "[Open-Workspace] variable ${pair%%$'\t'*} = [${pair#*$'\t'}]"
+		else
+			forward+=("$pair")
+		fi
+	done
+
+	# Layout-set scopes: a %SET line runs only when SET is the layout set this machine applies.
+	if printf '%s\n' ${WORKSPACE_LINES[@]+"${WORKSPACE_LINES[@]}"} | grep -q '^%'; then
+		[ -n "${layout_set:-}" ] || layout_set=$(layout_type)
+		log_debug "[Open-Workspace] layout set [$layout_set] picks the %-scoped lines"
+		scoped=()
+		while IFS= read -r line; do
+			[ -n "$line" ] && scoped+=("$line")
+		done < <(printf '%s\n' "${WORKSPACE_LINES[@]}" | workspace_for_layout "$layout_set")
+		WORKSPACE_LINES=(${scoped[@]+"${scoped[@]}"})
+	fi
+
+	# The open's projects, known before anything launches (see the header).
+	workspace_projects=(${projects[@]+"${projects[@]}"})
+	menu_shown=0
+	if [ ${#workspace_projects[@]} -eq 0 ]; then
+		needs_project=0
+		fixed=()
+		for line in ${WORKSPACE_LINES[@]+"${WORKSPACE_LINES[@]}"}; do
+			case $line in +*) line=${line#*[[:space:]]} ;; esac
+			read -r -a words <<<"$line"
+			[ "${words[0]}" = Open-Project ] || continue
+			named=0
+			for word in "${words[@]:1}"; do
+				case $word in -* | '{'*'}') continue ;; esac
+				named=1
+				printf '%s\n' ${fixed[@]+"${fixed[@]}"} | grep -qixF -- "$word" || fixed+=("$word")
+			done
+			[ "$named" -eq 1 ] || needs_project=1
+		done
+		if [ "$needs_project" -eq 1 ]; then
+			menu_shown=1
+			available=()
+			while IFS= read -r project; do available+=("$project"); done < <(project_names)
+			selection=$(foundation_resolve_selection "[Available projects]" "Enter project(s) or press Enter to skip" 1 1 ${available[@]+"${available[@]}"}) || selection=''
+			while IFS= read -r project; do [ -n "$project" ] && workspace_projects+=("$project"); done <<<"$selection"
+			[ ${#workspace_projects[@]} -gt 0 ] || log_warning "No project selected!"
+		else
+			workspace_projects=(${fixed[@]+"${fixed[@]}"})
+		fi
+	fi
+	[ ${#workspace_projects[@]} -eq 0 ] || log_debug "[Open-Workspace] projects [${workspace_projects[*]}]"
+	actions=$(printf '%s\n' ${WORKSPACE_LINES[@]+"${WORKSPACE_LINES[@]}"} | workspace_for_projects ${workspace_projects[@]+"${workspace_projects[@]}"})
+	if [ -z "$actions" ]; then
+		log_warning "No action of [$name] applies to this open - nothing to do"
+		continue
+	fi
+
+	# Get-WorkspaceOpenProtection: the windows of other workspaces this open leaves alone (a
+	# plain open: live alongside workspaces; an alongside open: every other one), read by
+	# Set-WorkspaceWindowLayout. An alongside open's desktops start after theirs.
+	live=$(as_windows)
+	mode=plain
+	[ "$alongside" -eq 1 ] && mode=alongside
+	state_protected_windows "$mode" "$live" "$name" >"$run_dir/protected"
+	if [ "$alongside" -eq 1 ]; then
+		offset=$(state_desktop_offset "$live" <"$run_dir/protected")
+		log_step "Alongside: desktops after desktop $offset, $(grep -c . "$run_dir/protected") window(s) of other workspaces left alone"
+		forward+=("--alongside"$'\t' "--desktop-offset"$'\t'"$offset")
+	elif [ -s "$run_dir/protected" ]; then
+		log_debug "[Open-Workspace] leaving $(grep -c . "$run_dir/protected") window(s) of alongside workspaces alone"
+	fi
+
+	# Pre-open capture. The alongside shell's own window and pane count as this open's.
+	printf '%s\n' "$live" | cut -f1 | grep -vxF -- "${FOUNDATION_ALONGSIDE_TERMINAL:-none}" >"$run_dir/pre-windows"
+	if wt_running; then wt_panes | cut -f3 | grep -vxF -- "${FOUNDATION_ALONGSIDE_PANE:-none}" >"$run_dir/pre-panes"; else : >"$run_dir/pre-panes"; fi
+	: >"$run_dir/placed"
+	log_debug "[Open-Workspace] captured $(grep -c . "$run_dir/pre-windows") pre-existing window(s)"
+	rm -f "$run_dir/layout-timings" "$run_dir/layout-early-move"
+	ws_start=$(foundation_now_ms)
+	actions_ms=0
+	layout_ms=0
+
+	while IFS= read -r line; do
+		[ -n "$line" ] || continue
+		read -r -a words <<<"$line"
+		action=${words[0]}
+		arguments=("${words[@]:1}")
+		# Return: stop the open here, as the Windows action does (it returns from Open-Workspace),
+		# so later actions and workspaces do not run. What opened so far is still recorded.
+		if [ "$action" = Return ]; then
+			log_debug "[Open-Workspace] Return - stopping after [$name]"
+			returned=1
+			break
+		fi
+
+		# {SelectedProjects}: the open's projects, else the parameter is dropped.
+		expanded=()
+		for argument in ${arguments[@]+"${arguments[@]}"}; do
+			if [ "$argument" = "{SelectedProjects}" ]; then
+				[ ${#workspace_projects[@]} -gt 0 ] && expanded+=("${workspace_projects[@]}")
+			else
+				expanded+=("$argument")
+			fi
+		done
+		arguments=(${expanded[@]+"${expanded[@]}"})
+		if [ "$action" = "Open-Project" ]; then
+			named=0
+			for argument in ${arguments[@]+"${arguments[@]}"}; do
+				case $argument in -*) ;; *) named=1 ;; esac
+			done
+			# The open's projects fill only an Open-Project that names none: a fixed project wins, as
+			# on Windows, and the line's own flags (--run-app, --new-window) always stay.
+			if [ "$named" -eq 0 ] && [ ${#workspace_projects[@]} -gt 0 ]; then
+				arguments+=("${workspace_projects[@]}")
+			elif [ "$named" -eq 0 ] && [ "$menu_shown" -eq 1 ]; then
+				# The menu was shown up front and nothing was picked; Open-Project would ask again.
+				log_debug "[Open-Workspace] skipping Open-Project - no project selected"
+				continue
+			fi
+		fi
+		# The layout's project variants follow the open's projects.
+		if [ "$action" = Set-WorkspaceWindowLayout ] && [ ${#workspace_projects[@]} -gt 0 ]; then
+			case " ${arguments[*]} " in *" --project "*) ;; *) arguments+=(--project "${workspace_projects[@]}") ;; esac
+		fi
+
+		if foundation_has_command "$action"; then
+			command=(foundation_run "$action")
+		elif [[ $action == Open-* ]] && app_bundle "${action#Open-}" >/dev/null; then
+			command=(foundation_run Open-Application)
+			arguments=("${action#Open-}")
+		else
+			log_warning "Action [$action] has no macOS implementation yet - skipped"
+			continue
+		fi
+
+		# Forward the extra flags this action documents in its own header.
+		if [ ${#forward[@]} -gt 0 ] && [ "${command[1]}" = "$action" ]; then
+			accepted=$(foundation_command_flags "$(foundation_command_path "$action")")
+			for pair in "${forward[@]}"; do
+				flag=${pair%%$'\t'*}
+				value=${pair#*$'\t'}
+				printf '%s\n' "$accepted" | grep -qxF -- "$flag" || continue
+				arguments+=("$flag")
+				[ -n "$value" ] && arguments+=("$value")
+			done
+		fi
+
+		# Terminate-WindowsTerminalTabs --only-current / --include-current closes the tab this runs
+		# in and ends this process with it: record the open and print the summary first, as Windows
+		# does, or the workspace would be untracked and cw could not close it.
+		if [ "$action" = Terminate-WindowsTerminalTabs ]; then
+			# Rerun from one of this workspace's own project tabs: --only-current keeps that tab.
+			case " ${arguments[*]} " in *" --only-current "* | *" -OnlyCurrent "*)
+				if in_own_project_tab; then
+					log_debug "[Open-Workspace] skipping Terminate-WindowsTerminalTabs --only-current - this is the workspace's own project tab [$own_tab]"
+					continue
+				fi
+				;;
+			esac
+			case " ${arguments[*]} " in *" --only-current "* | *" --include-current "* | *" -OnlyCurrent "* | *" -IncludeCurrent "*)
+				[ "$recorded" -eq 1 ] || record_open
+				open_summary
+				summary_printed=1
+				;;
+			esac
+		fi
+		# The deferred tails (Obsidian's workspace load) finish before the layout claims windows.
+		if [ "$action" = Set-WorkspaceWindowLayout ] && ! foundation_flush_deferred; then
+			failed_actions+=("deferred actions")
+		fi
+		log_debug "[Open-Workspace] => $action ${arguments[*]}"
+		action_start=$(foundation_now_ms)
+		if ! "${command[@]}" "${arguments[@]}" </dev/null; then
+			log_warning "Action [$action] reported a failure"
+			failed_actions+=("$action")
+		fi
+		action_ms=$(($(foundation_now_ms) - action_start))
+		if [ "$action" = Set-WorkspaceWindowLayout ]; then layout_ms=$((layout_ms + action_ms)); else actions_ms=$((actions_ms + action_ms)); fi
+
+		# The terminal window has its final size now - draw the deferred tab panels.
+		[ "$action" = "Set-WorkspaceWindowLayout" ] && term_flush_deferred
+	done <<<"$actions"
+	foundation_flush_deferred || failed_actions+=("deferred actions")
+	term_flush_deferred
+
+	[ "$recorded" -eq 1 ] || record_open
+	[ "$returned" -eq 1 ] && break
+done
+
+[ "$summary_printed" -eq 1 ] && exit 0
+open_summary

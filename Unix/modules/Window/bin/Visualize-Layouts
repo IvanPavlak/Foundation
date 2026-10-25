@@ -1,0 +1,215 @@
+#!/usr/bin/env bash
+# Visualize-Layouts - draws workspace layouts as boxes of their zones and the windows in them.
+#
+# Usage: Visualize-Layouts [WORKSPACE... | --layout NAME | --layout-path FILE] [--all] [--layout-type TYPE] [--display-available-layouts] [--update] [--backup-root DIR]
+#
+# Draws each desktop of a workspace's layout (config/layouts/<Type>/<Workspace>_<Type>.conf) as
+# its zone set of config/zones.conf, with the app and title of every window assigned to each
+# zone. Without a name it offers a menu of the workspaces; --all draws every one of every layout
+# set (with --layout-type, of that set only), as Windows' -All covers every machine type. --layout-type
+# picks another layout set than this machine's (Work, Laptop, ...). A layout with errors (an
+# unknown zone set or zone, a desktop without a layout line, an unknown app - the
+# Test-ConfigurationSchema check, also for each variant) is reported and neither drawn nor
+# updated, and the exit status is 1, as Windows' Validate-Layout skips it. --display-available-layouts
+# draws every zone set with its zone names instead. --update writes each drawing into its layout
+# file as `#|` comment lines under the section header, replacing the previous ones, after
+# copying the file to Backups/Unix/Config/WindowLayouts.<Type>.<Workspace>/<timestamp>/
+# (--backup-root DIR: DIR/Config/..., the -BackupRoot of Windows). --layout-path FILE draws every
+# workspace of that one file instead of looking in a layout set (its set, for the backup key, is
+# --layout-type, else the name of the file's folder). Each
+# `project A,B` variant of a layout is drawn after it, as the desktops it changes look when the
+# variant applies; --update keeps the variant lines and draws them into the comment block too.
+# A variant naming a project projects.conf does not have is reported and not drawn, as
+# Set-WorkspaceWindowLayout reports and skips it. --layout NAME is the Windows spelling of a
+# WORKSPACE name. `A,B` names two workspaces. A requested layout that does not exist is
+# reported and the others are still drawn, then the exit status is 1; a flag it does not know is
+# an error, never a workspace.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps drivers/aerospace layout backup project
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+workspaces=()
+all=0
+available=0
+update=0
+type=''
+path=''
+while [ $# -gt 0 ]; do
+	case $1 in
+		--all) all=1 ;;
+		--update) update=1 ;;
+		--display-available-layouts) available=1 ;;
+		--layout-type)
+			type=$2
+			shift
+			;;
+		--layout)
+			foundation_split_list workspaces "${2:-}"
+			shift
+			;;
+		--layout-path)
+			path=${2:-}
+			shift
+			;;
+		--backup-root)
+			[ -n "${2:-}" ] || foundation_die "--backup-root needs a DIR"
+			case $2 in /*) FOUNDATION_BACKUP_ROOT=$2 ;; *) FOUNDATION_BACKUP_ROOT=$PWD/$2 ;; esac
+			export FOUNDATION_BACKUP_ROOT
+			shift
+			;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1" ;;
+		*) foundation_split_list workspaces "$1" ;;
+	esac
+	shift
+done
+
+if [ "$available" -eq 1 ]; then
+	log_title "Available Zone Sets"
+	while IFS= read -r set; do
+		printf '\n  %s\n' "$set"
+		layout_render "$set" 64 </dev/null | sed 's/^/  /'
+	done < <(zone_sets)
+	exit 0
+fi
+
+if [ -n "$path" ]; then
+	[ -f "$path" ] && [ -r "$path" ] || foundation_die "Layout file not found => $path"
+	[ ${#workspaces[@]} -eq 0 ] && [ "$all" -eq 0 ] || foundation_die "--layout-path draws every workspace of its file - name no workspace and no --all"
+	[ -n "$type" ] || type=$(basename "$(dirname "$path")")
+	mapfile -t sections < <(conf_sections "$path")
+	[ ${#sections[@]} -gt 0 ] || foundation_die "No layouts in $path"
+	all=1
+	set_list=("$type")
+elif [ "$all" -eq 1 ] && [ -z "$type" ]; then
+	# --all alone covers every layout set, as Windows' -All covers every machine type's folder.
+	mapfile -t set_list < <(layout_types)
+	[ ${#set_list[@]} -gt 0 ] || foundation_die "No layout sets in config/layouts/"
+else
+	[ -n "$type" ] || type=$(layout_type)
+	layout_dir "$type" >/dev/null || foundation_die "No layout set for machine type [$type] (config/layouts/$type/)"
+	mapfile -t sections < <(layout_names "$type")
+	[ ${#sections[@]} -gt 0 ] || foundation_die "No layouts in config/layouts/$type/"
+	set_list=("$type")
+fi
+if [ "$all" -eq 0 ] && [ ${#workspaces[@]} -eq 0 ]; then
+	selection=$(foundation_resolve_selection "[Available $type Layouts]" "Enter layout(s) by number or name" 0 1 "${sections[@]}") || exit 1
+	mapfile -t workspaces <<<"$selection"
+fi
+
+# Drawing of one workspace, desktop by desktop; with PROJECT and DESKTOPS (DESKTOP.MONITOR words)
+# only those desktops, as that project's variant leaves them.
+draw() { # WORKSPACE FILE [PROJECT DESKTOPS]
+	local workspace=$1 file=$2 project=${3:-} only=" ${4:-} " kind desktop monitor zoneset zone app title column
+	local -A sets=()
+	local order=()
+	local projects=()
+	[ -n "$project" ] && projects=("$project")
+	while IFS=$'\t' read -r kind desktop monitor zoneset _ _; do
+		[ "$kind" = L ] || continue
+		[ -z "$project" ] || [[ $only == *" $desktop.$monitor "* ]] || continue
+		sets["$monitor.$desktop"]=$zoneset
+		order+=("$monitor.$desktop")
+	done < <(layout_entries "$file" "$workspace" ${projects[@]+"${projects[@]}"})
+	local key
+	for key in "${order[@]}"; do
+		monitor=${key%%.*}
+		desktop=${key#*.}
+		zoneset=${sets[$key]}
+		printf 'Desktop %s (%s) - %s\n' "$desktop" "$monitor" "$zoneset"
+		while IFS=$'\t' read -r kind d m zone app title; do
+			[ "$kind" = W ] && [ "$d" = "$desktop" ] && [ "$m" = "$monitor" ] || continue
+			if column=$(zone_column "$zoneset" "$zone"); then
+				read -r col _ row <<<"$column"
+				printf '%s\t%s\t%s\n' "$col" "$row" "$app${title:+ $title}"
+			else
+				log_warning "[$workspace] zone [$zone] is not in zone set [$zoneset]" >&2
+			fi
+		done < <(layout_entries "$file" "$workspace" ${projects[@]+"${projects[@]}"}) | layout_render "$zoneset" 64 || log_warning "[$workspace] unknown zone set [$zoneset]" >&2
+	done
+	[ -z "$project" ] || return 0
+	local scope touched
+	while IFS=$'\t' read -r scope touched; do
+		[ -n "$scope" ] || continue
+		# Set-WorkspaceWindowLayout skips a variant naming an unknown project; so does the drawing.
+		layout_variant_known "$scope" || continue
+		printf '\nProject variant [%s]\n' "$scope"
+		draw "$workspace" "$file" "${scope%%,*}" "$touched"
+	done < <(layout_variants "$file" "$workspace")
+}
+
+# What keeps a workspace's layout from being drawn (Validate-Layout of Windows): the problems of its
+# base entries and of each variant that applies (layout_entry_problems), one per line.
+problems() { # WORKSPACE FILE
+	local scope messages message
+	messages=$(layout_entries "$2" "$1" | layout_entry_problems)
+	while IFS= read -r message; do [ -n "$message" ] && printf '%s\n' "$message"; done <<<"$messages"
+	while IFS=$'\t' read -r scope _; do
+		[ -n "$scope" ] && layout_variant_known "$scope" || continue
+		messages=$(layout_entries "$2" "$1" "${scope%%,*}" | layout_entry_problems)
+		while IFS= read -r message; do [ -n "$message" ] && printf 'project variant [%s]: %s\n' "$scope" "$message"; done <<<"$messages"
+	done < <(layout_variants "$2" "$1")
+}
+
+missing=0
+for type in "${set_list[@]}"; do
+	[ -n "$path" ] || mapfile -t sections < <(layout_names "$type")
+	[ "$all" -eq 0 ] || workspaces=("${sections[@]}")
+	for workspace in "${workspaces[@]}"; do
+		[ -n "$workspace" ] || continue
+		name=$(printf '%s\n' "${sections[@]}" | awk -v w="$(foundation_lower "$workspace")" 'tolower($0) == w { print; exit }')
+		[ -n "$name" ] || {
+			log_error "Layout [$workspace] not found in $type layouts!"
+			missing=1
+			continue
+		}
+		if [ -n "$path" ]; then file=$path; else file=$(layout_file "$name" "$type"); fi
+		while IFS= read -r problem; do
+			[ -n "$problem" ] && log_warning "${file##*/}: $problem"
+		done < <(layout_variant_problems "$file" "$name")
+		invalid=$(problems "$name" "$file")
+		if [ -n "$invalid" ]; then
+			while IFS= read -r problem; do log_error "${file##*/} [$name]: $problem"; done <<<"$invalid"
+			log_warning "Skipping [$name] ($type) - its layout has errors (Test-ConfigurationSchema lists them too)"
+			missing=1
+			continue
+		fi
+		drawing=$(draw "$name" "$file")
+		if [ "$update" -eq 1 ]; then
+			backup=$(backup_item Config "WindowLayouts.$type.$name" "$file") || foundation_die "Could not back up $file - not updating it"
+			tmp=$(mktemp) || foundation_die "mktemp failed"
+			# Replace the #| block right under [NAME] with the new drawing; nothing else changes.
+			# The drawing goes through the environment: BSD awk rejects newlines in -v values.
+			if ! FOUNDATION_DRAWING=$drawing awk -v name="$(foundation_lower "$name")" '
+				function header(line,   n) { n = line; sub(/^[[:space:]]*\[/, "", n); sub(/\][[:space:]]*$/, "", n); return tolower(n) }
+				skipping && /^#\|/ { next }
+				{ skipping = 0 }
+				/^[[:space:]]*\[[^]]+\][[:space:]]*$/ && header($0) == name {
+					print
+					k = split(ENVIRON["FOUNDATION_DRAWING"], l, "\n")
+					for (i = 1; i <= k; i++) print "#| " l[i]
+					skipping = 1
+					next
+				}
+				{ print }' "$file" >"$tmp" || ! cat "$tmp" >"$file"; then
+				rm -f "$tmp"
+				foundation_die "Could not update [$name] in $file (backup: $backup)"
+			fi
+			rm -f "$tmp"
+			log_success "Updated [$name] in ${file#"$DOTFILES_ROOT"/}"
+		else
+			log_title "$name ($type)"
+			printf '%s\n' "$drawing"
+		fi
+	done
+done
+exit $missing

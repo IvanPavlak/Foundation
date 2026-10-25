@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+# Open-VSCode - opens VS Code, one new window per named folder.
+#
+# Usage: Open-VSCode [FOLDER...] [--folder FOLDER] [--default]
+#
+# FOLDER is a name from Unix/config/vscode-folders.conf (Dotfiles, MyProject-UI, ...), given bare
+# or with --folder (Windows' -Folder; repeatable). When several lines have the name, the last one
+# gives the folder, so a .local overlay line overrides the base line; the menu lists each name
+# once. A folder whose name is already a whole segment of a VS Code window title is not opened
+# twice (MyApp is not taken for open while only myapp-ui is); the titles come from AeroSpace, or
+# from System Events when AeroSpace does not answer. Without a folder the folder menu is
+# shown; an empty Enter opens VS Code itself unless it already runs (a window, or the running app).
+# A `code` launch that fails is reported and makes the exit 1; the other folders still open. --default skips the menu and
+# does the same, as the Windows -Default does. During a workspace open with a VS Code workspace override
+# (FOUNDATION_VSCODE_WORKSPACE, set by Open-Workspace) it opens that .code-workspace through
+# Open-VSCodeWorkspace instead. `Open-VSCode A,B` names two folders, and a number names that entry
+# of the menu; a flag it does not know is an error, never a folder.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps drivers/aerospace
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+folders=()
+use_default=0
+while [ $# -gt 0 ]; do
+	case $1 in
+		--default) use_default=1 ;;
+		--folder)
+			foundation_split_list folders "${2:-}"
+			shift
+			;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1 - nothing was opened" ;;
+		*) foundation_split_list folders "$1" ;;
+	esac
+	shift
+done
+
+if [ -n "${FOUNDATION_VSCODE_WORKSPACE:-}" ]; then
+	log_debug "[Open-VSCode] rerouted to Open-VSCodeWorkspace [$FOUNDATION_VSCODE_WORKSPACE]"
+	if [ "$FOUNDATION_VSCODE_WORKSPACE" = '?' ]; then foundation_run Open-VSCodeWorkspace; else foundation_run Open-VSCodeWorkspace "$FOUNDATION_VSCODE_WORKSPACE"; fi
+	exit
+fi
+
+file=$(conf_path vscode-folders.conf) || foundation_die "Missing Unix/config/vscode-folders.conf"
+available=()
+while read -r name; do [ -n "$name" ] && available+=("$name"); done < <(conf_lines "$file" | awk '!seen[tolower($1)]++ { print $1 }')
+if [ ${#folders[@]} -gt 0 ]; then
+	# A number is that entry of the menu, as -Folder 2 is on Windows.
+	mapfile -t folders < <(foundation_resolve_items "${folders[@]}" -- ${available[@]+"${available[@]}"})
+elif [ "$use_default" -eq 1 ]; then
+	: # -Default: no menu, plain VS Code below.
+else
+	# Resolve-Selection; an empty Enter opens plain VS Code below.
+	selection=$(foundation_resolve_selection "[Available VSCode Folders]" "" 1 1 "${available[@]}") || exit 1
+	while IFS= read -r name; do [ -n "$name" ] && folders+=("$name"); done <<<"$selection"
+fi
+
+code_cli=$(command -v code) || code_cli="/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"
+[ -x "$code_cli" ] || foundation_die "The 'code' command was not found. In VS Code run: Shell Command: Install 'code' command in PATH"
+
+VSCODE_BUNDLE=com.microsoft.VSCode
+
+# The VS Code window titles: AeroSpace's window list, else System Events, so the already-open check
+# does not vanish when AeroSpace is not running.
+code_titles() {
+	if as_available; then
+		as_windows | awk -F'\t' '$2 == "Code" { print $7 }'
+	else
+		app_window_titles "$VSCODE_BUNDLE"
+	fi
+}
+
+# Is the folder LEAF open, its name a whole segment of a VS Code window title?
+code_has_folder() { # LEAF
+	local title
+	while IFS= read -r title; do
+		foundation_title_has_segment "$title" "$1" && return 0
+	done < <(code_titles)
+	return 1
+}
+
+if [ ${#folders[@]} -eq 0 ]; then
+	log_step "Opening VSCode..."
+	if [ -n "$(code_titles)" ] || [ -n "$(app_pids "$VSCODE_BUNDLE")" ]; then
+		log_warning "VSCode is already running!"
+	elif foundation_launch "$code_cli" -n </dev/null >/dev/null 2>&1; then
+		log_success "VSCode opened!"
+	else
+		foundation_die "VS Code could not be started ($code_cli -n failed)"
+	fi
+	exit 0
+fi
+
+status=0
+for folder in "${folders[@]}"; do
+	# The last line of the name wins (an overlay line overrides the base line).
+	path=$(conf_lines "$file" | awk -v n="$(foundation_lower "$folder")" 'tolower($1) == n { sub(/^[^[:space:]]+[[:space:]]+/, ""); p = $0 } END { if (p != "") print p }')
+	if [ -z "$path" ]; then
+		log_error "Error: Mapping for project [$folder] not found in vscode-folders.conf!"
+		status=1
+		continue
+	fi
+	path=$(foundation_expand_path "$path")
+	if [ ! -d "$path" ]; then
+		log_error "Folder path not found for [$folder] at resolved path: [$path]!"
+		status=1
+		continue
+	fi
+	leaf=$(basename "$path")
+	log_step "Opening VSCode with project [$folder]..."
+	if code_has_folder "$leaf"; then
+		log_warning "[$folder] is already open in VSCode!"
+		continue
+	fi
+	if foundation_launch "$code_cli" -n "$path" </dev/null >/dev/null 2>&1; then
+		log_success "Opened project [$folder] in VSCode!"
+	else
+		log_error "VS Code could not open [$folder] ($code_cli -n failed)"
+		status=1
+	fi
+done
+exit $status

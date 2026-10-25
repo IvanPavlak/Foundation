@@ -1,0 +1,380 @@
+#!/usr/bin/env bash
+# EfCoreMigrationWizard - menu-driven Entity Framework Core migration manager for a solution. Alias: efm
+#
+# Usage: EfCoreMigrationWizard
+#
+# Finds the nearest solution (Find-Item, *.sln/*.slnx up and down), discovers its migration
+# projects (dedicated *Migration(s)* projects, or Domain projects with a Migrations folder),
+# marks the one matching the active provider of appsettings (DatabaseConfiguration.UseNpgSql /
+# UseOracle / UseSqlServer), resolves the startup project (an Api/Web/WebApi/Startup project with
+# Microsoft.EntityFrameworkCore.Design) and the DbContext (snapshot, sources, then
+# `dotnet ef dbcontext list`), and offers: add, redo last, remove last (reverting the database
+# first), squash all into initial-migration (confirmed), and sync a migration to the other
+# database projects. Every dotnet ef command is printed before it runs.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load efcore
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+green='' gray='' yellow='' red='' reset=''
+if log_use_color 1; then green=$'\033[32m' gray=$'\033[90m' yellow=$'\033[33m' red=$'\033[31m' reset=$'\033[0m'; fi
+say() { printf '%s%s%s\n' "$1" "$2" "$reset"; }
+ask() { # PROMPT - Custom-ReadHost
+	local answer
+	# On stderr, as foundation_resolve_selection draws its menu: stdout is the answer, and a write to
+	# /dev/tty would reach the terminal a test suite runs in.
+	printf '\n%s' "$1" >&2
+	IFS= read -r answer <"${FOUNDATION_TTY:-/dev/tty}" || answer=''
+	printf '%s' "$answer"
+}
+choose() { # TITLE PROMPT OPTION... (one choice, empty when cancelled)
+	foundation_resolve_selection "$1" "$2" 0 0 "${@:3}" || true
+}
+simple() { awk -F. '{ print $NF }' | LC_ALL=C sort -u; }
+
+log_title "EF Core Migration Wizard"
+command -v dotnet >/dev/null 2>&1 || foundation_die "dotnet is not installed (brew install --cask dotnet-sdk)"
+
+log_step "[Searching for solution file]"
+solution=$(foundation_run Find-Item '*.sln' --select-first 2>/dev/null) || solution=$(foundation_run Find-Item '*.slnx' --select-first 2>/dev/null) || solution=''
+[ -n "$solution" ] || foundation_die "No solution file found!"
+root=$(dirname "$solution")
+log_success "Found solution [$(basename "$solution")] at [$root]"
+
+log_step "Searching for migration projects..."
+mapfile -t projects < <(ef_migration_projects "$root")
+if [ ${#projects[@]} -eq 0 ]; then
+	log_error "No migration projects found!"
+	log_warning "Looking for projects matching *Migrations* or Domain projects with Migrations folder."
+	exit 1
+fi
+field() { printf '%s' "$1" | cut -f"$2"; } # RECORD N: 1 name 2 dir 3 csproj 4 type 5 has 6 snapshot 7 rel 8 sub
+
+current_type=$(ef_current_database_type "$root")
+[ -n "$current_type" ] && log_success "Current database configuration: [$current_type]"
+
+log_step "Found ${#projects[@]} migration project(s):"
+printf '\n'
+options=()
+for record in "${projects[@]}"; do
+	type=$(field "$record" 4)
+	status="Empty"
+	[ "$(field "$record" 5)" = 1 ] && status="Has migrations"
+	active=''
+	color=$gray
+	[ -n "$current_type" ] && [ "$type" = "$current_type" ] && {
+		active=' [ACTIVE]'
+		color=$green
+	}
+	say "$color" "    $(printf '%-12s' "$type") => $(field "$record" 1) ($status)$active"
+	options+=("$type - $(field "$record" 1)$active")
+done
+
+if [ ${#projects[@]} -eq 1 ]; then
+	selected=${projects[0]}
+	log_success "Using migration project: [$(field "$selected" 1)]"
+else
+	choice=$(choose "[Select Migration Project]" "Choose migration project" "${options[@]}")
+	[ -n "$choice" ] || foundation_die "No migration project selected. Exiting..."
+	for i in "${!options[@]}"; do [ "${options[i]}" = "$choice" ] && selected=${projects[i]}; done
+fi
+migrations_path=$(field "$selected" 7)
+selected_dir=$(field "$selected" 2)
+selected_snapshot=$(field "$selected" 6)
+log_step "Selected project => [$(field "$selected" 1)]"
+log_step "Database type => [$(field "$selected" 4)]"
+log_step "Project path => [$migrations_path]"
+
+if [ -n "$(field "$selected" 8)" ]; then
+	migration_folder=$selected_dir/$(field "$selected" 8)
+elif [ -n "$selected_snapshot" ]; then
+	migration_folder=$(dirname "$selected_snapshot")
+else
+	migration_folder=$selected_dir
+fi
+if [ -n "$selected_snapshot" ]; then
+	detected=$(ef_snapshot_context "$selected_snapshot")
+	[ -n "$detected" ] && log_step "Detected DbContext => [$detected]"
+fi
+
+# Find-EfStartupProject
+log_step "Searching for startup project..."
+startup_csproj=''
+startup_path=''
+candidates=()
+while IFS= read -r csproj; do
+	file=$(basename "$csproj")
+	base=${file%.csproj}
+	if ef__imatch "$file" '(\.Api\.|\.Web\.|\.WebApi\.|\.Startup\.)' || ef__imatch "$base" '(Api|Web|WebApi|Startup)$'; then candidates+=("$csproj"); fi
+done < <(ef_csproj_files "$root")
+if [ ${#candidates[@]} -gt 0 ]; then
+	for c in "${candidates[@]}"; do
+		file=$(basename "$c")
+		{ ef__imatch "$file" '\.Api\.' || ef__imatch "${file%.csproj}" 'Api$'; } && ef_has_design "$c" && {
+			startup_csproj=$c
+			break
+		}
+	done
+	if [ -z "$startup_csproj" ]; then
+		for c in "${candidates[@]}"; do ef_has_design "$c" && {
+			startup_csproj=$c
+			break
+		}; done
+	fi
+	if [ -z "$startup_csproj" ] && ef_has_design "$(field "$selected" 3)"; then
+		log_warning "No API/Web project with EF Core Design found."
+		log_warning "Using migrations project as startup (has EF Core Design)"
+		startup_path=$migrations_path
+	fi
+	if [ -z "$startup_csproj" ] && [ -z "$startup_path" ]; then
+		startup_csproj=${candidates[0]}
+		log_warning "Warning: Selected API project doesn't have EF Core Design package"
+	fi
+fi
+if [ -n "$startup_csproj" ]; then
+	startup_dir=$(dirname "$startup_csproj")
+	startup_path=${startup_dir#"$root"/}
+	log_success "Found startup project => [$(basename "$startup_csproj" .csproj)]"
+	log_step "Startup project path => [$startup_path]"
+	if ef_has_design "$startup_csproj"; then log_success "     Has EF Core Design package"; else log_warning "     Missing EF Core Design package (commands may fail)"; fi
+elif [ -z "$startup_path" ] && ef_has_design "$(field "$selected" 3)"; then
+	startup_path=$migrations_path
+	log_warning "Using migrations project as startup project (has EF Core Design)"
+fi
+if [ -z "$startup_path" ]; then
+	log_error "No suitable startup project found. Commands will likely fail!"
+	log_warning "     Consider adding Microsoft.EntityFrameworkCore.Design to your API or migrations project."
+fi
+startup_dir=${startup_dir:-${startup_path:+$root/$startup_path}}
+
+# Resolve-EfMigrationDbContext
+context=''
+explicit=0
+snapshots=$(find "$selected_dir" -name '*ModelSnapshot.cs' -type f 2>/dev/null)
+if [ -n "$snapshots" ] && [ "$(printf '%s\n' "$snapshots" | wc -l | tr -d ' ')" -eq 1 ]; then
+	context=$(ef_snapshot_context "$snapshots")
+	log_step "Single DbContext detected => skipping design-time discovery (running without --context)"
+else
+	[ -n "$selected_snapshot" ] && context=$(ef_snapshot_context "$selected_snapshot")
+	discovered=$({
+		ef_project_contexts "$selected_dir"
+		[ -n "$startup_dir" ] && [ "$startup_dir" != "$selected_dir" ] && ef_project_contexts "$startup_dir"
+	} | simple)
+	if [ -n "$discovered" ]; then
+		mapfile -t names <<<"$discovered"
+		if [ -n "$context" ]; then
+			if ! printf '%s\n' "${names[@]}" | grep -qxF -- "$context"; then
+				say "$yellow" "  => Snapshot DbContext [$context] is not present in project sources."
+				if [ ${#names[@]} -eq 1 ]; then
+					context=${names[0]}
+					say "$green" "  => Using discovered DbContext => [$context]"
+				else
+					context=$(choose "[Select DbContext]" "Choose DbContext" "${names[@]}")
+					if [ -n "$context" ]; then say "$green" "  => Selected DbContext => [$context]"; else say "$yellow" "  => No DbContext selected. Commands will run without --context."; fi
+				fi
+			fi
+		elif [ ${#names[@]} -eq 1 ]; then
+			context=${names[0]}
+			log_step "Auto-detected DbContext => [$context]"
+		fi
+		[ ${#names[@]} -gt 1 ] && [ -n "$context" ] && explicit=1
+	fi
+	if [ -n "$startup_path" ]; then
+		cli=$(ef_cli_contexts "$migrations_path" "$startup_path" "$root" | simple)
+		if [ -n "$cli" ]; then
+			mapfile -t cli_names <<<"$cli"
+			log_step "EF CLI contexts => [$(printf '%s, ' "${cli_names[@]}" | sed 's/, $//')]"
+			if [ ${#cli_names[@]} -eq 1 ]; then
+				context=${cli_names[0]}
+				explicit=0
+				log_step "Using EF CLI detected context => [$context] (without --context)"
+			else
+				chosen=$context
+				if [ -z "$chosen" ] || ! printf '%s\n' "${cli_names[@]}" | grep -qxF -- "$chosen"; then
+					chosen=$(choose "[Select DbContext]" "Choose DbContext" "${cli_names[@]}")
+				fi
+				if [ -n "$chosen" ]; then
+					context=$chosen
+					explicit=1
+					say "$green" "  => Selected EF CLI context => [$context]"
+				else
+					context=''
+					explicit=0
+					say "$yellow" "  => No DbContext selected. Commands will run without --context."
+				fi
+			fi
+		fi
+	fi
+fi
+
+mapfile -t migrations < <(ef_migrations "$migration_folder")
+count=${#migrations[@]}
+[ -n "${migrations[0]:-}" ] || count=0
+name_of() { basename "$1" .cs; }
+if [ "$count" -ge 2 ]; then
+	log_success "Next to last migration => [$(name_of "${migrations[count - 2]}")]"
+	log_success "Last migration => [$(name_of "${migrations[count - 1]}")]"
+elif [ "$count" -eq 1 ]; then
+	log_success "Last migration => [$(name_of "${migrations[0]}")]"
+	log_warning "No next to last migration found!"
+else
+	log_warning "No migrations found in this project!"
+fi
+
+actions=("Add new migration")
+[ "$count" -ge 2 ] && actions+=("Redo last migration")
+[ "$count" -ge 1 ] && actions+=("Remove last migration" "Squash all migrations")
+[ ${#projects[@]} -gt 1 ] && actions+=("Sync migration to other database(s)")
+actions+=("Exit")
+action=$(choose "[Available Actions]" "Select an option" "${actions[@]}")
+
+cd "$root" || exit 1
+common=(--project "$migrations_path")
+[ -n "$startup_path" ] && common+=(--startup-project "$startup_path")
+[ "$explicit" -eq 1 ] && [ -n "$context" ] && common+=(--context "$context")
+ef() { # ARGS... - prints and runs dotnet ef
+	log_step "Running [dotnet ef $*]"
+	printf '\n'
+	dotnet ef "$@"
+}
+strip_stamp() { sed 's/^[0-9]\{14\}_//'; }
+
+case $action in
+	"Add new migration")
+		migration=$(ask "Enter the name for the new migration: ")
+		[ -n "$migration" ] || foundation_die "No migration name given"
+		if ef migrations add "$migration" "${common[@]}"; then log_success "Successfully added migration [$migration]"; else
+			log_error "Failed to add migration. Please check the output above for errors!"
+			exit 1
+		fi
+		;;
+	"Redo last migration")
+		log_step "Validating migration requirements for redo operation..."
+		target=$(name_of "${migrations[count - 2]}")
+		readd=$(name_of "${migrations[count - 1]}" | strip_stamp)
+		log_success "Re-add name will be => [$readd]"
+		log_title "Step 1/3 - Reverting database to previous migration..."
+		ef database update "$target" "${common[@]}" || {
+			log_error "Step 1 FAILED!"
+			foundation_die "Aborting!"
+		}
+		log_title "Step 2/3 - Removing last migration from the project..."
+		ef migrations remove "${common[@]}" || {
+			log_error "Step 2 FAILED!"
+			foundation_die "Aborting!"
+		}
+		log_title "Step 3/3 - Re-adding the migration..."
+		ef migrations add "$readd" "${common[@]}" || {
+			log_error "Step 3 FAILED!"
+			foundation_die "Please check the output for errors!"
+		}
+		log_success "Successfully redone the last migration as [$readd]"
+		;;
+	"Remove last migration")
+		log_step "Validating migration requirements for remove operation..."
+		if [ "$count" -ge 2 ]; then
+			target=$(name_of "${migrations[count - 2]}")
+			log_step "Database will be reverted to migration [$target]"
+		else
+			target=0
+			log_step "Database will be reverted to its initial state (no migrations)."
+		fi
+		log_title "Step 1/2 - Reverting database to previous migration..."
+		ef database update "$target" "${common[@]}" || {
+			log_error "Step 1 FAILED! Could not revert database."
+			foundation_die "Aborting!"
+		}
+		log_title "Step 2/2 - Removing last migration from the project..."
+		ef migrations remove "${common[@]}" || {
+			log_error "Step 2 FAILED! Could not remove migration files."
+			foundation_die "Please check the output for errors!"
+		}
+		log_success "Successfully removed the last migration and reverted the database."
+		;;
+	"Squash all migrations")
+		say "$red" $'\n[WARNING]\n This operation will:'
+		say "$red" "   1. Delete ALL migration files from [$migration_folder]"
+		say "$red" "   2. Create a fresh migration named [initial-migration]"
+		log_error " This should ONLY be used before an app is in production!"
+		confirm=$(choose "[Confirm]" "Are you sure you want to squash all migrations?" Yes No)
+		[ "$confirm" = Yes ] || {
+			log_warning "Squash all migrations cancelled!"
+			exit 0
+		}
+		log_title "Step 1/2 - Deleting all migration files..."
+		deleted=0
+		for f in "$migration_folder"/*.cs; do
+			[ -f "$f" ] || continue
+			rm -f "$f" && {
+				say "$yellow" "  Deleted => $(basename "$f")"
+				deleted=$((deleted + 1))
+			}
+		done
+		log_success "Deleted $deleted file(s)"
+		log_title "Step 2/2 - Creating initial migration..."
+		if ef migrations add initial-migration "${common[@]}"; then log_success "Successfully squashed all migrations into [initial-migration]"; else
+			log_error "Failed to create initial migration! Check the output above for errors!"
+			exit 1
+		fi
+		;;
+	"Sync migration to other database(s)")
+		log_step "This will help generate equivalent migrations in other database projects."
+		others=()
+		for record in "${projects[@]}"; do [ "$(field "$record" 2)" = "$selected_dir" ] || others+=("$record"); done
+		[ ${#others[@]} -gt 0 ] || foundation_die "No other migration projects found!"
+		migration=''
+		if [ "$count" -gt 0 ]; then
+			last=$(name_of "${migrations[count - 1]}" | strip_stamp)
+			log_step "Last migration name: [$last]"
+			[ "$(choose "[Migration Name]" "Use this name for sync?" Yes No)" = Yes ] && migration=$last
+		fi
+		[ -n "$migration" ] || migration=$(ask "Enter migration name: ")
+		[ -n "$migration" ] || migration=initial-migration
+		targets_text=()
+		for record in "${others[@]}"; do targets_text+=("$(field "$record" 4) - $(field "$record" 1)"); done
+		[ ${#others[@]} -gt 1 ] && targets_text+=("All other projects")
+		pick=$(choose "[Select Target Project(s)]" "Choose target for migration sync" "${targets_text[@]}")
+		[ -n "$pick" ] || foundation_die "No target selected"
+		targets=()
+		if [ "$pick" = "All other projects" ]; then targets=("${others[@]}"); else
+			for i in "${!others[@]}"; do [ "${targets_text[i]}" = "$pick" ] && targets=("${others[i]}"); done
+		fi
+		say "$yellow" $'\n[IMPORTANT] Database-specific migrations require the correct provider to be active.'
+		say "$yellow" "   The wizard will attempt to run migrations, but you may need to:"
+		say "$yellow" "   1. Update appsettings.Development.json to enable the target database provider"
+		say "$yellow" $'   2. Ensure the target database is accessible\n'
+		for record in "${targets[@]}"; do
+			type=$(field "$record" 4)
+			target_path=$(field "$record" 7)
+			[ -n "$target_path" ] || target_path=$(field "$record" 2)
+			log_step "Processing $type ($(field "$record" 1))..."
+			args=(--project "$target_path")
+			[ -n "$startup_path" ] && args+=(--startup-project "$startup_path")
+			mapfile -t target_names < <(ef_project_contexts "$(field "$record" 2)" | simple)
+			if [ ${#target_names[@]} -gt 1 ]; then
+				tctx=''
+				[ -n "$(field "$record" 6)" ] && tctx=$(ef_snapshot_context "$(field "$record" 6)")
+				if [ -z "$tctx" ] || ! printf '%s\n' "${target_names[@]}" | grep -qxF -- "$tctx"; then
+					tctx=$(choose "[Select DbContext for $type]" "Choose DbContext" "${target_names[@]}")
+				fi
+				[ -n "$tctx" ] && args+=(--context "$tctx")
+			fi
+			case $type in PostgreSQL) flag=UseNpgSql ;; Oracle) flag=UseOracle ;; SqlServer) flag=UseSqlServer ;; *) flag='' ;; esac
+			[ -n "$flag" ] && log_step "     Requires: $flag = true in appsettings.Development.json"
+			if [ "$(choose "[Run Now]" "Run migration for $type now?" Yes "No, just show command")" = Yes ]; then
+				if ef migrations add "$migration" "${args[@]}"; then log_success "Successfully added migration [$migration] to $type"; else log_error "Failed! Check if ${flag:-the provider} is enabled in appsettings"; fi
+			else
+				log_step "Command => dotnet ef migrations add $migration ${args[*]}"
+			fi
+		done
+		;;
+	*) log_step "Exiting..." ;;
+esac

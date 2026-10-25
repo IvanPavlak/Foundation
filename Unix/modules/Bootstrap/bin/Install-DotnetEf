@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# Install-DotnetEf - installs the EF Core CLI (`dotnet ef`) as a global .NET tool, the Unix
+# counterpart of the Windows Install-DotnetEf.
+#
+# Usage: Install-DotnetEf [--update] [--dry-run]
+#
+# Installs the `ef-version` of Unix/config/dotnet.conf (8.0.11, 8.* or empty for the latest).
+# Without the .NET SDK it does nothing; when dotnet-ef is already a global tool it is left alone.
+# --update installs the latest version instead, whatever is installed. --dry-run prints the
+# dotnet command and changes nothing. The tool lands in ~/.dotnet/tools.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+dry=0
+update=0
+for argument in "$@"; do
+	case $argument in
+		--dry-run) dry=1 ;;
+		--update) update=1 ;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument [$argument] - usage: Install-DotnetEf [--update] [--dry-run]" ;;
+	esac
+done
+
+log_title "Install-DotnetEf"
+
+if ! command -v dotnet >/dev/null 2>&1; then
+	log_warning ".NET SDK is not installed - skipping dotnet-ef!"
+	exit 0
+fi
+
+version=''
+config=$(conf_path dotnet.conf) && version=$(conf_value "$config" ef-version)
+
+# The installed version from `dotnet tool list --global` ("dotnet-ef  9.0.1  dotnet-ef").
+installed=$(dotnet tool list --global 2>/dev/null | awk 'tolower($1) == "dotnet-ef" { print $2; exit }')
+
+if [ "$update" -eq 1 ]; then
+	command=(dotnet tool update --global dotnet-ef)
+	done_text="dotnet-ef updated to the latest version!"
+elif [ -n "$installed" ]; then
+	log_warning "dotnet-ef $installed is already installed!"
+	exit 0
+elif [ -n "$version" ]; then
+	command=(dotnet tool install --global dotnet-ef --version "$version")
+	done_text="dotnet-ef $version installed!"
+else
+	command=(dotnet tool install --global dotnet-ef)
+	done_text="dotnet-ef installed (latest version)!"
+fi
+
+if [ "$dry" -eq 1 ]; then
+	printf '  %s\n' "${command[*]}"
+	exit 0
+fi
+
+log_step "${command[*]}"
+if "${command[@]}"; then
+	log_success "$done_text"
+else
+	log_error "${command[*]} failed"
+	exit 1
+fi

@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+# Close-Workspace - closes everything a workspace opened, and nothing else. Alias: cw
+#
+# Usage: Close-Workspace [WORKSPACE...] [--all] [--dry-run] [-v]
+#
+# Ownership comes from the record Open-Workspace wrote ($FOUNDATION_STATE_DIR/open-workspaces), never
+# from the configuration: the windows and terminal panes that appeared during the open plus the
+# windows its layout adopted. A recorded window is found by its id, else re-resolved as on Windows
+# (lib/state.sh state_resolve_windows): the same app when it has one window left (an app that
+# recreated its window), else the same app and exact title (an app that restarted); never a
+# terminal window, never a window another open workspace owns. An app whose every open window is
+# owned is asked to quit (Cmd+Q); otherwise only the owned windows are closed. Nothing is ever
+# force-killed, as on Windows: an app still running 5 s after the request is reported and left
+# alone (it may be asking to save). The pane cw runs in, when the workspace owns it, closes last
+# (after the summary); either way focus returns to this terminal (Focus-TerminalTab).
+# Without a name a menu of the open workspaces is shown (empty Enter cancels). A workspace open
+# twice (plain, then --alongside) has a record per instance: the menu offers each, labelled
+# "Name (plain, desktop 1)" / "Name (alongside, desktop 6)"; a bare name closes every instance, a
+# full label only that one; a number names that entry of the menu.
+# A workspace with no record is reported and left alone - nothing is guessed. `cw A,B` closes
+# both; a flag it does not know is an error, never a workspace. --dry-run (the Windows -WhatIf)
+# lists the apps it would quit, the windows it would close and the tabs it would close, and
+# changes nothing.
+# Windows-style names: --workspace (-Workspace) is accepted and ignored: the names after it are
+# workspaces.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps drivers/aerospace drivers/wezterm state
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+arguments=()
+all=0
+dry=0
+for argument in "$@"; do
+	case $argument in
+		--all) all=1 ;;
+		--dry-run) dry=1 ;;
+		-v | --verbose) ;;
+		--workspace) ;;
+		-*) foundation_die "Unknown argument => $argument - nothing was closed" ;;
+		*) arguments+=("$argument") ;;
+	esac
+done
+
+keys=()
+while IFS= read -r key; do [ -n "$key" ] && keys+=("$key"); done < <(state_keys)
+if [ ${#keys[@]} -eq 0 ]; then
+	log_warning "No open workspace is tracked - nothing to close (was it opened with w on this machine?)"
+	exit 0
+fi
+
+as_available || as_start || exit 1
+
+# One row per instance: the bare name when the workspace has one, its label when it has several.
+live=$(as_windows)
+labels=()
+rows=()
+for key in "${keys[@]}"; do
+	labels+=("$(state_instance_label "$key" "$live")")
+	if [ "$(state_instances "${key%%#*}" | grep -c .)" -gt 1 ]; then
+		rows+=("${labels[${#labels[@]} - 1]}")
+	else
+		rows+=("${key%%#*}")
+	fi
+done
+
+selected=()
+select_key() { # INDEX
+	local chosen
+	for chosen in ${selected[@]+"${selected[@]}"}; do [ "$chosen" = "$1" ] && return 0; done
+	selected+=("$1")
+}
+if [ "$all" -eq 1 ]; then
+	for i in "${!keys[@]}"; do select_key "$i"; done
+elif [ ${#arguments[@]} -eq 0 ]; then
+	selection=$(foundation_resolve_selection "[Open workspaces to close]" "Enter workspace(s) to close or press [Enter] to cancel" 1 1 "${rows[@]}") || exit 1
+	while IFS= read -r row; do
+		for i in "${!rows[@]}"; do [ -n "$row" ] && [ "${rows[$i]}" = "$row" ] && select_key "$i"; done
+	done <<<"$selection"
+	[ ${#selected[@]} -gt 0 ] || exit 0
+else
+	for argument in "${arguments[@]}"; do
+		# A full instance label first: "Example (alongside, desktop 6)" holds a comma.
+		hit=0
+		for i in "${!labels[@]}"; do
+			foundation_ieq "$argument" "${labels[$i]}" && select_key "$i" && hit=1
+		done
+		[ "$hit" -eq 0 ] || continue
+		names=()
+		foundation_split_list names "$argument"
+		for name in ${names[@]+"${names[@]}"}; do
+			# A number is that entry of the menu, as -Workspace 2 is on Windows.
+			if [[ $name =~ ^[0-9]+$ ]] && [ "$name" -ge 1 ] && [ "$name" -le ${#rows[@]} ]; then
+				select_key "$((name - 1))"
+				continue
+			fi
+			hit=0
+			for i in "${!keys[@]}"; do
+				foundation_ieq "$name" "${keys[$i]%%#*}" && select_key "$i" && hit=1
+			done
+			[ "$hit" -eq 1 ] || log_warning "Workspace [$name] is not tracked - left alone"
+		done
+	done
+fi
+[ ${#selected[@]} -gt 0 ] || exit 0
+
+# The terminal is torn down pane by pane, never quit: cw usually runs inside it.
+terminal_bundles=''
+while IFS= read -r member; do
+	terminal_bundles+="$(app_bundle "$member")"$'\n'
+done < <(app_role_members Terminal)
+own=''
+wt_running && { own=$(wt_own_pane) || own=''; }
+close_own=0
+
+for i in "${selected[@]}"; do
+	key=${keys[$i]}
+	entries=$(state_entries "$key")
+	if [ "$dry" -eq 1 ]; then log_title "Closing ${rows[$i]} Workspace (dry run)"; else log_title "Closing ${rows[$i]} Workspace"; fi
+
+	live=$(as_windows)
+	owned_ids=" $(state_live_windows "$key" "$live" | tr '\n' ' ') "
+	# Bundles whose every live window is owned are quit; the rest lose only owned windows.
+	quit_bundles=$(printf '%s\n' "$live" | awk -F'\t' -v owned="$owned_ids" '
+		NF { total[$3]++; if (index(owned, " " $1 " ")) mine[$3]++ }
+		END { for (b in total) if (mine[b] == total[b]) print b }')
+	quit_bundles=$(printf '%s\n' "$quit_bundles" | grep -vxF -f <(printf '%s' "$terminal_bundles" | grep .) || true)
+	close_ids=()
+	while IFS=$'\t' read -r id token bundle _ _ _ _; do
+		case $owned_ids in *" $id "*) ;; *) continue ;; esac
+		app_matches Terminal "$token" && continue
+		printf '%s\n' "$quit_bundles" | grep -qxF -- "$bundle" && continue
+		close_ids+=("$id")
+	done <<<"$live"
+	pane_ids=()
+	pane_titles=()
+	if wt_running; then
+		live_panes=" $(wt_panes | cut -f3 | tr '\n' ' ') "
+		while IFS=$'\t' read -r kind pane title; do
+			[ "$kind" = pane ] || continue
+			case $live_panes in *" $pane "*) ;; *) continue ;; esac
+			pane_ids+=("$pane")
+			pane_titles+=("${title:-(untitled)}")
+		done <<<"$entries"
+	fi
+
+	if [ "$dry" -eq 1 ]; then
+		for bundle in $quit_bundles; do
+			log_step "Would quit $(printf '%s\n' "$live" | awk -F'\t' -v b="$bundle" '$3 == b { print $6; exit }')"
+		done
+		for id in ${close_ids[@]+"${close_ids[@]}"}; do
+			log_step "Would close the window $(printf '%s\n' "$live" | awk -F'\t' -v i="$id" '$1 == i { print "\"" $7 "\" (" $6 ")"; exit }')"
+		done
+		for j in ${pane_ids[@]+"${!pane_ids[@]}"}; do
+			if [ "${pane_ids[$j]}" = "$own" ]; then
+				log_step "Would close the tab ${pane_titles[$j]} (this one, last)"
+			else
+				log_step "Would close the tab ${pane_titles[$j]}"
+			fi
+		done
+		continue
+	fi
+
+	asked=()
+	for bundle in $quit_bundles; do
+		app_quit "$bundle" && asked+=("$bundle")
+	done
+	closed=0
+	for id in ${close_ids[@]+"${close_ids[@]}"}; do
+		as_close_window "$id" && closed=$((closed + 1))
+	done
+	panes=0
+	for pane in ${pane_ids[@]+"${pane_ids[@]}"}; do
+		if [ "$pane" = "$own" ]; then
+			close_own=1
+			panes=$((panes + 1))
+			continue
+		fi
+		wt_kill_pane "$pane" && panes=$((panes + 1))
+	done
+	# Wait for the asked apps once, after the windows and tabs are dealt with: a save sheet keeps
+	# its app running, and that app is reported, never killed.
+	refused=()
+	if [ ${#asked[@]} -gt 0 ]; then
+		while IFS= read -r bundle; do [ -n "$bundle" ] && refused+=("$bundle"); done \
+			< <(app_wait_quit "${FOUNDATION_QUIT_WAIT_SECONDS:-5}" "${asked[@]}")
+	fi
+	quit=$((${#asked[@]} - ${#refused[@]}))
+	for bundle in ${refused[@]+"${refused[@]}"}; do
+		name=$(printf '%s\n' "$live" | awk -F'\t' -v b="$bundle" '$3 == b { print $6; exit }')
+		log_warning "${name:-$bundle} did not quit - leaving it alone (it may be waiting on unsaved work)"
+	done
+	state_forget "$key"
+	log_success "Closed ${rows[$i]} ($quit app(s) quit, $closed window(s) closed, $panes tab(s) closed)!"
+done
+
+if [ "$dry" -eq 1 ]; then
+	log_success "Dry run - nothing was closed"
+	exit 0
+fi
+# Back to the terminal cw was typed in, as on Windows; when the workspace owned that pane, it goes
+# last, from a detached child, since this process dies with it.
+foundation_run Focus-TerminalTab --quiet </dev/null >/dev/null 2>&1 || log_debug "[Close-Workspace] no terminal window to focus"
+if [ "$close_own" -eq 1 ]; then
+	nohup "${BASH:-bash}" -c 'sleep 0.5; . "$1/lib/foundation.sh" && foundation_load drivers/wezterm && wt_kill_pane "$2"' \
+		_ "$FOUNDATION_UNIX" "$own" >/dev/null 2>&1 </dev/null &
+	disown 2>/dev/null
+fi
+exit 0

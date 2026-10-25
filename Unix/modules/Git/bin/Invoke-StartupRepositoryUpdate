@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# Invoke-StartupRepositoryUpdate - updates the configured repositories once a day (or once per interval), from a shell.
+#
+# Usage: Invoke-StartupRepositoryUpdate [--force]
+#
+# Run by the shared shell rc after the greeting, and at the first prompt after a new day starts in
+# a shell that was already open (a Mac woken from sleep). Off unless repositories.conf says
+# `startup on`. `startup-schedule daily` (the default) runs it once per day, the day starting at
+# `startup-day-start-hour` (default 6, so a shell opened past midnight still counts as the day
+# before); `startup-schedule interval` runs it at most once per `startup-interval-hours` (default
+# 24). Tracked by the stamp file Unix/logs/.last-repository-update, which is written before the
+# update, so a run that fails midway is not retried until the next day (or interval). On every
+# exit it records when the next run is due in Unix/logs/.next-repository-update (`EPOCH SCHEDULE`,
+# 0 when due now), which the shell rc reads with a builtin, so a shell starts or draws a prompt
+# without running this command until a run is due. Several shells started together run it
+# exactly once: the run is claimed by atomically creating the lock folder
+# Unix/logs/.repository-update.lock (holding the owner's process id), the stamp is checked again
+# under the lock, and a lock whose owner is gone is cleared. Updates the groups of
+# `startup-scope` (`All` or group names; @TYPE lines pick per machine type; without a line for
+# this machine type the `repository-scope` of bootstrap.conf, then All, as on Windows) with
+# Update-Repositories --no-clone --quiet: it never clones, prints one line per repository plus
+# totals. The scope names groups only, as on Windows: a name that is no group (a repository's
+# included) is reported and nothing is updated. --force runs it now, enabled or not, ignoring the
+# interval. A `startup-day-start-hour` that is not a number from 0 to 23 falls back to 6 without
+# a warning, as on Windows; a `startup-interval-hours` that is not a whole number falls back to 24
+# the same way (Windows also takes a fraction).
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config daystart repository
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+force=0
+for argument in "$@"; do
+	case $argument in
+		--force) force=1 ;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument [$argument] - usage: Invoke-StartupRepositoryUpdate [--force]" ;;
+	esac
+done
+
+file=$(conf_path repositories.conf) || exit 0
+
+# A top-level `KEY VALUE` for this machine type, the last match winning. Usage: setting KEY DEFAULT
+setting() {
+	local key=$1 value=$2 line k v
+	while IFS= read -r line; do
+		read -r k v <<<"$line"
+		foundation_ieq "$k" "$key" && value=$v
+	done < <(conf_lines "$file")
+	printf '%s' "$value"
+}
+
+case $(foundation_lower "$(setting startup off)") in on | true | yes | 1) enabled=1 ;; *) enabled=0 ;; esac
+[ "$enabled" -eq 1 ] || [ "$force" -eq 1 ] || exit 0
+case $(foundation_lower "$(setting startup-schedule daily)") in interval) schedule=interval ;; *) schedule=daily ;; esac
+hours=$(setting startup-interval-hours 24)
+case $hours in '' | *[!0-9]*) hours=24 ;; esac
+day_start_hour=$(setting startup-day-start-hour 6)
+case $day_start_hour in '' | *[!0-9]*) day_start_hour=6 ;; esac
+[ $((10#$day_start_hour)) -le 23 ] || day_start_hour=6
+
+logs=$(logfile_dir)
+mkdir -p "$logs" || exit 0
+stamp=$logs/.last-repository-update
+lock=$logs/.repository-update.lock
+next_file=$logs/.next-repository-update
+
+# When the next run is due, from the stamp: the start of the next day (daily) or the last run plus
+# `hours` (interval); 0 when there is no stamp or the last run was before the current day began.
+# GNU stat is tried first: BSD stat rejects -c, but GNU stat takes `-f %m` as a file-system query
+# and prints before failing.
+next_due() {
+	local written start
+	written=$(stat -c %Y "$stamp" 2>/dev/null || stat -f %m "$stamp" 2>/dev/null) || {
+		echo 0
+		return
+	}
+	if [ "$schedule" = daily ]; then
+		start=$(foundation_day_start "$day_start_hour")
+		if [ "$written" -ge "$start" ]; then echo $((start + 86400)); else echo 0; fi
+	else
+		echo $((written + hours * 3600))
+	fi
+}
+
+stamp_fresh() {
+	[ "$(next_due)" -gt "$(date +%s)" ]
+}
+
+record_next_due() {
+	printf '%s %s\n' "$(next_due)" "$schedule" >"$next_file" 2>/dev/null || true
+}
+trap record_next_due EXIT
+
+[ "$force" -eq 1 ] || ! stamp_fresh || exit 0
+
+# Claim the run. mkdir is atomic: of several shells starting together exactly one creates the
+# folder. A lock whose owner process is gone was left by a shell that died mid-run.
+# The owner writes its id right after the mkdir, so a lock without one is still being claimed -
+# unless it is old, which only a shell killed in that instant leaves behind.
+if ! mkdir "$lock" 2>/dev/null; then
+	owner=$(cat "$lock/pid" 2>/dev/null)
+	if [ -n "$owner" ]; then
+		kill -0 "$owner" 2>/dev/null && exit 0
+	else
+		created=$(stat -c %Y "$lock" 2>/dev/null || stat -f %m "$lock" 2>/dev/null || date +%s)
+		[ $(($(date +%s) - created)) -lt 600 ] && exit 0
+	fi
+	rm -rf "$lock"
+	mkdir "$lock" 2>/dev/null || exit 0
+fi
+printf '%s\n' "$$" >"$lock/pid"
+trap 'rm -rf "$lock"; record_next_due' EXIT
+
+# Another shell may have finished a run between the first check and the claim.
+[ "$force" -eq 1 ] || ! stamp_fresh || exit 0
+date '+%Y-%m-%dT%H:%M:%S%z' >"$stamp"
+
+# startup-scope for this machine type; without one, the repository-scope of bootstrap.conf (what
+# Bootstrap updates), then All - the Windows fallback from RepositoryUpdate.Startup.Scope to
+# BootstrapConfig.RepositoryUpdateScope. Names may be space- or comma-separated.
+line=$(setting startup-scope '')
+source_setting=startup-scope
+if [ -z "$line" ] && bootstrap=$(conf_path bootstrap.conf); then
+	line=$(conf_value "$bootstrap" repository-scope 2>/dev/null) || line=''
+	source_setting='the repository-scope of bootstrap.conf'
+fi
+scope=()
+read -r -a scope <<<"${line//,/ }"
+if [ ${#scope[@]} -eq 0 ] || foundation_ieq "${scope[0]}" All; then
+	foundation_run Update-Repositories --all --no-clone --quiet
+	exit 0
+fi
+# Group names only, as RepositoryUpdate.Startup.Scope on Windows: every name is checked first,
+# so a typo (or a repository name) updates nothing instead of half the scope.
+groups=()
+while IFS= read -r group; do groups+=("$group"); done < <(repo_scope_groups "$file" "$source_setting" "${scope[@]}")
+[ ${#groups[@]} -gt 0 ] || exit 0
+foundation_run Update-Repositories --group "${groups[@]}" --no-clone --quiet
+exit 0

@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# DotnetPublish - publishes a .NET project with one of its saved publish profiles. Alias: dnp
+#
+# Usage: DotnetPublish
+#
+# Finds the solution (*.sln, *.slnx) near the current directory with Find-Item, lists the
+# projects that have Properties/PublishProfiles/*.pubxml, and asks for the project and the
+# profile when there is more than one. Publishes into ~/Desktop/<Project>_<Profile>_<yyyy_MM_dd>
+# and offers to open that folder in Finder.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+command -v dotnet >/dev/null 2>&1 || foundation_die "dotnet is not installed (brew install --cask dotnet-sdk)"
+
+log_step "[Searching for a solution file]"
+solution=$(foundation_run Find-Item '*.sln' --select-first 2>/dev/null) || solution=$(foundation_run Find-Item '*.slnx' --select-first 2>/dev/null) || solution=''
+[ -n "$solution" ] || foundation_die "Please ensure this command is run within a repository that contains a .NET solution!"
+root=$(dirname "$solution")
+name=$(basename "$solution")
+name=${name%.*}
+log_success "Found solution file [$(basename "$solution")]"
+log_step "[Publishing $(printf '%s' "$name" | tr '[:lower:]' '[:upper:]')] from $root"
+
+projects=()
+labels=()
+while IFS= read -r csproj; do
+	profiles_dir=$(dirname "$csproj")/Properties/PublishProfiles
+	count=$(find "$profiles_dir" -maxdepth 1 -name '*.pubxml' 2>/dev/null | wc -l | tr -d ' ')
+	[ "$count" -gt 0 ] || continue
+	projects+=("$csproj")
+	suffix=s
+	[ "$count" -eq 1 ] && suffix=''
+	labels+=("$(basename "$csproj" .csproj) ($count profile$suffix)")
+done < <(find "$root" -name '*.csproj' -not -path '*/bin/*' -not -path '*/obj/*' | sort)
+[ ${#projects[@]} -gt 0 ] || foundation_die "No projects with publish profiles found in the solution!"
+
+if [ ${#projects[@]} -eq 1 ]; then
+	project=${projects[0]}
+	log_success "Found project with a publishing profile => [$(basename "$project" .csproj)]"
+else
+	choice=$(foundation_resolve_selection "[Available Projects with Publish Profiles]" "Enter the number of the project to publish" 0 0 "${labels[@]}") || exit 1
+	for i in "${!labels[@]}"; do [ "${labels[i]}" = "$choice" ] && project=${projects[i]}; done
+fi
+[ -n "${project:-}" ] || foundation_die "No project selected. Exiting..."
+project_name=$(basename "$project" .csproj)
+
+profiles=()
+while IFS= read -r pubxml; do profiles+=("$(basename "$pubxml" .pubxml)"); done < <(find "$(dirname "$project")/Properties/PublishProfiles" -maxdepth 1 -name '*.pubxml' | sort)
+if [ ${#profiles[@]} -eq 1 ]; then
+	profile=${profiles[0]}
+	log_success "Using profile: $profile"
+else
+	profile=$(foundation_resolve_selection "[Available Publish Profiles for $project_name]" "Enter the number of the publish profile to use" 0 0 "${profiles[@]}") || exit 1
+fi
+[ -n "$profile" ] || foundation_die "No profile selected. Exiting..."
+
+output=$HOME/Desktop/${project_name}_${profile}_$(date +%Y_%m_%d)
+log_success "Publishing [$project_name] with profile [$profile]..."
+if ! (cd "$(dirname "$project")" && dotnet publish -p:PublishProfile="$profile" -o "$output"); then
+	foundation_die "Publish failed"
+fi
+log_success "Successfully published to $output"
+open_it=$(foundation_resolve_selection "[Open Output Folder]" "" 1 0 Yes No) || open_it=''
+[ "$open_it" = Yes ] && foundation_launch open "$output"
+exit 0

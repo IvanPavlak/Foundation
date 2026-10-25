@@ -1,0 +1,35 @@
+{
+	// ==========================================================================
+	// Shell editing - one style across the repository, the one CI checks.
+	//
+	// Format-on-save is scoped to shell scripts only and runs shfmt through the mkhl.shfmt
+	// extension, which reads Unix/.editorconfig (tabs, case branches indented). Every shell file
+	// in the repository is already in that style, so saving a clean file is a no-op.
+	// ==========================================================================
+
+	// Do not auto-format other files on save.
+	"editor.formatOnSave": false,
+
+	"[shellscript]": {
+		"editor.defaultFormatter": "mkhl.shfmt",
+		"editor.formatOnSave": true,
+		"editor.insertSpaces": false,
+		"editor.tabSize": 4,
+		"editor.detectIndentation": false,
+		"files.trimTrailingWhitespace": true,
+		"files.insertFinalNewline": true,
+		"files.trimFinalNewlines": true
+	},
+
+	// The commands in Unix/modules/*/bin have no extension; the bats suites are bash.
+	"files.associations": {
+		"**/Unix/modules/**/bin/*": "shellscript",
+		"*.bats": "shellscript"
+	},
+
+	// shellcheck at the severity CI fails on; its other settings are in Unix/.shellcheckrc.
+	"shellcheck.customArgs": ["-S", "warning"],
+
+	// Repository convention: UTF-8 without BOM.
+	"files.encoding": "utf8"
+}

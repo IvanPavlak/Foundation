@@ -1,0 +1,8 @@
+# ~/.zshrc - a link chezmoi keeps to this file (Unix/home/symlink_dot_zshrc.tmpl).
+# Everything lives in the shared rc; machine-specific lines go in ~/.shellrc.local. An installer
+# that appends to ~/.zshrc edits this tracked file through the link: move what it adds to
+# ~/.shellrc.local (Docker Desktop's completions are already set up in shellrc.sh; never add a
+# compinit here, the shared rc starts the completion system).
+[ -x /opt/homebrew/bin/brew ] && eval "$(/opt/homebrew/bin/brew shellenv)"
+DOTFILES_ROOT=${DOTFILES_ROOT:-$(cd "$(dirname "$(readlink -f "${(%):-%N}")")/../.." && pwd)}
+. "$DOTFILES_ROOT/Unix/shell/shellrc.sh"

@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# Center-Windows - floats windows and centers them on the screen at a share of the work area.
+#
+# Usage: Center-Windows [--width-percent N] [--height-percent N] [--process | --process-name PATTERN] [--window-title PATTERN] [--current] [--on-primary] [--monitor M]
+#
+# Each matching window (all by default; --process: the apps.conf token, role or app name,
+# --window-title: the title, wildcard, regex or exact, case-insensitive; with both a window
+# matching EITHER, as on Windows; --current: the focused desktop only) is taken out of
+# AeroSpace's tiling (floating, so the frame holds) and set to --width-percent (40) by
+# --height-percent (50) of the primary display's work area, centered. The frame is set through
+# the Accessibility API, which the terminal must be allowed in System Settings > Privacy &
+# Security > Accessibility, on the window AeroSpace listed (found by its frame, so same-titled
+# windows of one app are each centered). Reset-Windows (or `aerospace layout tiling`) tiles them
+# again. The percentages are whole numbers from 10 to 100, the ValidateRange of Windows.
+# AeroSpace parks the windows of a hidden desktop in a corner and puts a floating one back where
+# it remembers once the desktop is shown, so each desktop holding a matching window is shown
+# before its windows are floated and centered, and the desktop focused before comes back at the
+# end (a desktop AeroSpace does not show counts its windows as not centered).
+# --on-primary and --monitor M (the Windows flags) are accepted and ignored: windows are always
+# centered on the primary display, the only one managed on macOS yet.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps drivers/aerospace windows
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+wp=40
+hp=50
+process=''
+title=''
+workspace=''
+while [ $# -gt 0 ]; do
+	case $1 in
+		--width-percent)
+			wp=$2
+			shift
+			;;
+		--height-percent)
+			hp=$2
+			shift
+			;;
+		--process | --process-name)
+			process=$2
+			shift
+			;;
+		--window-title)
+			title=$2
+			shift
+			;;
+		--current) workspace=__focused ;;
+		--on-primary | --monitor) [ "$1" = --monitor ] && shift ;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument => $1" ;;
+	esac
+	shift
+done
+for n in "$wp" "$hp"; do foundation_whole_number "$n" 10 100 || foundation_die "Percentages must be whole numbers from 10 to 100 => $n"; done
+frame=$(windows_centered_frame "$((10#$wp))" "$((10#$hp))") || foundation_die "Could not read the display's work area"
+read -r x y w h <<<"$frame"
+as_available || as_start || exit 1
+[ "$workspace" = __focused ] && workspace=$(as_focused_workspace)
+
+rows=()
+while IFS= read -r row; do rows+=("$row"); done < <(windows_select "$process" "$title" "$workspace")
+start=$(as_focused_workspace)
+shown=$start
+# The desktop focused before comes back on every way out, the stop on a missing permission too.
+trap '[ -z "$start" ] || [ "$shown" = "$start" ] || as_focus_workspace "$start"' EXIT
+centered=0
+failed=0
+for desktop in $(printf '%s\n' ${rows[@]+"${rows[@]}"} | cut -f5 | sort -u); do
+	if [ "$desktop" != "$shown" ]; then
+		if ! as_focus_workspace "$desktop"; then
+			n=$(printf '%s\n' "${rows[@]}" | awk -F'\t' -v d="$desktop" '$5 == d' | grep -c .)
+			failed=$((failed + n))
+			log_warning "Desktop $desktop => AeroSpace did not show it - $n window(s) not centered"
+			continue
+		fi
+		shown=$desktop
+	fi
+	while IFS=$'\t' read -r id token _ pid ws _ wtitle; do
+		[ "$ws" = "$desktop" ] || continue
+		as_set_floating "$id" || true
+		if as_set_window_frame "$id" "$pid" "$wtitle" "$x" "$y" "$w" "$h" >/dev/null; then
+			centered=$((centered + 1))
+			log_debug "[Center-Windows] $token '$wtitle' => $x,$y ${w}x$h"
+		else
+			[ $? -eq 2 ] && exit 1
+			failed=$((failed + 1))
+			log_warning "Could not center [$token] $wtitle"
+		fi
+	done < <(printf '%s\n' "${rows[@]}")
+done
+if [ "$failed" -gt 0 ]; then
+	log_warning "Centered $centered window(s) at ${wp}% x ${hp}%, $failed could not be centered"
+	exit 1
+fi
+log_success "Centered $centered window(s) at ${wp}% x ${hp}%!"

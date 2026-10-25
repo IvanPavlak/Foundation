@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# Merge-Upstream - merges an upstream remote into the current branch and stops before the commit.
+#
+# Usage: Merge-Upstream REMOTE [--branch BRANCH] [--owned-only | --all-paths] [--dry-run]
+#
+# Fetches REMOTE and merges REMOTE/BRANCH into the current branch of this repository
+# ($DOTFILES_ROOT, wherever it is called from) as a merge commit that is not made yet: the merge
+# is left staged for review and you commit it yourself. BRANCH defaults to the remote's HEAD branch, then master,
+# then main. It refuses to start with uncommitted changes to tracked files or a merge in progress.
+#
+# --owned-only (or an `owned-only REMOTE` line of upstream.conf) takes only the paths of the `own`
+# lines of upstream.conf: every other path the merge changed is put back as HEAD has it, and a path
+# the upstream added outside them is unstaged and removed, so a fork of two upstreams (WinuX and
+# Foundation) takes each one's files from it alone. It then lists what it took back, a `mirror`
+# file among them (the upstream changed a file the fork takes from the other upstream), and the
+# conflicts left to resolve. --all-paths takes every path even when upstream.conf names REMOTE.
+#
+# --dry-run fetches and lists what the merge would take and take back, merging nothing.
+# Exit status 0 when the merge is staged without conflicts or there is nothing to merge, 1 when
+# conflicts are left (resolve them, then commit) or it could not start. `git merge --abort`
+# undoes a staged merge.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+remote=''
+branch=''
+mode=''
+dry_run=0
+while [ $# -gt 0 ]; do
+	case $1 in
+		--branch)
+			[ $# -ge 2 ] || foundation_die "--branch needs a branch name"
+			branch=$2
+			shift
+			;;
+		--owned-only) mode=owned ;;
+		--all-paths) mode=all ;;
+		--dry-run) dry_run=1 ;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1" ;;
+		*)
+			[ -z "$remote" ] || foundation_die "One remote at a time - got [$remote] and [$1]"
+			remote=$1
+			;;
+	esac
+	shift
+done
+[ -n "$remote" ] || foundation_die "Usage: Merge-Upstream REMOTE [--branch BRANCH] [--owned-only | --all-paths] [--dry-run]"
+
+cd "$DOTFILES_ROOT" 2>/dev/null || foundation_die "The repository folder [$DOTFILES_ROOT] does not exist"
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || foundation_die "[$DOTFILES_ROOT] is not a git repository"
+git remote get-url "$remote" >/dev/null 2>&1 ||
+	foundation_die "No remote named [$remote] - the remotes are: $(git remote | tr '\n' ' ')(add one with git remote add)"
+
+# The upstream.conf lines of this machine type: the own prefixes, the mirrored files and the remotes
+# that merge owned-only by default.
+config=$(conf_path upstream.conf) || config=''
+owns=()
+mirrors=()
+if [ -n "$config" ]; then
+	while read -r kind value rest; do
+		case $kind in
+			own) [ -n "$value" ] && owns+=("$value") ;;
+			mirror) [ -n "$value" ] && mirrors+=("$value") ;;
+			owned-only)
+				for name in $value $rest; do
+					[ "$name" = "$remote" ] && [ -z "$mode" ] && mode=owned
+				done
+				;;
+		esac
+	done < <(conf_lines "$config")
+fi
+[ "$mode" = owned ] || mode=all
+[ "$mode" = all ] || [ ${#owns[@]} -gt 0 ] ||
+	foundation_die "--owned-only needs the own lines of upstream.conf - none is set, so nothing would be taken"
+
+is_owned() { # PATH
+	local prefix
+	for prefix in "${owns[@]}"; do
+		case $prefix in
+			*/) case $1 in "$prefix"*) return 0 ;; esac ;;
+			*) [ "$1" = "$prefix" ] && return 0 ;;
+		esac
+	done
+	return 1
+}
+is_mirror() { # PATH
+	local file
+	for file in "${mirrors[@]}"; do [ "$1" = "$file" ] && return 0; done
+	return 1
+}
+
+if [ "$dry_run" -eq 0 ]; then
+	git rev-parse -q --verify MERGE_HEAD >/dev/null &&
+		foundation_die "A merge is already in progress - commit it or undo it with git merge --abort first"
+	git diff --quiet && git diff --cached --quiet ||
+		foundation_die "Uncommitted changes to tracked files - commit or stash them first, so taking a path back cannot lose them"
+fi
+
+log_title "Merge-Upstream $remote"
+git fetch -q "$remote" || foundation_die "git fetch $remote failed"
+if [ -z "$branch" ]; then
+	head=$(git symbolic-ref -q --short "refs/remotes/$remote/HEAD" 2>/dev/null) && branch=${head#"$remote"/}
+	for candidate in master main; do
+		[ -z "$branch" ] && git show-ref --verify -q "refs/remotes/$remote/$candidate" && branch=$candidate
+	done
+	[ -n "$branch" ] || foundation_die "$remote has no HEAD, master or main branch - name one with --branch"
+fi
+ref=$remote/$branch
+git show-ref --verify -q "refs/remotes/$ref" || foundation_die "$remote has no branch [$branch]"
+
+if git merge-base --is-ancestor "$ref" HEAD; then
+	log_success "Already up to date with $ref - nothing to merge"
+	exit 0
+fi
+base=$(git merge-base HEAD "$ref") ||
+	foundation_die "This branch shares no history with $ref - bridge it once with git merge -s ours --allow-unrelated-histories $ref, then merge again"
+log_step "Merging $ref ($(git rev-list --count "$base..$ref") commits)$([ "$mode" = owned ] && printf ' - only the paths upstream.conf owns')"
+
+# What a list of name-status pairs (NUL-separated, as git prints them with -z) holds outside the
+# owned paths, printed as STATUS<TAB>PATH lines. Usage: ... | outside_owned
+outside_owned() {
+	local status path
+	while IFS= read -r -d '' status && IFS= read -r -d '' path; do
+		is_owned "$path" || printf '%s\t%s\n' "$status" "$path"
+	done
+}
+# Says which taken-back paths are mirrored files. Usage: report_taken_back LINES
+report_taken_back() {
+	local status path count
+	count=$(printf '%s\n' "$1" | grep -c .)
+	[ "$count" -gt 0 ] || return 0
+	log_step "Taken back ($count, outside the owned paths, kept as this branch has them):"
+	while IFS=$'\t' read -r status path; do
+		if is_mirror "$path"; then
+			log_warning "$status $path - a mirrored file: $remote changed it, take it from the upstream it mirrors"
+		else
+			log_step "  $status $path"
+		fi
+	done <<<"$1"
+}
+
+if [ "$dry_run" -eq 1 ]; then
+	changes=$(git diff --name-status --no-renames "$base" "$ref" | grep -c .)
+	if [ "$mode" = owned ]; then
+		taken_back=$(git diff --name-status --no-renames -z "$base" "$ref" | outside_owned)
+		log_step "Would take $((changes - $(printf '%s\n' "$taken_back" | grep -c .))) of the $changes changed paths"
+		report_taken_back "$taken_back"
+	else
+		log_step "Would take all $changes changed paths"
+	fi
+	log_success "Dry run - nothing was merged"
+	exit 0
+fi
+
+git merge -q --no-commit --no-ff "$ref" >/dev/null 2>&1
+git rev-parse -q --verify MERGE_HEAD >/dev/null ||
+	foundation_die "git merge $ref did not start (an untracked file in the way?) - run it by hand to see why"
+
+if [ "$mode" = owned ]; then
+	taken_back=$(git diff --cached --name-status --no-renames -z HEAD | outside_owned)
+	while IFS=$'\t' read -r status path; do
+		[ -n "$path" ] || continue
+		if git cat-file -e "HEAD:$path" 2>/dev/null; then
+			git checkout -q HEAD -- "$path"
+		else
+			git rm -q -f --cached -- "$path" >/dev/null
+			rm -f -- "$path"
+			rmdir -p -- "$(dirname -- "$path")" 2>/dev/null || true
+		fi
+	done <<<"$taken_back"
+	report_taken_back "$taken_back"
+	leaked=$(git diff --cached --name-status --no-renames -z HEAD | outside_owned)
+	[ -z "$leaked" ] || foundation_die "Paths outside the owned ones are still staged - inspect with git diff --cached, or undo with git merge --abort: $(printf '%s\n' "$leaked" | cut -f2 | tr '\n' ' ')"
+fi
+
+conflicts=$(git diff --name-only --diff-filter=U)
+staged=$(git diff --cached --name-only HEAD | grep -c .)
+if [ -n "$conflicts" ]; then
+	log_warning "Conflicts left to resolve:"
+	while IFS= read -r path; do log_warning "  $path"; done <<<"$conflicts"
+	log_step "Resolve them and git add each, then commit - or undo with git merge --abort"
+	exit 1
+fi
+if [ "$staged" -eq 0 ]; then
+	log_success "Nothing of $ref changes the owned paths - commit anyway to record the merge, so the next one starts from here"
+else
+	log_success "Staged $staged changed paths from $ref - review with git diff --cached, then commit (git merge --abort undoes it)"
+fi

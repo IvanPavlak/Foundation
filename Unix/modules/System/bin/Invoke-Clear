@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Invoke-Clear - clears the terminal screen and its scrollback, the first step of the greeting.
+#
+# Usage: Invoke-Clear
+#
+# The first step of Show-TerminalGreeting (alias c), before Invoke-Fastfetch and the onefetch
+# panel. Silent, one debug line saying why, when greeting.conf has `clear off`: the greeting then
+# draws below what is already on screen.
+#
+# Unix port of WinuX's Windows/PowerShell/Modules/System/Functions/Invoke-Clear.ps1.
+# Part of every greeting, so it keeps no session log of its own.
+export FOUNDATION_LOGGING=off
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+while [ $# -gt 0 ]; do
+	case $1 in
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument => $1" ;;
+	esac
+	shift
+done
+
+file=$(conf_path greeting.conf) || file=''
+if [ -n "$file" ] && [ "$(conf_value "$file" clear 2>/dev/null)" = off ]; then
+	log_debug "[Invoke-Clear] off (greeting.conf clear)"
+	exit 0
+fi
+
+# `clear` needs a usable TERM; the escape sequence is the portable fallback. 2J clears the screen,
+# 3J drops the scrollback, H homes the cursor.
+clear 2>/dev/null || printf '\033[H\033[2J\033[3J'

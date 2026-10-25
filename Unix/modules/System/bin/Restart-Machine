@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Restart-Machine - asks for confirmation, then restarts the Mac.
+#
+# Usage: Restart-Machine [--force | --selection Yes|No]
+#
+# Restarts through System Events, the way the Apple menu does, so apps get the chance to save
+# (an app with unsaved work can still cancel it). It asks through the Yes/No menu (Enter means
+# No; without a terminal it cancels, so a piped answer never restarts). A yes is followed by a
+# 5-second countdown, as on Windows (Ctrl+C cancels the restart). --selection Yes|No answers the
+# prompt (the Windows -Selection, which also takes the menu numbers 1 and 2; Yes still counts down,
+# No cancels); --force skips both the prompt and the countdown.
+# Any other argument is an error. FOUNDATION_RESTART_COUNTDOWN sets the countdown's seconds (0: none).
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+force=0
+selection=''
+while [ $# -gt 0 ]; do
+	case $1 in
+		--force) force=1 ;;
+		--selection)
+			# As the menu reads it: 1 is Yes and 2 is No, as -Selection 1 is on Windows.
+			answer=$(foundation_lower "$(foundation_resolve_items "${2:-}" -- Yes No)")
+			case $answer in
+				yes | no) selection=$answer ;;
+				*) foundation_die "--selection takes Yes or No, not [${2:-}] - nothing was restarted" ;;
+			esac
+			shift
+			;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument => $1 - nothing was restarted" ;;
+	esac
+	shift
+done
+countdown=${FOUNDATION_RESTART_COUNTDOWN:-5}
+foundation_whole_number "$countdown" 0 600 || foundation_die "FOUNDATION_RESTART_COUNTDOWN must be a whole number of seconds, not [$countdown]"
+
+if [ "$force" -eq 0 ]; then
+	# The Yes/No menu every Foundation prompt uses (Enter means No); without a terminal it
+	# cancels, so a piped `yes` or a workspace action never restarts the Mac.
+	if [ "$selection" != yes ] && { [ "$selection" = no ] || ! foundation_confirm "[Restart Machine]" "Do you want to restart the machine?"; }; then
+		log_warning "Restart cancelled"
+		exit 0
+	fi
+	foundation_run Countdown "$countdown" --message "The Mac restarts in:" || {
+		log_warning "Restart cancelled"
+		exit 130
+	}
+fi
+log_step "Restarting..."
+osascript -e 'tell application "System Events" to restart' </dev/null >/dev/null || foundation_die "Restart failed"

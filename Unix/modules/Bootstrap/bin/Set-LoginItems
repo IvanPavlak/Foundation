@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# Set-LoginItems - makes the apps of Unix/config/login-items.conf start at login (the Unix
+# counterpart of the Windows Startup apps).
+#
+# Usage: Set-LoginItems [--list] [--dry-run]
+#
+# login-items.conf lists `item PATH [hidden]`; a line may start with @TYPE to apply on one machine
+# type only. An app that is already a login item (by name) is left alone, a missing one is added
+# through System Events (hidden starts it without a window), and an app that is not installed is
+# skipped with a warning. Items are only added, never removed. The first run asks to let the
+# terminal control System Events (Privacy & Security > Automation). --list shows the login items
+# today next to login-items.conf; --dry-run prints what would be added and changes nothing.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+dry=0
+list_only=0
+for argument in "$@"; do
+	case $argument in
+		--dry-run) dry=1 ;;
+		--list) list_only=1 ;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument [$argument] - usage: Set-LoginItems [--list] [--dry-run]" ;;
+	esac
+done
+
+config=$(conf_path login-items.conf) || foundation_die "Missing Unix/config/login-items.conf"
+log_title "Set-LoginItems"
+
+# The login items today, one name per line. System Events answers "A, B, C".
+if ! answer=$(osascript -e 'tell application "System Events" to get the name of every login item' </dev/null 2>&1); then
+	foundation_die "System Events did not answer ($answer) - allow the terminal to control System Events in System Settings > Privacy & Security > Automation"
+fi
+present=()
+while IFS= read -r name; do
+	name=$(foundation_trim "$name")
+	[ -n "$name" ] && present+=("$name")
+done < <(printf '%s\n' "$answer" | tr ',' '\n')
+
+is_present() {
+	local name
+	for name in ${present[@]+"${present[@]}"}; do foundation_ieq "$name" "$1" && return 0; done
+	return 1
+}
+
+entries=()
+while IFS= read -r line; do
+	read -r kind rest <<<"$line"
+	if [ "$kind" != item ]; then
+		log_warning "Unknown line kind [$kind], skipped => $line"
+		continue
+	fi
+	hidden=false
+	case $rest in *" hidden")
+		hidden=true
+		rest=${rest% hidden}
+		;;
+	esac
+	entries+=("$(foundation_expand_path "$(foundation_trim "$rest")")|$hidden")
+done < <(conf_lines "$config")
+
+if [ "$list_only" -eq 1 ]; then
+	log_step "Login items now"
+	for name in ${present[@]+"${present[@]}"}; do printf '  %s\n' "$name"; done
+	log_step "In login-items.conf"
+	for entry in ${entries[@]+"${entries[@]}"}; do
+		path=${entry%|*}
+		name=$(basename "$path" .app)
+		state=missing
+		is_present "$name" && state=present
+		[ -e "$path" ] || state="not installed"
+		printf '  %-22s %-14s %s\n' "$name" "$state" "$([ "${entry##*|}" = true ] && echo hidden)"
+	done
+	exit 0
+fi
+
+failures=0
+added=0
+for entry in ${entries[@]+"${entries[@]}"}; do
+	path=${entry%|*}
+	hidden=${entry##*|}
+	name=$(basename "$path" .app)
+	if is_present "$name"; then
+		log_debug "[Set-LoginItems] $name is already a login item"
+		continue
+	fi
+	if [ ! -e "$path" ]; then
+		log_warning "Not installed, not added => $path"
+		continue
+	fi
+	added=$((added + 1))
+	if [ "$dry" -eq 1 ]; then
+		printf '  add login item %s (hidden: %s)\n' "$path" "$hidden"
+		continue
+	fi
+	if osascript -e 'on run argv' \
+		-e 'tell application "System Events" to make login item at end with properties {path:(item 1 of argv), name:(item 2 of argv), hidden:((item 3 of argv) is "true")}' \
+		-e 'end run' "$path" "$name" "$hidden" </dev/null >/dev/null; then
+		log_step "Added $name"
+	else
+		log_warning "failed: login item $path"
+		failures=$((failures + 1))
+	fi
+done
+
+if [ "$added" -eq 0 ]; then
+	log_success "Every app of login-items.conf already starts at login!"
+elif [ "$dry" -eq 0 ] && [ "$failures" -eq 0 ]; then
+	log_success "Login items applied!"
+elif [ "$failures" -gt 0 ]; then
+	log_error "Login items applied with $failures failure(s)"
+	exit 1
+fi

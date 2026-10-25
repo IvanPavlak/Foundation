@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+# Configure-NuGetConfig - writes the NuGet config template with a GitHub username and personal
+# access token filled in, the Unix counterpart of the Windows Configure-NuGetConfig.
+#
+# Usage: Configure-NuGetConfig [--override] [--dry-run] [--backup-root DIR]
+#
+# Reads `nuget-template` (default NuGet/nuget.config, with [Username] and [Token] placeholders)
+# and `nuget-config` (default ~/.nuget/NuGet/NuGet.Config) from Unix/config/dotnet.conf; a
+# relative path in either starts at the repository root, not the current folder. When the
+# config already exists and its package sources (key and URL) match the template's, nothing
+# happens; when they differ, or with --override, the username and token are asked for on the
+# terminal and the config is rewritten. An existing file is first copied into
+# Backups/Unix/System/NuGetConfig/ (gitignored) and left alone when that fails. NuGet on macOS
+# keeps the token in clear text, so the file is made readable by its owner only. --dry-run
+# compares and says what would happen without asking or writing. --backup-root DIR puts the backup
+# under DIR/System/NuGetConfig/ instead of Backups/Unix (the -BackupRoot of Windows).
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config backup
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+dry=0
+override=0
+while [ $# -gt 0 ]; do
+	case $1 in
+		--dry-run) dry=1 ;;
+		--override) override=1 ;;
+		--backup-root)
+			[ -n "${2:-}" ] || foundation_die "--backup-root needs a DIR"
+			case $2 in /*) FOUNDATION_BACKUP_ROOT=$2 ;; *) FOUNDATION_BACKUP_ROOT=$PWD/$2 ;; esac
+			export FOUNDATION_BACKUP_ROOT
+			shift
+			;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument [$1] - usage: Configure-NuGetConfig [--override] [--dry-run] [--backup-root DIR]" ;;
+	esac
+	shift
+done
+
+# The package sources of a NuGet config, one "KEY URL" per line.
+sources_of() { # FILE
+	awk '
+		/<packageSources>/ { inside = 1 }
+		/<\/packageSources>/ { inside = 0 }
+		inside && /<add / {
+			key = $0; sub(/.*key="/, "", key); sub(/".*/, "", key)
+			url = $0; sub(/.*value="/, "", url); sub(/".*/, "", url)
+			print key, url
+		}
+	' "$1"
+}
+
+# A value made safe for an XML attribute. The replacements are quoted: bash 5.2 otherwise reads
+# an unquoted & in them as the matched text (patsub_replacement).
+xml_escape() {
+	local text=${1//'&'/'&amp;'}
+	text=${text//'<'/'&lt;'}
+	text=${text//'>'/'&gt;'}
+	printf '%s' "${text//'"'/'&quot;'}"
+}
+
+# Asks until the answer is not empty; SECRET 1 hides the typing. Reads fd 3.
+ask() { # PROMPT SECRET
+	local answer=''
+	while [ -z "$answer" ]; do
+		printf '\n%s' "$1" >&2
+		if [ "$2" -eq 1 ]; then
+			IFS= read -rs answer <&3 || return 1
+			printf '\n' >&2
+		else
+			IFS= read -r answer <&3 || return 1
+		fi
+		answer=$(foundation_trim "$answer")
+		[ -n "$answer" ] || log_error "The answer cannot be empty! Try again!"
+	done
+	printf '%s' "$answer"
+}
+
+template=NuGet/nuget.config
+destination=$HOME/.nuget/NuGet/NuGet.Config
+if config=$(conf_path dotnet.conf); then
+	value=$(conf_value "$config" nuget-template) && [ -n "$value" ] && template=$value
+	value=$(conf_value "$config" nuget-config) && [ -n "$value" ] && destination=$value
+fi
+template=$(foundation_expand_path "$template")
+case $template in /*) ;; *) template=$DOTFILES_ROOT/$template ;; esac
+destination=$(foundation_expand_path "$destination")
+case $destination in /*) ;; *) destination=$DOTFILES_ROOT/$destination ;; esac
+
+log_title "Configure-NuGetConfig"
+[ -f "$template" ] || foundation_die "NuGet config template not found => $template"
+
+if [ -e "$destination" ] && [ "$override" -eq 0 ]; then
+	log_warning "NuGet config already exists at => $destination"
+	wanted=$(sources_of "$template")
+	actual=$(sources_of "$destination")
+	mismatch=0
+	while read -r key url; do
+		[ -n "$key" ] || continue
+		have=$(printf '%s\n' "$actual" | awk -v k="$key" '$1 == k { print $2; exit }')
+		if ! printf '%s\n' "$actual" | awk -v k="$key" '$1 == k { found = 1 } END { exit !found }'; then
+			log_error "Package source [$key] is missing in the existing config!"
+			mismatch=1
+		elif [ "$have" != "$url" ]; then
+			log_error "Package source [$key] has a different URL: repository => $url, actual => $have"
+			mismatch=1
+		fi
+	done <<<"$wanted"
+	while read -r key _; do
+		[ -n "$key" ] || continue
+		if ! printf '%s\n' "$wanted" | awk -v k="$key" '$1 == k { found = 1 } END { exit !found }'; then
+			log_warning "Package source [$key] exists in the actual config but not in the repository!"
+			mismatch=1
+		fi
+	done <<<"$actual"
+	if [ "$mismatch" -eq 0 ]; then
+		log_success "NuGet config is already configured (package sources match)!"
+		exit 0
+	fi
+	log_warning "Package sources differ between the repository and the actual config - reconfiguring"
+elif [ -e "$destination" ]; then
+	log_step "Overriding the existing NuGet config at => $destination"
+fi
+
+if [ "$dry" -eq 1 ]; then
+	printf '  ask for the GitHub username and token, write %s from %s\n' "$destination" "$template"
+	exit 0
+fi
+
+tty=${FOUNDATION_TTY:-/dev/tty}
+{ exec 3<"$tty"; } 2>/dev/null || foundation_die "No terminal to ask for the GitHub username and token - run Configure-NuGetConfig in a terminal"
+username=$(ask "Enter GitHub username: " 0) || foundation_die "No GitHub username given"
+token=$(ask "Enter GitHub Personal Access Token (PAT): " 1) || foundation_die "No token given"
+exec 3<&-
+
+content=$(cat "$template")
+content=${content//'[Username]'/"$(xml_escape "$username")"}
+content=${content//'[Token]'/"$(xml_escape "$token")"}
+
+mkdir -p "$(dirname "$destination")" || foundation_die "Could not create $(dirname "$destination")"
+# An existing real config may hold credentials for feeds the template does not know: keep an
+# undo first, and write nothing when the copy cannot be taken.
+if [ -f "$destination" ] && [ ! -L "$destination" ]; then
+	backup=$(backup_item System NuGetConfig "$destination") || foundation_die "Could not back up $destination - not changing it"
+	log_warning "Backed up the existing NuGet config => $backup"
+fi
+
+if (umask 077 && printf '%s\n' "$content" >"$destination") && chmod 600 "$destination"; then
+	log_success "NuGet config written => $destination"
+else
+	log_error "Could not write $destination"
+	exit 1
+fi

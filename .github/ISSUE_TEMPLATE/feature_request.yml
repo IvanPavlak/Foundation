@@ -1,0 +1,87 @@
+name: Feature request
+description: Suggest a new command, config line or improvement for Foundation
+title: "[Feature]: "
+labels: ["enhancement", "triage"]
+body:
+    - type: markdown
+      attributes:
+          value: |
+              Thanks for suggesting an improvement to Foundation!
+
+              For open-ended ideas or "would this fit?" questions, consider starting a
+              [Discussion](https://github.com/IvanPavlak/Foundation/discussions) instead - non-trivial
+              changes should be agreed there first.
+
+              Please search [existing issues](https://github.com/IvanPavlak/Foundation/issues) first to
+              avoid duplicates.
+    - type: checkboxes
+      id: prerequisites
+      attributes:
+          label: Prerequisites
+          options:
+              - label: I searched existing issues and discussions and this is not a duplicate.
+                required: true
+    - type: textarea
+      id: problem
+      attributes:
+          label: Problem / motivation
+          description: What problem does this solve? What are you trying to do that Foundation can't do today?
+      validations:
+          required: true
+    - type: textarea
+      id: proposal
+      attributes:
+          label: Proposed solution
+          description: Describe the feature. For a new command, suggest a `Verb-Noun` name and flags; say whether WinuX has the same function.
+      validations:
+          required: true
+    - type: dropdown
+      id: area
+      attributes:
+          label: Area
+          description: Which part of Foundation does this touch?
+          multiple: true
+          options:
+              - Bootstrap / first run
+              - Configuration (Unix/config)
+              - AI
+              - Application (launchers)
+              - Git
+              - Helper
+              - System (macOS settings, theme)
+              - Window (layouts / AeroSpace)
+              - Workflow (workspaces / projects / browser groups)
+              - Documentation
+              - Tests
+              - Other
+      validations:
+          required: true
+    - type: checkboxes
+      id: core-principle
+      attributes:
+          label: Configuration-first design
+          description: Everything user-facing is driven by a `Unix/config` file, never hardcoded in a command.
+          options:
+              - label: This feature can be configured through a `Unix/config` file rather than hardcoded.
+    - type: textarea
+      id: config-shape
+      attributes:
+          label: Proposed config lines (optional)
+          description: If this introduces new config, sketch the lines and the file they go in (use `$DEV` and `$HOME` in paths).
+          render: shell
+    - type: textarea
+      id: alternatives
+      attributes:
+          label: Alternatives considered
+          description: Other approaches you thought about, and why this one is better.
+    - type: checkboxes
+      id: contribution
+      attributes:
+          label: Contribution
+          options:
+              - label: I would be willing to open a pull request to implement this.
+    - type: textarea
+      id: additional
+      attributes:
+          label: Additional context
+          description: Mockups, links, screenshots, or anything else.

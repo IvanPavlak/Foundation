@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Protect-Log - pins a log into Unix/logs/Pinned so retention never deletes it.
+#
+# Usage: Protect-Log [PATH | COMMAND] [--error-log | --errors]
+#
+# The Unix twin of the Windows Protect-Log. Copies a log into Unix/logs/Pinned, which Clear-OldLogs
+# and the retention every session runs always skip; the original stays where it is. Without an
+# argument it pins the newest session log - on macOS every command writes its own session log,
+# so that is the last command you ran (this command's own run is not a session, as with
+# Get-LogPath). COMMAND pins the newest log of that command (Protect-Log Open-Workspace, or its
+# alias w), PATH a log file of your choosing: an argument with a / or ending in .log is a PATH, and
+# a missing one is a warning with exit status 0, as the Windows -Path is, never taken as a
+# COMMAND. --error-log (or --errors) pins a snapshot of the error log (Errors.log, or the
+# error-file of logging.conf), named with the time it was taken (Errors_<timestamp>.log) so later
+# snapshots do not replace it; without an error log it warns the same way.
+export FOUNDATION_LOGGING=off
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+target=''
+error_log=0
+for argument in "$@"; do
+	case $argument in
+		--error-log | --errors) error_log=1 ;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $argument" ;;
+		*) target=$argument ;;
+	esac
+done
+
+dir=$(logfile_dir)
+pinned=$dir/Pinned
+if [ "$error_log" -eq 1 ]; then
+	source_file=$dir/$(logfile_error_file)
+	if [ ! -f "$source_file" ]; then
+		log_warning "No log file to pin at => [$source_file]"
+		exit 0
+	fi
+	name=${source_file##*/}
+	name="${name%.log}_$(date +%Y-%m-%d_%H-%M-%S).log"
+elif [ -n "$target" ] && [ -f "$target" ]; then
+	source_file=$target
+	name=${target##*/}
+elif [[ $target == */* || $target == *.log ]]; then
+	# As on Windows: a missing file is a warning, not a failure.
+	log_warning "No log file to pin at => [$target]"
+	exit 0
+else
+	# The newest session log, or the newest of COMMAND (Get-LogPath resolves the aliases).
+	source_file=$(foundation_run Get-LogPath ${target:+"$target"}) || exit 1
+	name=${source_file##*/}
+fi
+
+mkdir -p "$pinned" || foundation_die "Could not create the pinned-logs folder => [$pinned]"
+cp -p "$source_file" "$pinned/$name" || foundation_die "Failed to pin [$source_file]"
+log_success "Pinned log => [$pinned/$name]"

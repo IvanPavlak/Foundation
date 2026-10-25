@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# Determine-DotnetDependencies - reports which .NET SDKs the projects on this machine need and which are missing.
+#
+# Usage: Determine-DotnetDependencies [SEARCH-PATH] [--exclude NAME...] [--list-projects]
+#
+# The Unix twin of the Windows Determine-DotnetDependencies. Finds every *.csproj, *.fsproj and
+# *.vbproj under SEARCH-PATH (default: the `projects-search-path` line of Unix/config/dotnet.conf,
+# the DotnetProjectsSearchPath of Windows, else the dev root $DEV), skipping any path that contains
+# node_modules, bin, obj, .git, .vs or packages (--exclude replaces that list). Lists the target
+# frameworks of their TargetFramework / TargetFrameworks with a project count (--list-projects
+# adds the projects under each), the installed SDKs and runtimes (dotnet --list-sdks /
+# --list-runtimes), and compares the modern .NET versions the projects target (net5.0 and later,
+# netcoreapp) with the installed SDKs. Each missing SDK gets the Homebrew command and the
+# Brewfile.local line that install it, where Windows prints winget and WinGetApps.csv.
+# Windows-style names: --exclude-paths (-ExcludePaths) is --exclude, and --search-path (-SearchPath)
+# PATH is the same as a bare PATH.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+search=''
+list_projects=0
+excludes=()
+custom_excludes=0
+list=''
+for argument in "$@"; do
+	case $argument in
+		--list-projects) list_projects=1 ;;
+		--exclude | --exclude-paths)
+			list=excludes
+			custom_excludes=1
+			;;
+		--search-path) list='' ;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $argument" ;;
+		*)
+			if [ "$list" = excludes ]; then
+				IFS=, read -r -a values <<<"$argument"
+				excludes+=("${values[@]}")
+			else
+				search=$argument
+			fi
+			;;
+	esac
+done
+[ "$custom_excludes" -eq 1 ] || excludes=(node_modules bin obj .git .vs packages)
+
+if [ -z "$search" ]; then
+	config=$(conf_path dotnet.conf) && search=$(conf_value "$config" projects-search-path 2>/dev/null) || search=''
+	[ -n "$search" ] || search='$DEV'
+fi
+search=$(foundation_expand_path "$search")
+[ -d "$search" ] || foundation_die "Search path [$search] does not exist!"
+
+log_title ".NET Dependency Analyzer"
+log_step "Search Path => [$search]"
+log_warning "Excluded => [$(
+	IFS=,
+	printf '%s' "${excludes[*]}" | sed 's/,/, /g'
+)]"
+
+# Project files, minus every path with an excluded name in it (anywhere, as on Windows).
+projects=()
+while IFS= read -r project; do
+	skip=0
+	for name in ${excludes[@]+"${excludes[@]}"}; do
+		case $project in *"/$name/"* | *"/$name") skip=1 ;; esac
+	done
+	[ "$skip" -eq 0 ] && projects+=("$project")
+done < <(find "$search" \( -name '*.csproj' -o -name '*.fsproj' -o -name '*.vbproj' \) -type f 2>/dev/null | LC_ALL=C sort)
+if [ ${#projects[@]} -eq 0 ]; then
+	log_warning "No .NET project files found in [$search]"
+	exit 0
+fi
+log_success "Found ${#projects[@]} project file(s)!"
+
+# FRAMEWORK<TAB>PROJECT-FILE-NAME per target framework of each project.
+pairs=$(for project in "${projects[@]}"; do
+	sed -n 's:.*<TargetFrameworks\{0,1\}>\([^<]*\)</TargetFrameworks\{0,1\}>.*:\1:p' "$project" |
+		tr ';' '\n' | awk -v p="${project##*/}" '{ gsub(/[[:space:]]/, "") } $0 != "" { print $0 "\t" p }'
+done | LC_ALL=C sort -u)
+
+log_title "Target Frameworks Found"
+for framework in $(printf '%s\n' "$pairs" | cut -f1 | LC_ALL=C sort -u); do
+	count=$(printf '%s\n' "$pairs" | awk -F'\t' -v f="$framework" '$1 == f' | grep -c .)
+	printf '  %s (%s project(s))\n' "$framework" "$count"
+	if [ "$list_projects" -eq 1 ]; then
+		printf '%s\n' "$pairs" | awk -F'\t' -v f="$framework" '$1 == f { print "    - " $2 }'
+	fi
+done
+
+if ! command -v dotnet >/dev/null 2>&1; then
+	log_error "dotnet is not installed - every SDK below counts as missing"
+	sdks=''
+	runtimes=''
+else
+	sdks=$(dotnet --list-sdks 2>/dev/null)
+	runtimes=$(dotnet --list-runtimes 2>/dev/null)
+fi
+log_title "Installed .NET SDKs"
+if [ -n "$sdks" ]; then printf '%s\n' "$sdks" | sed 's/^/  /'; else log_error "No .NET SDKs found!"; fi
+log_title "Installed .NET Runtimes"
+if [ -n "$runtimes" ]; then printf '%s\n' "$runtimes" | sed 's/^/  /'; else log_error "No .NET Runtimes found!"; fi
+
+# Modern target frameworks (net5.0+, netcoreappX.Y) as MAJOR.MINOR; the SDKs as MAJOR.MINOR.
+required=$(printf '%s\n' "$pairs" | cut -f1 | sed -n -E 's/^net(coreapp)?([0-9]+)\.([0-9]+).*/x\1 \2.\3/p' |
+	awk '$1 == "xcoreapp" || $2 + 0 >= 5 { print $2 }' | sort -t. -k1,1n -k2,2n -u)
+installed=$(printf '%s\n' "$sdks" | sed -n -E 's/^([0-9]+)\.([0-9]+)\..*/\1.\2/p' | sort -u)
+missing=()
+present=()
+for version in $required; do
+	if printf '%s\n' "$installed" | grep -qxF "$version"; then present+=("$version"); else missing+=("$version"); fi
+done
+
+if [ ${#present[@]} -gt 0 ]; then
+	log_title "Installed & Required"
+	for version in "${present[@]}"; do printf '  .NET %s SDK [OK]\n' "$version"; done
+fi
+if [ ${#missing[@]} -eq 0 ]; then
+	log_success "All required .NET SDKs are installed!"
+else
+	log_title "Missing SDKs"
+	for version in "${missing[@]}"; do printf '  .NET %s SDK [MISSING]\n' "$version"; done
+	log_title "Installation Commands"
+	log_step " Homebrew"
+	for version in "${missing[@]}"; do printf '  brew install dotnet@%s\n' "${version%%.*}"; done
+	log_step " Brewfile.local"
+	for version in "${missing[@]}"; do printf '  brew "dotnet@%s"\n' "${version%%.*}"; done
+fi
+log_success "Analysis Complete!"

@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Focus-VirtualDesktop - switches to a desktop (an AeroSpace workspace).
+#
+# Usage: Focus-VirtualDesktop [NUMBER | --desktop-number NUMBER] [--desktop-offset N]
+#
+# NUMBER is 1-based like on Windows (1-100, default 1) and is the AeroSpace workspace of that name,
+# the one alt-NUMBER switches to. --desktop-offset shifts it (alongside opens). Anything else is
+# an error. As on Windows it prints `Focusing Virtual Desktop N`, then parks the focus on the
+# terminal (the first window of the Terminal role of apps.conf) when one is on that desktop, else
+# leaves AeroSpace's last-focused window there, and ends with `Focused Virtual Desktop N!`, or a
+# warning when the desktop has no window. N is the desktop focused, the offset included.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps drivers/aerospace
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+number=1
+offset=0
+while [ $# -gt 0 ]; do
+	case $1 in
+		--desktop-number)
+			number=$2
+			shift
+			;;
+		--desktop-offset)
+			offset=$2
+			shift
+			;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1" ;;
+		*) number=$1 ;;
+	esac
+	shift
+done
+foundation_whole_number "$number" 1 100 || foundation_die "The desktop number must be a whole number from 1 to 100 => $number"
+foundation_whole_number "$offset" 0 99 || foundation_die "--desktop-offset must be a whole number => $offset"
+
+target=$((number + offset))
+log_title "Focusing Virtual Desktop $target"
+as_available || as_start || exit 1
+as_focus_workspace "$target" || foundation_die "Could not focus desktop $target"
+log_debug "[Focus-VirtualDesktop] focused workspace $target"
+
+# The terminal keeps what an open prints in view, as Windows locks the focus onto it.
+first='' terminal=''
+while IFS=$'\t' read -r id token _ _ desk _ _; do
+	[ -n "$id" ] && [ "$desk" = "$target" ] || continue
+	[ -n "$first" ] || first=$id
+	if app_matches Terminal "$token"; then
+		terminal=$id
+		break
+	fi
+done < <(as_windows)
+if [ -z "$first" ]; then
+	log_warning "Switched to Virtual Desktop $target, but found no window to focus!"
+	exit 0
+fi
+if [ -n "$terminal" ]; then
+	as_focus_window "$terminal" || log_debug "[Focus-VirtualDesktop] could not focus terminal window $terminal"
+	log_debug "[Focus-VirtualDesktop] focus parked on terminal window $terminal"
+fi
+log_success "Focused Virtual Desktop $target!"

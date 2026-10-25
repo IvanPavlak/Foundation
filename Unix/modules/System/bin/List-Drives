@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# List-Drives - lists the mounted volumes with their size, use and free space.
+#
+# Usage: List-Drives
+#
+# The startup volume and everything under /Volumes (external disks, disk images, network
+# shares), from `df`; the read-only system snapshot and the internal APFS helper volumes are
+# left out, like Windows lists only the FileSystem drives.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+log_title "Drives"
+printf '  %-28s %8s %8s %8s %5s\n' Volume Size Used Free Use
+# BSD df has inode columns: the mount point starts at field 9 (field 6 on GNU df -P).
+if df -H -P >/dev/null 2>&1 && [ "$(uname)" != Darwin ]; then
+	df_cmd=(df -H -P)
+	first=6
+else
+	df_cmd=(df -H)
+	first=9
+fi
+"${df_cmd[@]}" | awk -v f="$first" 'NR > 1 { mount = $f; for (i = f + 1; i <= NF; i++) mount = mount " " $i
+	if (mount == "/" || (mount ~ /^\/Volumes\// && mount != "/Volumes/Recovery")) printf "  %-28s %8s %8s %8s %5s\n", mount, $2, $3, $4, $5 }'

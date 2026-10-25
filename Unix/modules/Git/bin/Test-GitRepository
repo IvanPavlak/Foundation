@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Test-GitRepository - tells whether a path is inside a git repository.
+#
+# Usage: Test-GitRepository [PATH] [--quiet]
+#
+# Walks up from PATH (default: the current directory) looking for a .git entry - the directory
+# of a clone or the file of a worktree or submodule - without running git. A path that does not
+# exist is simply not in a repository. Exit status 0 inside a repository, 1 otherwise, and the
+# repository root on stdout, so `Test-GitRepository && onefetch` and `cd "$(Test-GitRepository)"`
+# both work; --quiet prints nothing.
+# Windows-style names: --path (-Path) PATH is the same as a bare PATH.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+path=$PWD
+quiet=0
+while [ $# -gt 0 ]; do
+	case $1 in
+		--quiet) quiet=1 ;;
+		--path)
+			path=$2
+			shift
+			;;
+		-v | --verbose) ;;
+		*) path=$1 ;;
+	esac
+	shift
+done
+
+# Nonexistent tails are walked off until an existing directory is reached.
+dir=$path
+while [ ! -d "$dir" ] && [ "$dir" != / ] && [ -n "$dir" ]; do dir=$(dirname "$dir"); done
+dir=$(cd "${dir:-/}" 2>/dev/null && pwd -P) || exit 1
+while [ ! -e "$dir/.git" ]; do
+	[ "$dir" = / ] && exit 1
+	dir=$(dirname "$dir")
+done
+[ "$quiet" -eq 1 ] || printf '%s\n' "$dir"

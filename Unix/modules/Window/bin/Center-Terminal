@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Center-Terminal - centers the WezTerm window on the primary display at a constant size.
+#
+# Usage: Center-Terminal
+#
+# Takes the target size from the `center-terminal` row of Unix/config/window.conf (the
+# CenterTerminalSizing of Windows: 1376 x 700 by default), resolved as on Windows: SmallDisplay (a
+# primary display at most small-display-width points wide), then the layout machine type
+# (machines.conf: layout-override, then small-display, then the machine type), then Default.
+# It turns it into shares of the live work area clamped to the configured percent bounds and then
+# into Center-Windows' 10-100, and hands them to Center-Windows for WezTerm (floating, centered).
+# When the work area cannot be read it hands over Center-Windows' own 40 x 50, as Windows does
+# without monitor data. Needs the Accessibility permission of the terminal, like Center-Windows.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps drivers/aerospace layout windows
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+monitor=$(as_primary_monitor)
+read -r display_width _ _ _ ww wh <<<"$monitor"
+if [ -n "$wh" ]; then
+	values=$(windows_display_row center-terminal "$display_width") || values="1376 700 25 72 35 75"
+	read -r tw th minw maxw minh maxh <<<"$values"
+	read -r wp hp <<<"$(awk -v tw="$tw" -v th="$th" -v ww="$ww" -v wh="$wh" -v a="$minw" -v b="$maxw" -v c="$minh" -v d="$maxh" 'BEGIN {
+		w = int(tw * 100 / ww + 0.5); h = int(th * 100 / wh + 0.5)
+		if (w < a) w = a; if (w > b) w = b; if (h < c) h = c; if (h > d) h = d
+		if (w < 10) w = 10; if (w > 100) w = 100; if (h < 10) h = 10; if (h > 100) h = 100
+		print w, h }')"
+	log_debug "[Center-Terminal] ${tw}x$th on ${ww}x$wh => ${wp}% x ${hp}%"
+else
+	wp=40
+	hp=50
+	log_warning "Could not read the display's work area - centering the terminal at Center-Windows' ${wp}% x ${hp}%"
+fi
+exec "${BASH:-bash}" "$(foundation_command_path Center-Windows)" --process WezTerm --width-percent "$wp" --height-percent "$hp"

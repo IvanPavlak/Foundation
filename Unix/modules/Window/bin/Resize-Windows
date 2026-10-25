@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+# Resize-Windows - scales windows by a percentage, keeping each one's center.
+#
+# Usage: Resize-Windows [--percent N | N] [--process | --process-name PATTERN] [--window-title PATTERN] [--window-handle ID] [--current]
+#
+# The windows are matched as Get-WindowHandle matches them (apps.conf token, role or app name, or
+# the title; with both a window matching EITHER, as on Windows); --window-handle ID (the id
+# Get-WindowHandle lists) keeps only that window. 100 changes nothing, below shrinks, above
+# enlarges; the percent is a whole number from 10 to 500, the ValidateRange of Windows. Without
+# --percent the `resize-windows` row of Unix/config/window.conf applies, resolved as the Windows
+# ResizeWindowsPercent: SmallDisplay (a primary display at most small-display-width points wide),
+# then the layout machine type (machines.conf: layout-override, then small-display, then the
+# machine type), then Default; a fraction is rounded, a missing row or a value outside 10-500
+# gives 70. Each window is scaled around its center, kept at least 100 points wide and high and
+# clamped to the work area. A tiled window is floated first: a tile
+# always fills its slot, so resizing it only moves the split to the neighbour (and an app minimum
+# width can push it off screen) - measured under AeroSpace 0.21, see docs/unix/modules/Window.md.
+# Reset-Windows tiles everything again. Each window's frame is read from the window server by its
+# window id and set through the Accessibility API on that same window (found by its frame), so
+# same-titled windows of one app are each scaled once; setting needs the terminal to be allowed in
+# System Settings > Privacy & Security > Accessibility (without it the run stops at the first
+# window). AeroSpace parks the windows of a hidden desktop in a corner, so each desktop holding a
+# matching window is shown before its windows are measured and resized, and the desktop focused
+# before comes back at the end (a desktop AeroSpace does not show counts its windows as not
+# resized).
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config apps drivers/aerospace layout windows
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+percent=''
+process=''
+title=''
+workspace=''
+handle=''
+while [ $# -gt 0 ]; do
+	case $1 in
+		--percent)
+			percent=$2
+			shift
+			;;
+		--process | --process-name)
+			process=$2
+			shift
+			;;
+		--window-title)
+			title=$2
+			shift
+			;;
+		--window-handle)
+			handle=$2
+			shift
+			;;
+		--current) workspace=__focused ;;
+		-v | --verbose) ;;
+		*) percent=$1 ;;
+	esac
+	shift
+done
+[ -z "$percent" ] || foundation_whole_number "$percent" 10 500 || foundation_die "--percent must be a whole number from 10 to 500 => $percent"
+case $handle in *[!0-9]*) foundation_die "--window-handle must be a window id (Get-WindowHandle) => $handle" ;; esac
+monitor=''
+if [ -z "$percent" ]; then
+	monitor=$(as_primary_monitor)
+	percent=$(windows_resize_percent "${monitor%% *}")
+	log_debug "[Resize-Windows] no --percent => $percent% (window.conf)"
+fi
+percent=$((10#$percent))
+[ "$percent" -ne 100 ] || {
+	log_success "Percent 100 - windows unchanged"
+	exit 0
+}
+as_available || as_start || exit 1
+[ "$workspace" = __focused ] && workspace=$(as_focused_workspace)
+[ -n "$monitor" ] || monitor=$(as_primary_monitor)
+read -r _ _ wx wy ww wh <<<"$monitor"
+
+rows=()
+while IFS= read -r row; do
+	[ -z "$handle" ] || [ "${row%%$'\t'*}" = "$handle" ] || continue
+	rows+=("$row")
+done < <(windows_select "$process" "$title" "$workspace")
+[ -z "$handle" ] || [ ${#rows[@]} -gt 0 ] || foundation_die "No matching window with id $handle - Get-WindowHandle lists them"
+start=$(as_focused_workspace)
+shown=$start
+# The desktop focused before comes back on every way out, the stop on a missing permission too.
+trap '[ -z "$start" ] || [ "$shown" = "$start" ] || as_focus_workspace "$start"' EXIT
+resized=0
+failed=0
+for desktop in $(printf '%s\n' ${rows[@]+"${rows[@]}"} | cut -f5 | sort -u); do
+	if [ "$desktop" != "$shown" ]; then
+		if ! as_focus_workspace "$desktop"; then
+			n=$(printf '%s\n' "${rows[@]}" | awk -F'\t' -v d="$desktop" '$5 == d' | grep -c .)
+			failed=$((failed + n))
+			log_warning "Desktop $desktop => AeroSpace did not show it - $n window(s) not resized"
+			continue
+		fi
+		shown=$desktop
+	fi
+	while IFS=$'\t' read -r id token _ pid ws _ wtitle; do
+		[ "$ws" = "$desktop" ] || continue
+		# Measured BEFORE floating: a window AeroSpace floats gets back its last floating frame, not
+		# the tile's, so the size on screen now is only readable while it is still tiled.
+		frame=$(as_window_frame "$id") || {
+			log_warning "Could not read [$token] $wtitle"
+			failed=$((failed + 1))
+			continue
+		}
+		read -r fx fy fw fh <<<"$frame"
+		read -r nx ny nw nh <<<"$(awk -v x="$fx" -v y="$fy" -v w="$fw" -v h="$fh" -v p="$percent" -v wx="$wx" -v wy="$wy" -v ww="$ww" -v wh="$wh" 'BEGIN {
+			nw = int(w * p / 100); nh = int(h * p / 100); if (nw < 100) nw = 100; if (nh < 100) nh = 100
+			if (nw > ww) nw = ww; if (nh > wh) nh = wh
+			nx = int(x + (w - nw) / 2); ny = int(y + (h - nh) / 2)
+			if (nx < wx) nx = wx; if (ny < wy) ny = wy; if (nx + nw > wx + ww) nx = wx + ww - nw; if (ny + nh > wy + wh) ny = wy + wh - nh
+			print nx, ny, nw, nh }')"
+		# Only a floating frame holds; floating happens after the measurement (see above).
+		[ "$(as_window_layout "$id")" = floating ] || as_set_floating "$id" || true
+		as_set_window_frame "$id" "$pid" "$wtitle" "$nx" "$ny" "$nw" "$nh" >/dev/null
+		rc=$?
+		[ "$rc" -eq 2 ] && exit 1
+		[ "$rc" -eq 0 ] || {
+			log_warning "Could not resize [$token] $wtitle"
+			failed=$((failed + 1))
+			continue
+		}
+		resized=$((resized + 1))
+		log_debug "[Resize-Windows] $token '$wtitle' ${fw}x$fh => ${nw}x$nh"
+	done < <(printf '%s\n' "${rows[@]}")
+done
+if [ "$failed" -gt 0 ]; then
+	log_warning "Resized $resized window(s) to $percent%, $failed could not be resized"
+	exit 1
+fi
+log_success "Resized $resized window(s) to $percent%!"
