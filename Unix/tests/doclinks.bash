@@ -42,7 +42,10 @@ doclinks_anchors() {
 # links and /-anchored ones (the docsify root, DOCS-ROOT), their file and, for a .md target, the
 # anchor. Skipped: URLs, mail links, links inside code. Usage: doclinks_broken DIR DOCS-ROOT
 doclinks_broken() {
-	local dir=$1 root=$2 file target path anchor resolved anchors
+	local dir=$1 root=$2 file target path anchor resolved
+	# Each page's anchors are computed once and reused for every link into it: rebuilding them per
+	# link (each heading's slug is a few processes) cost minutes on the 3-CPU CI runner.
+	local -A anchor_cache=()
 	while IFS= read -r file; do
 		while IFS= read -r target; do
 			case $target in http://* | https://* | mailto:* | '') continue ;; esac
@@ -61,8 +64,11 @@ doclinks_broken() {
 			[ -n "$anchor" ] && [ "${resolved%.md}" != "$resolved" ] || continue
 			# Read whole, never through grep -q: a reader that stops early breaks the writer's pipe,
 			# and where SIGPIPE is ignored (the CI runner) that is a write error on stderr.
-			anchors=$(doclinks_anchors "$resolved")
-			grep -qxF -- "$anchor" <<<"$anchors" || printf '%s\t%s\tmissing anchor\n' "$file" "$target"
+			[ -n "${anchor_cache[$resolved]+x}" ] || anchor_cache[$resolved]=$'\n'$(doclinks_anchors "$resolved")$'\n'
+			case ${anchor_cache[$resolved]} in
+				*$'\n'"$anchor"$'\n'*) ;;
+				*) printf '%s\t%s\tmissing anchor\n' "$file" "$target" ;;
+			esac
 		done < <(doclinks_prose "$file" | sed -E 's/`[^`]*`//g' | grep -oE '\]\([^) ]+\)' | sed -E 's/^\]\(//; s/\)$//')
 	done < <(find "$dir" -name '*.md' | sort)
 }

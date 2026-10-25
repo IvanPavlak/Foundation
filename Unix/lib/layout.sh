@@ -504,13 +504,21 @@ layout_wait() {
 					}
 				done
 				if [ "$found" -ge 0 ] && app_matches "${apps[i]}" "${tokens[found]}" && foundation_match_title "${titles[i]}" "${wtitles[found]}"; then
-					local frame=${frame_of[${handle[i]}]:-}
-					# The first frame seen is recorded without restarting the clock.
-					[ -n "$frame" ] && [ -z "${lastframe[i]}" ] && lastframe[i]=$frame
+					local frame=${frame_of[${handle[i]}]:-} first_frame=0
+					# The first frame seen is recorded without restarting the clock, but it cannot make
+					# the window ready yet: a frame read once has not been seen to hold. Without that,
+					# a slow pass (more than stable_ms between the claim and the first frame read)
+					# declared a window still resizing ready. A second matching read is enough.
+					if [ -n "$frame" ] && [ -z "${lastframe[i]}" ]; then
+						lastframe[i]=$frame
+						first_frame=1
+					fi
 					if [ "${wtitles[found]}" != "${last[i]}" ] || { [ -n "$frame" ] && [ "$frame" != "${lastframe[i]}" ]; }; then
 						last[i]=${wtitles[found]}
 						[ -n "$frame" ] && lastframe[i]=$frame
 						since[i]=$now
+					elif [ "$first_frame" -eq 1 ]; then
+						:
 					elif [ $((now - since[i])) -ge "$stable_ms" ]; then
 						ready[i]=1
 						log_debug "[layout_wait] ready: entry $i ${apps[i]} [${titles[i]}] => window ${handle[i]} '${wtitles[found]}'"
