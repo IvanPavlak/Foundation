@@ -105,7 +105,8 @@ setup() {
 @test "colours come from list-functions.conf when the output is coloured" {
 	copy_fixture_config
 	printf 'border Magenta\nfunction-name 208\n' >"$FOUNDATION_CONFIG_DIR/list-functions.conf"
-	LOG_FORCE_COLOR=1 run "${BASH:-bash}" "$cmd" Countdown
+	# CI has no TERM, and TERM=dumb turns colour off before LOG_FORCE_COLOR is read.
+	LOG_FORCE_COLOR=1 TERM=xterm-256color run "${BASH:-bash}" "$cmd" Countdown
 	[[ ${lines[0]} == $'\033[35m'*"[Helper]"* ]]
 	[[ $output == *$'\033[38;5;208m Countdown'* ]]
 }

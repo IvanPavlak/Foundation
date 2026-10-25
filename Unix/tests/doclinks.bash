@@ -42,7 +42,7 @@ doclinks_anchors() {
 # links and /-anchored ones (the docsify root, DOCS-ROOT), their file and, for a .md target, the
 # anchor. Skipped: URLs, mail links, links inside code. Usage: doclinks_broken DIR DOCS-ROOT
 doclinks_broken() {
-	local dir=$1 root=$2 file target path anchor resolved
+	local dir=$1 root=$2 file target path anchor resolved anchors
 	while IFS= read -r file; do
 		while IFS= read -r target; do
 			case $target in http://* | https://* | mailto:* | '') continue ;; esac
@@ -59,7 +59,10 @@ doclinks_broken() {
 				continue
 			fi
 			[ -n "$anchor" ] && [ "${resolved%.md}" != "$resolved" ] || continue
-			doclinks_anchors "$resolved" | grep -qxF -- "$anchor" || printf '%s\t%s\tmissing anchor\n' "$file" "$target"
+			# Read whole, never through grep -q: a reader that stops early breaks the writer's pipe,
+			# and where SIGPIPE is ignored (the CI runner) that is a write error on stderr.
+			anchors=$(doclinks_anchors "$resolved")
+			grep -qxF -- "$anchor" <<<"$anchors" || printf '%s\t%s\tmissing anchor\n' "$file" "$target"
 		done < <(doclinks_prose "$file" | sed -E 's/`[^`]*`//g' | grep -oE '\]\([^) ]+\)' | sed -E 's/^\]\(//; s/\)$//')
 	done < <(find "$dir" -name '*.md' | sort)
 }
