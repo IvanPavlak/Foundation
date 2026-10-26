@@ -282,7 +282,8 @@ macOS (`.github/workflows/unix.yml`), the only Unix Foundation runs on, through 
 --audit-since` (the full suite, plus a warning for every failing suite `--changed` would have
 missed), together with shellcheck over the list `Run-Tests --lint-files` prints and shfmt; the job
 reports as the `Unix Tests` check, can be re-run by hand (`workflow_dispatch`), and keeps the run log
-as the `unix-run-log` artifact. The job is skipped in a private repository, so in a private fork
-(Dotfiles) it never spends Actions minutes and `Run-Tests` on the Mac is the gate; its path filter
-names what the Unix suites read for the day the repository is public. The lint settings live in `Unix/.shellcheckrc` and `Unix/.editorconfig`, which the recommended VS
+as the `unix-run-log` artifact. It runs on every pull request and on pushes to `master`. The job is
+skipped in a private repository, so a private fork never spends Actions minutes on it and
+`Run-Tests` on the Mac is the gate; a fork keeps the workflow byte-identical to Foundation's, so a
+merge from Foundation never conflicts on it. The lint settings live in `Unix/.shellcheckrc` and `Unix/.editorconfig`, which the recommended VS
 Code extensions (`timonwong.shellcheck`, `mkhl.shfmt`) read too.
