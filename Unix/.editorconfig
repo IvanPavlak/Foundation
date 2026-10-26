@@ -11,3 +11,8 @@ switch_case_indent = true
 [[shell]]
 indent_style = tab
 switch_case_indent = true
+
+# zsh syntax (Unix/shell/autocomplete-guard.zsh), which shfmt cannot parse: shfmt -f leaves these
+# files out, so the format check (CI, Run-Tests) skips them; shellcheck skips them too.
+[*.zsh]
+ignore = true

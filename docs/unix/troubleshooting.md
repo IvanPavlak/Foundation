@@ -186,6 +186,21 @@ runs in a WezTerm pane. An app started from WezTerm (VS Code, the Claude app) in
 `WEZTERM_PANE`, so the variable counts only when that pane's tty is the command's own terminal.
 Run the command in a WezTerm tab.
 
+## Shell
+
+### A leftover zsh fills RAM and swap
+
+**Problem:** macOS runs out of application memory with little open. `ps -axo pid,ppid,rss,command
+-m` shows a `-zsh` at the top whose parent is another `-zsh` with no terminal (`??`) and parent
+PID 1, and the kernel log has `memorystatus: killing zsh [PID] due to low-swap`.
+
+**Solution:** That is a completion worker of zsh-autocomplete left behind by a closed terminal:
+the plugin forks a worker and a helper zsh on a pseudo-terminal of its own for every key, and once
+the completion runs long nothing stops them. The shared rc wraps the worker with a hard limit
+(`Unix/shell/autocomplete-guard.zsh`): a worker still running after 10 seconds is killed with its
+helper. A shell started before the guard existed still has the unguarded worker - open a new
+terminal. To catch one still running, `sample PID 3` shows what it is doing.
+
 ## AI
 
 The deployment itself (paths, steps, verification) is on [AI on a Mac](ai.md).
