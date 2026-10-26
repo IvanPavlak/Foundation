@@ -109,4 +109,4 @@ run UI npm run dev
 
 - [`Add-Project` in the Configuration module reference](../../modules/Configuration.md#add-project)
 - [Configuration configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

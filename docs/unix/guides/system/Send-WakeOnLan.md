@@ -107,4 +107,4 @@ port       9
 - [`Send-WakeOnLan` in the System module reference](../../modules/System.md#send-wakeonlan)
 - [Test-MachineOnline](Test-MachineOnline.md)
 - [System configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

@@ -103,4 +103,4 @@ lessbright 1
 
 - [`Set-PowerSettings` in the Bootstrap module reference](../../modules/Bootstrap.md#set-powersettings)
 - [Bootstrap configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

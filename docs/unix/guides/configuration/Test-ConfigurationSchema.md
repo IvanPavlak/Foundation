@@ -146,4 +146,4 @@ layout 1 Five
 
 - [`Test-ConfigurationSchema` in the Configuration module reference](../../modules/Configuration.md#test-configurationschema)
 - [Configuration configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

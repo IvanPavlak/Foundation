@@ -73,4 +73,4 @@ ef-version 8.*
 
 - [`Install-DotnetEf` in the Bootstrap module reference](../../modules/Bootstrap.md#install-dotnetef)
 - [Bootstrap configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

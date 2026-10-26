@@ -68,4 +68,4 @@ status-arguments --short
 
 - [`GitStatus` in the Git module reference](../../modules/Git.md#gitstatus)
 - [Git configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

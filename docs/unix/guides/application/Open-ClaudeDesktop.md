@@ -68,4 +68,4 @@ app Claude com.example.MyClaudeBuild
 - [`Open-ClaudeDesktop` in the Application module reference](../../modules/Application.md#open-claudedesktop)
 - [Open-Application](Open-Application.md)
 - [Application configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

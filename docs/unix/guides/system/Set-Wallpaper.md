@@ -99,4 +99,4 @@ Default  MyLight.png
 - [`Set-Wallpaper` in the System module reference](../../modules/System.md#set-wallpaper)
 - [Set-SystemTheme](Set-SystemTheme.md)
 - [System configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

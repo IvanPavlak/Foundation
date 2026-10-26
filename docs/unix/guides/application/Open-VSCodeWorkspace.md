@@ -88,4 +88,4 @@ default MyProject MyProject
 - [`Open-VSCodeWorkspace` in the Application module reference](../../modules/Application.md#open-vscodeworkspace)
 - [Open-VSCode](Open-VSCode.md)
 - [Application configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

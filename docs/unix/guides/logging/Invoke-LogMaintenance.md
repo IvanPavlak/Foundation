@@ -79,4 +79,4 @@ maintenance-interval-hours   12
 
 - [`Invoke-LogMaintenance` in the Logging module reference](../../modules/Logging.md#invoke-logmaintenance)
 - [Logging configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

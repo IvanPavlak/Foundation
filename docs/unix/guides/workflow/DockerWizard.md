@@ -77,4 +77,4 @@ timeout stop 90
 - [`DockerWizard` in the Workflow module reference](../../modules/Workflow.md#dockerwizard)
 - [Start-Containers](Start-Containers.md)
 - [Workflow configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

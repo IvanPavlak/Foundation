@@ -275,4 +275,4 @@ layout 2 Zero
 - [macOS Workspaces](../../macos-workspaces.md#what-happens-in-order)
 - [Visualize-Layouts](Visualize-Layouts.md)
 - [Window configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

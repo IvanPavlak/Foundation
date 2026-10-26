@@ -85,4 +85,4 @@ update-base off
 
 - [`Install-CondaEnvironments` in the Bootstrap module reference](../../modules/Bootstrap.md#install-condaenvironments)
 - [Bootstrap configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

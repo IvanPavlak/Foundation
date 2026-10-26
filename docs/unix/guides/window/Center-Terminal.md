@@ -115,4 +115,4 @@ small-display-width 2000
 - [`Center-Terminal` in the Window module reference](../../modules/Window.md#center-terminal)
 - [Center-Windows](Center-Windows.md)
 - [Window configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

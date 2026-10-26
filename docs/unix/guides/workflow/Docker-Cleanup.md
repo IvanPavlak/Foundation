@@ -99,4 +99,4 @@ cleanup-preview Delete dangling images :: docker images -f dangling=true --forma
 - [`Docker-Cleanup` in the Workflow module reference](../../modules/Workflow.md#docker-cleanup)
 - [Start-Containers](Start-Containers.md)
 - [Workflow configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

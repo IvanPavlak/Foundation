@@ -78,4 +78,4 @@ default-browser Firefox
 - [`Open-SecureBrowser` in the Application module reference](../../modules/Application.md#open-securebrowser)
 - [Open-Browser](Open-Browser.md)
 - [Application configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

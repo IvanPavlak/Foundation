@@ -84,4 +84,4 @@ nuget-config ~/.nuget/NuGet/NuGet.Config
 
 - [`Configure-NuGetConfig` in the Bootstrap module reference](../../modules/Bootstrap.md#configure-nugetconfig)
 - [Bootstrap configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

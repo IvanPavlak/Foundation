@@ -108,4 +108,4 @@ problem-page-title  Problem loading page
 - [`Open-Browser` in the Application module reference](../../modules/Application.md#open-browser)
 - [Close-Project](Close-Project.md)
 - [Workflow configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

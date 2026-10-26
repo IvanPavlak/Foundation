@@ -75,4 +75,4 @@ port       9
 - [`Test-MachineOnline` in the System module reference](../../modules/System.md#test-machineonline)
 - [Send-WakeOnLan](Send-WakeOnLan.md)
 - [System configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

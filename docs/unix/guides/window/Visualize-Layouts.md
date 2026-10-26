@@ -149,4 +149,4 @@ path ROOT $DEV/MyProject/src/MyProject.Api
 - [`Visualize-Layouts` in the Window module reference](../../modules/Window.md#visualize-layouts)
 - [Set-WorkspaceWindowLayout](Set-WorkspaceWindowLayout.md)
 - [Window configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

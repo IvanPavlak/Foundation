@@ -8,8 +8,8 @@ Layout: one subfolder per source, each holding flat `<skill>/SKILL.md` folders. 
 read in this order, the first winning a name two of them carry:
 
 - `own/` - your own skills (no manifest; never touched by a refresh). Foundation ships it empty.
-- `foundation/` - the product skills Foundation ships: [macos-configurator](foundation/macos-configurator/SKILL.md),
-  which runs the [macOS Configurator](../../docs/unix/macos-configurator.md) interview, and
+- `foundation/` - the product skills Foundation ships: [foundation-configurator](foundation/foundation-configurator/SKILL.md),
+  which runs the [FoundationConfigurator](../../docs/unix/foundation-configurator.md) interview, and
   [document](foundation/document/SKILL.md), which turns a command's header into its module page
   entry and configuration guide. Leave one out with `exclude skills/foundation/document`.
 - `<source>/` - an upstream vendored by `Update-AiArtifacts` from a `[source]` section of

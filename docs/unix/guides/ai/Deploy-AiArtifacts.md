@@ -27,7 +27,7 @@ into, or with `--check` reports what a run would change.
     - Default: none; the command warns that there is no harness and exits 0.
     - More detail: [AI on a Mac](../../ai.md#harnesses)
 2. Should any item be left out?
-    - Options: `exclude` lines, `KIND/NAME` for every source or `KIND/SOURCE/NAME` for one (`exclude skills/foundation/macos-configurator`).
+    - Options: `exclude` lines, `KIND/NAME` for every source or `KIND/SOURCE/NAME` for one (`exclude skills/foundation/foundation-configurator`).
     - Default: every item of every source read is deployed.
     - More detail: [AI on a Mac](../../ai.md#artifacts)
 3. Which rules should the apps' global instruction files link to?
@@ -112,4 +112,4 @@ rules    file  my-app.md,RULES.md  ~/.my-app/INSTRUCTIONS.md
 - [`Deploy-AiArtifacts` in the AI module reference](../../modules/AI.md#deploy-aiartifacts)
 - [List-AiArtifacts](List-AiArtifacts.md)
 - [AI configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

@@ -77,4 +77,4 @@ app Acrobat com.adobe.Acrobat.Pro
 
 - [`Open-Application` in the Application module reference](../../modules/Application.md#open-application)
 - [Application configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

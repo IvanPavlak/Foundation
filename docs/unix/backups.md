@@ -90,7 +90,7 @@ For the Dock: `defaults import com.apple.dock <backup>/com.apple.dock.plist; kil
 
 ## The AI-assistant convention
 
-An assistant editing `Unix/config` (the [macOS Configurator](macos-configurator.md) protocol, or any
+An assistant editing `Unix/config` (the [FoundationConfigurator](foundation-configurator.md) protocol, or any
 other agent) follows the same policy as the code: before its **first** write to a file in a
 session, it copies the file to `Backups/Unix/Config/<key>/<yyyy-MM-dd_HH-mm-ss>/`, with the key
 built as above (`Brewfile.local` for `Unix/Brewfile.local`).

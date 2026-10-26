@@ -85,4 +85,4 @@ Arc      60   ◜ ◠ ◝ ◞ ◡ ◟
 
 - [`Loading-Spinner` in the Helper module reference](../../modules/Helper.md#loading-spinner)
 - [Helper configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

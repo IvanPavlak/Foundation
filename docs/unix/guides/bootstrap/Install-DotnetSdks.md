@@ -90,4 +90,4 @@ step DotnetSdks on
 - [`Install-DotnetSdks` in the Bootstrap module reference](../../modules/Bootstrap.md#install-dotnetsdks)
 - [Install-DotnetEf](Install-DotnetEf.md)
 - [Bootstrap configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

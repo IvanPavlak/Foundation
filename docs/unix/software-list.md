@@ -59,7 +59,7 @@ so a Mac without them still works, with a warning or a plainer shell.
 - **Removing a package you installed**: delete its line and run `brew uninstall NAME`; the Packages
   step never removes what is not listed.
 
-The [macOS Configurator](macos-configurator.md) edits `Brewfile.local` by interview, and
+The [FoundationConfigurator](foundation-configurator.md) edits `Brewfile.local` by interview, and
 [Bootstrap](guides/bootstrap/Bootstrap.md) documents the `[Packages]` lines.
 
 ## Apps not on the Mac

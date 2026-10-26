@@ -69,4 +69,4 @@ clear on
 
 - [`Invoke-Clear` in the System module reference](../../modules/System.md#invoke-clear)
 - [System configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

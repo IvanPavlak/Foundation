@@ -4,7 +4,7 @@
 # templates), listed in its folder's index; a FULL guide keeps the template's headings and decision
 # shape and names every Unix/config file the command reads; a STUB carries the sentinel sentence and
 # belongs to a command that reads none. The Foundation sidebar (docs/unix/_sidebar.md) lists every
-# module page, every guide index and the macOS Configurator page.
+# module page, every guide index and the FoundationConfigurator page.
 
 load helpers
 load guides
@@ -61,8 +61,8 @@ report() {
 	docs=$(dirname "$UNIX_DIR")/docs
 	sidebar=$docs/unix/_sidebar.md
 	[ -f "$sidebar" ] || problems+="missing docs/unix/_sidebar.md"$'\n'
-	[ -f "$docs/unix/macos-configurator.md" ] || problems+="missing docs/unix/macos-configurator.md"$'\n'
-	pages=(unix/macos-configurator.md)
+	[ -f "$docs/unix/foundation-configurator.md" ] || problems+="missing docs/unix/foundation-configurator.md"$'\n'
+	pages=(unix/foundation-configurator.md)
 	while IFS= read -r dir; do
 		module=$(foundation_module_name "$dir")
 		pages+=("$(foundation_module_page "$module" | sed 's#^docs/##')" "unix/guides/$(foundation_lower "$module")/README.md")

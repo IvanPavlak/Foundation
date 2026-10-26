@@ -71,4 +71,4 @@ directory ~/Documents/Obsidian/MyVault
 - [`Enable-ObsidianCli` in the Application module reference](../../modules/Application.md#enable-obsidiancli)
 - [Open-Obsidian](Open-Obsidian.md)
 - [Application configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

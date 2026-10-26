@@ -1,4 +1,4 @@
-# macOS Configurator
+# FoundationConfigurator
 
 The macOS twin of [WinuXConfigurator](https://ivanpavlak.github.io/WinuX/#/configuration/winux-configurator). Point an AI assistant at this document and it interviews you, one decision at a time, and writes the answers into the Unix config files under `Unix/config`. Everything, nothing, or any subset you name: a whole file, one entry, or a task such as "add a repository and a workspace for MyProject" or "choose what Bootstrap does on this Mac".
 
@@ -6,15 +6,15 @@ The Windows session walks per-function guides and writes one `Configuration.loca
 
 ## How to Start
 
-Foundation ships the document as one of its product skills, `AI/Skills/foundation/macos-configurator/`, linked into every harness the Mac deploys into by `Deploy-AiArtifacts` (the bootstrap's AiArtifacts step; a fork leaves it out with `exclude skills/foundation/macos-configurator`). The skill resolves the checkout from its own symbolic link, so it works from any project:
+Foundation ships the document as one of its product skills, `AI/Skills/foundation/foundation-configurator/`, linked into every harness the Mac deploys into by `Deploy-AiArtifacts` (the bootstrap's AiArtifacts step; a fork leaves it out with `exclude skills/foundation/foundation-configurator`). The skill resolves the checkout from its own symbolic link, so it works from any project:
 
-- Claude Code: `/macos-configurator`
-- Codex CLI: `$macos-configurator`
+- Claude Code: `/foundation-configurator`
+- Codex CLI: `$foundation-configurator`
 - Gemini CLI: listed by `gemini skills list`
 
 It is also model-invoked, so "configure Foundation on this Mac with me" or "add a workspace for MyProject" reaches it without naming it. Without the skill deployed, open a session in the checkout and say:
 
-> Read docs/unix/macos-configurator.md and configure the Unix half with me.
+> Read docs/unix/foundation-configurator.md and configure the Unix half with me.
 
 ## What the Assistant Needs
 
@@ -41,6 +41,23 @@ It is also model-invoked, so "configure Foundation on this Mac with me" or "add 
 
 7. **Match the file's own format.** Each file's header comment is its specification; read it before writing. Keep the column alignment of the neighbouring lines, put a new section after the last section with one blank line before it, and never reorder or reformat what is already there.
 
+8. **A checkout that also holds WinuX is configured on both halves.** When `<RepoRoot>/Windows/PowerShell/Configuration.psd1` exists next to `Unix/config`, the checkout is a fork of both upstreams ([Fork Model](fork-model.md)), the user runs the same configuration on Windows, and every entry you write that the Windows half reads too is written into `Windows/PowerShell/Configuration.local.psd1` (a layout into `Windows/PowerShell/Modules/Window/Layouts/<Type>/<Workspace>_<Type>.psd1`) in the same session, so the two halves never drift. Rule 1 yields to this rule for exactly those files. Those writes follow the [WinuXConfigurator](https://ivanpavlak.github.io/WinuX/#/configuration/winux-configurator) protocol (`docs/configuration/winux-configurator.md` in the checkout, with the per-function guides under `docs/configuration/guides/`): never the base `Configuration.psd1`; a hashtable key merges per key and an array key replaces wholesale, so read the base array first; a backup of `Configuration.local.psd1` under `Backups/Windows/Config/Configuration.local/` before the first write; the guide's `## Where to Put Values` for the destination. Reuse the Unix answers and ask only what Windows cannot share - the FancyZones layout and zone per monitor, an executable path, a Windows-only value. Say which halves the session writes before the first question, show a counterpart write like any other write, and print the Windows checks (`Reload-PowerShellProfile`, `$global:Configuration.<Key>`) for the user's next Windows session when you cannot run them. What has no counterpart (AeroSpace, chezmoi, Homebrew, the Dock, a Mac-only application) stays on the Mac: say so and move on. A checkout without `Windows/` is Foundation alone: write nothing there and never create the folder.
+
+    | Unix file | Windows counterpart |
+    | --------- | ------------------- |
+    | `repositories.conf` | `Universal.GitHub`, `RepositoryGroups` |
+    | `browser-groups.conf` | `Universal.BrowserGroups` |
+    | `projects.conf` | `PathTemplates.Projects.<Name>`, `ProjectActions`, `ProjectTerminals`, `RunnableProjectMappings` |
+    | `vscode-folders.conf` | `VSCodeProjects` |
+    | the `default` lines of `vscode-workspaces.conf` | `DefaultVSCodeWorkspaces` |
+    | `workspaces.conf`, `workspace-templates.conf` | `WorkspaceActions`, `WorkspaceTemplates` |
+    | `layouts/<Type>/<Workspace>_<Type>.conf` | `Modules/Window/Layouts/<Type>/<Workspace>_<Type>.psd1`, one per Windows machine type |
+    | `machines.conf` | `HostnameToMachineType`, `BasePaths` |
+    | `wake-on-lan.conf`, `pdfs.conf`, `dnd.conf`, `obsidian.conf` | `WakeOnLanConfig`, `AcrobatPdfGroups`, `CampaignResources`, `Obsidian` |
+    | `Unix/Brewfile.local` | the app-list overlays (`*.local.csv`), for a package Windows has a winget, Scoop or Chocolatey id for |
+
+    The full map, every Unix file with its Windows source, is the Files table of [Unix Configuration](configuration.md#files).
+
 ## Session Protocol
 
 ### Step 0: Prerequisites
@@ -49,6 +66,7 @@ It is also model-invoked, so "configure Foundation on this Mac with me" or "add 
 2. **First run.** Run `Initialize-Configuration --dry-run`. When it would write anything (a fresh clone: no git identity, no `host` line for this Mac, no dev root), hand over `Initialize-Configuration` for the user to run - it asks for the identity, the Mac's name and machine type and the dev root, and writes `git.local.conf` and `machines.local.conf` - and continue once it has. Do not ask those questions again yourself.
 3. **Establish the machine type and layout set.** Ask for (or read, rule 3) `scutil --get LocalHostName` and look it up in `Unix/config/machines.conf` (`host` lines, then `default`, then `layout-override`; a primary display at most `small-display-width` points wide uses the `small-display` set). The layout set decides which `Unix/config/layouts/<Type>/` folder a new layout goes into. List the sets that exist (`ls Unix/config/layouts`): `Test-ConfigurationSchema` requires every layout a workspace names to exist in every set.
 4. **Read what exists.** For each file in scope, read it (and its `.local.conf` if present) before the first question. You are adding to it, never replacing it.
+5. **Find the other half.** Check whether `<RepoRoot>/Windows/PowerShell/Configuration.psd1` exists. If it does, the session writes both halves (rule 8): read `Windows/PowerShell/Configuration.local.psd1` as well, and tell the user so before the first question.
 
 ### Step 1: Mode
 
@@ -78,6 +96,7 @@ It prints nothing when every reference resolves. Add the file's own check from i
 1. Summarise what was set, what was skipped, and what is still empty.
 2. Hand the user the commands that act on what was configured (rule 4): the clone, the workspace open, the drawing update, the `Bootstrap --only STEP` that applies a provisioning file.
 3. Do not hand over `Run-Tests` for a config change: the suites run against the fixture config in `Unix/tests/fixtures/config`, never `Unix/config`. `Test-ConfigurationSchema --strict` (step 3) is the check for the committed files.
+4. In a checkout that holds both halves (rule 8), list the counterpart entries written into `Configuration.local.psd1` and the Windows layout files, and the checks to run there.
 
 ## Walk Order
 

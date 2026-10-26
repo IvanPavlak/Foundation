@@ -29,7 +29,7 @@ The sources read, in this order, the first winning an item name two of them carr
 
 1. `own` - your own items, never touched by a refresh. It ships empty.
 2. Then, in name order: `foundation` (the product skills Foundation ships:
-   [macos-configurator](macos-configurator.md) and `document`, which turns a command's header into
+   [foundation-configurator](foundation-configurator.md) and `document`, which turns a command's header into
    its module page entry and guide), `example` (the example rules) and every vendored source, a
    `[section]` of `ai-artifacts.conf` filled by [Update-AiArtifacts](modules/AI.md#update-aiartifacts).
 

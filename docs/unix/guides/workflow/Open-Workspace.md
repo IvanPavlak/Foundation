@@ -233,4 +233,4 @@ parking-workspace P
 - [macOS Workspaces](../../macos-workspaces.md)
 - [Close-Workspace](Close-Workspace.md)
 - [Workflow configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

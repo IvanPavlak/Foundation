@@ -110,4 +110,4 @@ machine           PC Work
 
 - [`Deploy-AiMcpServers` in the AI module reference](../../modules/AI.md#deploy-aimcpservers)
 - [AI configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

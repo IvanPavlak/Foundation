@@ -82,4 +82,4 @@ Reset-Windows --current
 - [`Reset-Windows` in the Window module reference](../../modules/Window.md#reset-windows)
 - [Move-Windows](Move-Windows.md)
 - [Window configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

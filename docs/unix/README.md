@@ -28,7 +28,7 @@ profile's Solarized Dark colours are not ported. A shell started inside an activ
 gets conda's shell function back from the rc, so `conda activate` keeps working there.
 
 Command reference: [Unix Commands](commands.md). Workspace details: [macOS Workspaces](macos-workspaces.md). Configuring by
-interview: [macOS Configurator](macos-configurator.md). What gets installed: [Software on a Mac](software-list.md). The
+interview: [FoundationConfigurator](foundation-configurator.md). What gets installed: [Software on a Mac](software-list.md). The
 AI layers: [AI on a Mac](ai.md). Backups: [Backups on a Mac](backups.md). When something fails:
 [Troubleshooting on a Mac](troubleshooting.md).
 

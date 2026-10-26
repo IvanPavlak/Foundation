@@ -91,4 +91,4 @@ option      theme light
 
 - [`Deploy-AiMarketplaces` in the AI module reference](../../modules/AI.md#deploy-aimarketplaces)
 - [AI configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

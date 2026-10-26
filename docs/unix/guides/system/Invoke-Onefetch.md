@@ -102,4 +102,4 @@ onefetch-color      9   38;2;220;20;60
 
 - [`Invoke-Onefetch` in the System module reference](../../modules/System.md#invoke-onefetch)
 - [System configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

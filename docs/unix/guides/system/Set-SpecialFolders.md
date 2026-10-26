@@ -77,4 +77,4 @@ folder Screenshots  ~/Pictures/Screenshots
 
 - [`Set-SpecialFolders` in the System module reference](../../modules/System.md#set-specialfolders)
 - [System configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

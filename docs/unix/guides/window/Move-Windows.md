@@ -83,4 +83,4 @@ Move-Windows --desktop 2 --process Code --window-title '*MyProject*'
 - [`Move-Windows` in the Window module reference](../../modules/Window.md#move-windows)
 - [Reset-Windows](Reset-Windows.md)
 - [Window configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

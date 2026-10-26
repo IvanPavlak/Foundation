@@ -69,4 +69,4 @@ timeout stop 90
 
 - [`Open-Docker` in the Application module reference](../../modules/Application.md#open-docker)
 - [Application configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

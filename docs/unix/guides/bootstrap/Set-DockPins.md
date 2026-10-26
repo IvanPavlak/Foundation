@@ -103,4 +103,4 @@ folder ~/Downloads --view fan --display stack
 
 - [`Set-DockPins` in the Bootstrap module reference](../../modules/Bootstrap.md#set-dockpins)
 - [Bootstrap configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

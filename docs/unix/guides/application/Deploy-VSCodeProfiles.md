@@ -131,4 +131,4 @@ step VSCodeProfiles on
 - [`Deploy-VSCodeProfiles` in the Application module reference](../../modules/Application.md#deploy-vscodeprofiles)
 - [Export-VSCodeProfile](Export-VSCodeProfile.md)
 - [Application configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

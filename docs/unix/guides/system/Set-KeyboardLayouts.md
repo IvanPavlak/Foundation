@@ -97,4 +97,4 @@ default-keyboard-set  German-US
 
 - [`Set-KeyboardLayouts` in the System module reference](../../modules/System.md#set-keyboardlayouts)
 - [System configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

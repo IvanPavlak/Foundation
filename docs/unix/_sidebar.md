@@ -32,7 +32,7 @@
         - [Workflow](/unix/guides/workflow/README.md)
     - [Bootstrap a Mac](/unix/bootstrap.md)
     - [macOS Workspaces](/unix/macos-workspaces.md)
-    - [macOS Configurator](/unix/macos-configurator.md)
+    - [FoundationConfigurator](/unix/foundation-configurator.md)
     - [AI on a Mac](/unix/ai.md)
     - [Software on a Mac](/unix/software-list.md)
     - [Backups on a Mac](/unix/backups.md)

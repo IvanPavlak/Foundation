@@ -79,4 +79,4 @@ default Work
 
 - [`Rename-Machine` in the System module reference](../../modules/System.md#rename-machine)
 - [System configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)
