@@ -129,4 +129,4 @@ Set-WorkspaceWindowLayout Research
 
 - [`Add-Workspace` in the Configuration module reference](../../modules/Configuration.md#add-workspace)
 - [Configuration configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

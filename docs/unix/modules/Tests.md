@@ -69,7 +69,7 @@ The documentation gates: `doclinks.bats` checks every link under `docs/unix` (th
 sidebar `docs/unix/_sidebar.md` included), that the shared `docs/_sidebar.md` carries no Unix or
 Decisions entry (it stays WinuX's) and that the fork-owned custom page links the Foundation docs;
 `guides.bats` also checks that the Foundation sidebar lists every module page, every guide index
-and `macos-configurator.md`; `List-Functions --list-discrepancies` (run by
+and `foundation-configurator.md`; `List-Functions --list-discrepancies` (run by
 `commands.bats`) also fails a module page whose entries are not alphabetical.
 
 Coverage is enforced: `commands.bats` fails when a command has no

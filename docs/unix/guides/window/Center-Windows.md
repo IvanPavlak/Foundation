@@ -93,4 +93,4 @@ center-terminal  SmallDisplay  1100 640  30 80  40 85
 - [`Center-Windows` in the Window module reference](../../modules/Window.md#center-windows)
 - [Center-Terminal](Center-Terminal.md)
 - [Window configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

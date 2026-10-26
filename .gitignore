@@ -1,6 +1,6 @@
 # Personal config overlays - your machine-specific values (identity, hosts, paths, workspaces,
 # projects, ...), layered over the base Unix/config/NAME.conf at read time by Unix/lib/config.sh.
-# Written by Initialize-Configuration, the Add-* commands and the macOS Configurator. Foundation
+# Written by Initialize-Configuration, the Add-* commands and the FoundationConfigurator. Foundation
 # ships only the generic base, so the overlays are ignored here. A fork that runs several Macs can
 # commit its own (git add -f; see docs/unix/fork-model.md) - upstream never tracks them, so
 # committing them downstream never conflicts on a merge.

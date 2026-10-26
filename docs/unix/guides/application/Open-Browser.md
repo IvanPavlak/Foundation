@@ -122,4 +122,4 @@ browser MyBrowser --new-window --incognito launch=open
 - [`Open-Browser` in the Application module reference](../../modules/Application.md#open-browser)
 - [Invoke-Browser](Invoke-Browser.md)
 - [Application configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

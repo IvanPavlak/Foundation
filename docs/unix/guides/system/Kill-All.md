@@ -125,4 +125,4 @@ timeout stop 30
 
 - [`Kill-All` in the System module reference](../../modules/System.md#kill-all)
 - [System configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

@@ -18,7 +18,7 @@ docs/unix/
 ├── configuration.md                        # The Unix/config files, base and overlay
 ├── bootstrap.md                            # Bootstrap a Mac: steps, chezmoi
 ├── macos-workspaces.md                     # Workspaces on AeroSpace, their troubleshooting
-├── macos-configurator.md                   # AI-assisted interview that configures Foundation
+├── foundation-configurator.md              # AI-assisted interview that configures Foundation
 ├── ai.md                                   # macOS paths and checks of the AI layers
 ├── software-list.md                        # The base Unix/Brewfile and Brewfile.local
 ├── backups.md                              # Backups/Unix: writers, retention, restore

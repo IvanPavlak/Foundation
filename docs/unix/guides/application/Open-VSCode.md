@@ -76,4 +76,4 @@ MyProject-UI   $DEV/MyProject-ui
 - [`Open-VSCode` in the Application module reference](../../modules/Application.md#open-vscode)
 - [Open-VSCodeWorkspace](Open-VSCodeWorkspace.md)
 - [Application configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

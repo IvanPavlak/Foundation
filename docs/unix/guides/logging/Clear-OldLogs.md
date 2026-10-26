@@ -141,4 +141,4 @@ max-error-file-size-mb   10
 - [`Clear-OldLogs` in the Logging module reference](../../modules/Logging.md#clear-oldlogs)
 - [Invoke-LogMaintenance](Invoke-LogMaintenance.md), the periodic sweep that also prunes backups and test results
 - [Logging configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

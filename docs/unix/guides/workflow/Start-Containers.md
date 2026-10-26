@@ -86,4 +86,4 @@ timeout start 240
 - [`Start-Containers` in the Workflow module reference](../../modules/Workflow.md#start-containers)
 - [Docker-Cleanup](Docker-Cleanup.md)
 - [Workflow configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

@@ -122,4 +122,4 @@ restart Finder
 
 - [`Set-SystemDefaults` in the Bootstrap module reference](../../modules/Bootstrap.md#set-systemdefaults)
 - [Bootstrap configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

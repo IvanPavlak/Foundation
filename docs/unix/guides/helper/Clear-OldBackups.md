@@ -83,4 +83,4 @@ max-total-size-mb     1000
 
 - [`Clear-OldBackups` in the Helper module reference](../../modules/Helper.md#clear-oldbackups)
 - [Helper configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

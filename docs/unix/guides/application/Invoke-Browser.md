@@ -85,4 +85,4 @@ https://docs.example/MyProject
 - [`Invoke-Browser` in the Application module reference](../../modules/Application.md#invoke-browser)
 - [Open-Browser](Open-Browser.md)
 - [Application configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

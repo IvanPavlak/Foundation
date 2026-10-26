@@ -108,4 +108,4 @@ fastfetch-prompt-reserve     2
 
 - [`Invoke-Fastfetch` in the System module reference](../../modules/System.md#invoke-fastfetch)
 - [System configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

@@ -70,4 +70,4 @@ error-file   Errors.log
 
 - [`Protect-Log` in the Logging module reference](../../modules/Logging.md#protect-log)
 - [Logging configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

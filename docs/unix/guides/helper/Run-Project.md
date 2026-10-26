@@ -139,4 +139,4 @@ timeout start 300
 
 - [`Run-Project` in the Helper module reference](../../modules/Helper.md#run-project)
 - [Helper configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

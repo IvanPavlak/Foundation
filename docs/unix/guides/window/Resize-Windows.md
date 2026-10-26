@@ -120,4 +120,4 @@ small-display-width 2000
 - [`Resize-Windows` in the Window module reference](../../modules/Window.md#resize-windows)
 - [Reset-Windows](Reset-Windows.md)
 - [Window configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

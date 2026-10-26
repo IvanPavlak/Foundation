@@ -108,4 +108,4 @@ default-keyboard-set      German-US
 
 - [`Display-SystemLanguageSettings` in the System module reference](../../modules/System.md#display-systemlanguagesettings)
 - [System configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

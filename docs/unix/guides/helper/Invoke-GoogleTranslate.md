@@ -70,4 +70,4 @@ output German
 
 - [`Invoke-GoogleTranslate` in the Helper module reference](../../modules/Helper.md#invoke-googletranslate)
 - [Helper configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

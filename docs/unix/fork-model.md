@@ -36,7 +36,7 @@ An overlay adds lines before the first section, replaces a `[Section]` whole, ta
 back with `-LINE`, and limits any line to machine types with `@TYPE`. The full rules and what each
 base file ships are on [Configuration](configuration.md#base-and-overlay). You rarely write them by
 hand: Initialize-Configuration (the first Bootstrap step), the `Add-*` commands and the
-[macOS Configurator](macos-configurator.md) write the overlays, never the base.
+[FoundationConfigurator](foundation-configurator.md) write the overlays, never the base.
 
 ### One machine vs. several
 

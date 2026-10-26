@@ -121,4 +121,4 @@ MyProject https://localhost:5001/swagger/index.html
 - [`Close-Project` in the Workflow module reference](../../modules/Workflow.md#close-project)
 - [Open-Project](Open-Project.md)
 - [Workflow configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

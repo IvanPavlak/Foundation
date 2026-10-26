@@ -70,4 +70,4 @@ use rules CoreAiRules
 - [`List-AiArtifacts` in the AI module reference](../../modules/AI.md#list-aiartifacts)
 - [Deploy-AiArtifacts](Deploy-AiArtifacts.md)
 - [AI configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

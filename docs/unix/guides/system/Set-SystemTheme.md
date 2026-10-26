@@ -91,4 +91,4 @@ step SetWallpaper on
 - [`Set-SystemTheme` in the System module reference](../../modules/System.md#set-systemtheme)
 - [Set-Wallpaper](Set-Wallpaper.md)
 - [System configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

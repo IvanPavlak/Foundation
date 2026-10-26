@@ -91,4 +91,4 @@ run API dnr
 
 - [`Open-Project` in the Workflow module reference](../../modules/Workflow.md#open-project)
 - [Workflow configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

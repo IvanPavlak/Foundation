@@ -90,4 +90,4 @@ exclude              MyScratchScript
 
 - [`List-Functions` in the Helper module reference](../../modules/Helper.md#list-functions)
 - [Helper configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

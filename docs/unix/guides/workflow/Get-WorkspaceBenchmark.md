@@ -80,4 +80,4 @@ benchmark-history 20
 - [Open-Workspace](Open-Workspace.md)
 - [Measure-WorkspaceOpen](Measure-WorkspaceOpen.md)
 - [Workflow configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

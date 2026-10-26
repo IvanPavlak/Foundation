@@ -53,7 +53,7 @@ a Linux driver can replace it later.
 - No central hub: one small file per concern in `Unix/config`, each with a header that documents
   its line kinds. Read them through `lib/config.sh` only.
 - The base `NAME.conf` ships generic values; personal values go in the overlay `NAME.local.conf`.
-  Writers (`conf_add_section`, `Add-Workspace`, `Add-WindowLayout`, the macOS Configurator) write
+  Writers (`conf_add_section`, `Add-Workspace`, `Add-WindowLayout`, the FoundationConfigurator) write
   the overlay, never the base. `tests/vanilla.bats` keeps the base generic.
 - Overlay rules: lines before the first section are added after the base ones (the last `KEY`
   line wins for `conf_value`); a `[Section]` replaces the base section whole; `-LINE` takes a base

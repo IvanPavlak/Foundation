@@ -77,4 +77,4 @@ projects-search-path $DEV
 
 - [`Determine-DotnetDependencies` in the System module reference](../../modules/System.md#determine-dotnetdependencies)
 - [System configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

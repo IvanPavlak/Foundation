@@ -95,4 +95,4 @@ default-workspace MyProject
 - [`Open-Obsidian` in the Application module reference](../../modules/Application.md#open-obsidian)
 - [Enable-ObsidianCli](Enable-ObsidianCli.md)
 - [Application configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

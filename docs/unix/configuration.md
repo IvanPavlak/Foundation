@@ -3,7 +3,7 @@
 The Unix half reads small per-domain files in `Unix/config` instead of one configuration hub.
 They are the second copy of the Windows data (converted from `Configuration(.local).psd1` and
 the layout files on 2026-09-25, hand-maintained since) until WinuX adopts one OS-agnostic format.
-To fill them in by interview, run the [macOS Configurator](macos-configurator.md) (`/macos-configurator`).
+To fill them in by interview, run the [FoundationConfigurator](foundation-configurator.md) (`/foundation-configurator`).
 
 ## Shared format
 
@@ -81,7 +81,7 @@ takes `@TYPE`. What the base files ship:
 | `apps.conf`, `zones.conf`, `window.conf`, `list-functions.conf`, `backups.conf`, `logging.conf`, `dotnet.conf`, `translate.conf`, `vscode-profiles.conf` | sensible defaults | what it changes |
 
 Writers (Add-Workspace, Add-Project, Add-BrowserGroup and the
-[macOS Configurator](macos-configurator.md)) write to the overlay; Add-WindowLayout creates a new
+[FoundationConfigurator](foundation-configurator.md)) write to the overlay; Add-WindowLayout creates a new
 layout file in the set (and the set folder when it is missing, as on Windows).
 
 ## Files
@@ -139,7 +139,7 @@ The Windows profile checks the configuration at every shell start (the Schema st
 Test-ConfigurationSchema). The Unix shell rc does not: one Test-ConfigurationSchema run reads every
 file and its references and takes about 16 s on the Mac (measured 2026-10-24), too long for a
 shell start even when only a changed file triggers it. Run it by hand after an edit
-(`Test-ConfigurationSchema --quiet`); the test suites and the macOS Configurator run it too.
+(`Test-ConfigurationSchema --quiet`); the test suites and the FoundationConfigurator run it too.
 
 ### workspaces.conf
 

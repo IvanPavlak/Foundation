@@ -246,4 +246,4 @@ settings Obsidian/.obsidian
 - [`Bootstrap` in the Bootstrap module reference](../../modules/Bootstrap.md#bootstrap)
 - [Bootstrap a Mac](../../bootstrap.md)
 - [Bootstrap configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

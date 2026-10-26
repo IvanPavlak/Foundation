@@ -22,7 +22,7 @@ the Custom area. Each folder has a `README.md` index. `tests/guides.bats` enforc
 
 The file formats themselves (`@TYPE` lines, sections, `.local.conf` overlays, `$DEV`) are on
 [Configuration](../configuration.md); a guide links there instead of repeating them. The
-[macOS Configurator](../macos-configurator.md) reads a guide's `## Configuration Keys` and
+[FoundationConfigurator](../foundation-configurator.md) reads a guide's `## Configuration Keys` and
 `## Decisions` when it configures that command.
 
 ## Rules for writing a guide
@@ -105,7 +105,7 @@ The overlay file(s) covering every line kind on the page, generic values.
 
 - [`Command-Name` in the Module module reference](../../modules/Module.md#command-name)
 - [Module configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)
 `````
 
 ## STUB template

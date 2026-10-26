@@ -79,4 +79,4 @@ owned-only macupstream
 - [`Merge-Upstream` in the Git module reference](../../modules/Git.md#merge-upstream)
 - [Git configuration guides](README.md)
 - [Fork Model](../../fork-model.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

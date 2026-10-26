@@ -103,4 +103,4 @@ Focus-VirtualDesktop 1
 - [Open-Workspace](Open-Workspace.md)
 - [Get-WorkspaceBenchmark](Get-WorkspaceBenchmark.md)
 - [Workflow configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

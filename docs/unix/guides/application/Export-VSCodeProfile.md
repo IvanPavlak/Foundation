@@ -85,4 +85,4 @@ profile MyProject
 - [`Export-VSCodeProfile` in the Application module reference](../../modules/Application.md#export-vscodeprofile)
 - [Deploy-VSCodeProfiles](Deploy-VSCodeProfiles.md)
 - [Application configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

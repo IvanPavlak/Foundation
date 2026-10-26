@@ -71,4 +71,4 @@ error-file   Errors.log
 
 - [`Get-LogPath` in the Logging module reference](../../modules/Logging.md#get-logpath)
 - [Logging configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

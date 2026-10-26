@@ -75,4 +75,4 @@ shallow, and so does `Update-Repositories MyNotes` while the folder is missing.
 
 - [`Initialize-Repository` in the Git module reference](../../modules/Git.md#initialize-repository)
 - [Git configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

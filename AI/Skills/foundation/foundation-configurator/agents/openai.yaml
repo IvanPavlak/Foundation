@@ -1,5 +1,5 @@
 interface:
-  display_name: "macOS configurator"
+  display_name: "Foundation configurator"
   short_description: "Interview and write the config of Foundation on a Mac, file by file"
 policy:
   allow_implicit_invocation: true

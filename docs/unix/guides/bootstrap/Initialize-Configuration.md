@@ -123,4 +123,4 @@ host My-Work-Mac Work
 
 - [`Initialize-Configuration` in the Bootstrap module reference](../../modules/Bootstrap.md#initialize-configuration)
 - [Bootstrap configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

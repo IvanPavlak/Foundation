@@ -145,4 +145,4 @@ layout-override Test Work
 
 - [`Add-WindowLayout` in the Configuration module reference](../../modules/Configuration.md#add-windowlayout)
 - [Configuration configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)

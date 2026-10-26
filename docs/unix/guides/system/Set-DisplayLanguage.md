@@ -87,4 +87,4 @@ default-display-language  English-US
 
 - [`Set-DisplayLanguage` in the System module reference](../../modules/System.md#set-displaylanguage)
 - [System configuration guides](README.md)
-- [macOS Configurator](../../macos-configurator.md)
+- [FoundationConfigurator](../../foundation-configurator.md)
