@@ -243,6 +243,10 @@ EOF_FOUNDATION_SETTINGS
 			zstyle ':autocomplete:history-incremental-search-backward:*' list-lines "$_foundation_list_lines"
 			# shellcheck disable=SC1090 # the plugin's path is found at run time.
 			. "$_zsh_autocomplete"
+			# A hard time limit for the plugin's completion worker, which nothing else stops once
+			# it runs long (zsh syntax, hence its own file).
+			# shellcheck source=/dev/null # zsh syntax, not linted: shellcheck must not follow it.
+			. "$DOTFILES_ROOT/Unix/shell/autocomplete-guard.zsh"
 		else
 			# -C skips compinit's security audit of the completion dirs, which is the
 			# single biggest cost in a zsh startup.
