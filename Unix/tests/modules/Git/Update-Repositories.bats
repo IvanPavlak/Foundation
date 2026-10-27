@@ -58,6 +58,53 @@ update() { run "${BASH:-bash}" "$bin/Update-Repositories" "$@"; }
 	printf '[Demo]\nRepo  %s  %s\nSecond  %s  %s/second\n' "$(origin_url Repo)" "$REPO" "$(origin_url Second)" "$BATS_TEST_TMPDIR" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
 	update Demo --quiet --no-clone
 	[[ $output == *$'up to date\n=> [Second] not cloned'* ]]
+	[[ $output != *"Stashes"* ]]
+}
+
+@test "quiet colors each line and count by its bucket: updated green, up to date white, skipped yellow" {
+	printf '[Demo]\nRepo  %s  %s\nSecond  %s  %s/second\n' "$(origin_url Repo)" "$REPO" "$(origin_url Second)" "$BATS_TEST_TMPDIR" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
+	upstream new.txt hello
+	unset NO_COLOR
+	export LOG_FORCE_COLOR=1 TERM=xterm-256color
+	update Demo --quiet --no-clone
+	[ "$status" -eq 0 ]
+	[[ $output == *$'\033[32m=> [Repo] master - updated\033[0m'* ]]
+	[[ $output == *$'\033[33m=> [Second] not cloned on this machine - skipped\033[0m'* ]]
+	[[ $output == *$'=> Repositories => \033[32m1 updated\033[0m, 0 up to date, \033[31m0 need attention\033[0m, \033[33m1 skipped\033[0m'* ]]
+	update Demo --quiet --no-clone
+	[[ $output == *$'=> [Repo] master - up to date\n'* ]]
+	[[ $output != *$'m=> [Repo]'* ]]
+}
+
+@test "quiet prints a repository that needs attention in red" {
+	echo local >"$REPO/local.txt" && git -C "$REPO" add local.txt && git -C "$REPO" commit -qm local
+	upstream new.txt hello
+	unset NO_COLOR
+	export LOG_FORCE_COLOR=1 TERM=xterm-256color
+	update Demo --quiet
+	[ "$status" -eq 1 ]
+	[[ $output == *$'\033[31m=> [Repo] master - could not fast-forward'* ]]
+	[[ $output == *$'\033[31m1 need attention\033[0m'* ]]
+}
+
+@test "quiet lists a repository's stashes under its line, tabbed, then a blank line before the next" {
+	printf '[Demo]\nRepo  %s  %s\nSecond  %s  %s/second\n' "$(origin_url Repo)" "$REPO" "$(origin_url Second)" "$BATS_TEST_TMPDIR" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
+	echo older >"$REPO/file.txt"
+	git -C "$REPO" stash push -q -m mine
+	echo newer >"$REPO/file.txt"
+	git -C "$REPO" stash push -q -m second
+	update Demo --quiet --no-clone
+	[ "$status" -eq 0 ]
+	[[ $output == *$'[Repo] master - up to date\n\n\t* Stashes =>\n\t\t* stash@{0}: On master: second\n\t\t* stash@{1}: On master: mine\n\n=> [Second] not cloned'* ]]
+	[ "$(git -C "$REPO" stash list | wc -l | tr -d ' ')" -eq 2 ]
+}
+
+@test "the stash list is quiet-only" {
+	echo older >"$REPO/file.txt"
+	git -C "$REPO" stash push -q -m mine
+	update Demo
+	[ "$status" -eq 0 ]
+	[[ $output != *"Stashes =>"* ]]
 }
 
 @test "an unknown group or repository is reported, nothing is cloned" {

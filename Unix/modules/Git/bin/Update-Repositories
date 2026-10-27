@@ -39,7 +39,10 @@
 #                                paths; with --archive the copies land there instead of the
 #                                Desktop (the Windows -InCurrentDirectory)
 #   --no-clone                   report missing repositories as skipped instead of cloning them
-#   --quiet                      one line per repository plus a totals line, git silenced
+#   --quiet                      one line per repository plus a totals line, git silenced; each
+#                                line and count colored by its bucket (updated green, up to date
+#                                white, need attention red, skipped yellow), and a repository's
+#                                stashes listed under its line, one and two tabs in, in white
 #   --include-default-branch     also fast-forward each default branch while another one is
 #                                checked out (git fetch origin <default>:<default>); default from
 #                                `include-default-branch on|off` in repositories.conf
@@ -267,17 +270,43 @@ while read -r group line; do
 		*) attention=$((attention + 1)) ;;
 	esac
 	if [ "$quiet" -eq 1 ]; then
-		# A blank line separates a group heading from its first repository; the rest of the
-		# group's lines follow without one.
+		# A blank line separates a group heading (or the previous repository's stash list) from
+		# the next repository; the rest of the group's lines follow without one.
 		lead=-n
 		[ "$first_after_heading" -eq 1 ] && lead=''
-		if [ "$REPO_LEVEL" = Success ]; then log_success ${lead:+"$lead"} "$REPO_LINE"; else log_warning ${lead:+"$lead"} "$REPO_LINE"; fi
+		# Colored by bucket: updated green, up to date white, need attention red, skipped yellow.
+		case $REPO_CATEGORY in
+			Updated) log_success ${lead:+"$lead"} "$REPO_LINE" ;;
+			UpToDate) log_step ${lead:+"$lead"} "=> $REPO_LINE" ;;
+			Skipped) log_segments ${lead:+"$lead"} warning "=> $REPO_LINE" ;;
+			*) log_error ${lead:+"$lead"} "$REPO_LINE" ;;
+		esac
+		# The stashes the repository holds, whoever made them, so none is forgotten. Only for a
+		# folder that is its own repository: git -C anywhere else would list the stashes of
+		# whichever repository encloses it (an archive copy has no .git of its own).
+		stashes=''
+		case $REPO_OUTCOME in
+			NotConfigured | NotCloned | NotARepository) ;;
+			*)
+				if cdup=$(git -C "$dir" rev-parse --show-cdup 2>/dev/null) && [ -z "$cdup" ]; then
+					stashes=$(git -C "$dir" stash list 2>/dev/null)
+				fi
+				;;
+		esac
+		if [ -n "$stashes" ]; then
+			log_step $'\t* Stashes =>'
+			while IFS= read -r stash; do
+				[ -n "$stash" ] && log_step -n $'\t\t'"* $stash"
+			done <<<"$stashes"
+			first_after_heading=1
+			continue
+		fi
 	fi
 	first_after_heading=0
 done <<<"$selected"
 
-# Each count in its own color, whatever its value: updated blue, up to date green, need attention
-# red, skipped yellow.
-log_segments '' "=> Repositories => " info "$updated updated" '' ", " success "$up_to_date up to date" '' ", " \
+# Each count in the color of its repository lines, whatever its value: updated green, up to date
+# white, need attention red, skipped yellow.
+log_segments '' "=> Repositories => " success "$updated updated" '' ", " '' "$up_to_date up to date" '' ", " \
 	error "$attention need attention" '' ", " warning "$skipped skipped"
 [ "$attention" -eq 0 ] || exit 1
