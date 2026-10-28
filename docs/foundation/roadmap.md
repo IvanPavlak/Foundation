@@ -9,7 +9,7 @@ written when 1.0.0 is cut, and WinuX's ladder binds from then on.
 | --- | --- | --- |
 | 0.1.0 | Extraction | Foundation is its own repository with green CI and its docs site up, and a fork of WinuX merges it as a second upstream |
 | 0.2.0 | Proven standalone | A fresh macOS user or virtual machine bootstraps from a plain clone and passes the end-to-end check below; what breaks is fixed and the getting-started docs are written from that run |
-| 0.3.0 | Fork model proven | Several real Foundation releases merged into a fork of both upstreams with `Merge-Upstream --owned-only` and no hand fixes; a check of the mirrored files against a pinned WinuX commit; a first outside-forker pass over the docs |
+| 0.3.0 | Fork model proven | Several real Foundation releases merged into a fork of both upstreams with `Merge-Upstreams` and no hand fixes; a check of the mirrored files against a pinned WinuX commit; a first outside-forker pass over the docs |
 | 0.4.0 | Daily-use improvements | Better Mac-native options found in use (closest equivalent first, better options later), each landing in WinuX too where it applies |
 | 0.5.0 | Cross-half parity | A parity table against WinuX 1.x on this page, every gap closed or recorded as out of scope, and the rule that a change to one half lands in both |
 | 0.6.0 - 0.8.x | Contract review | Every command name, flag, config line kind and Bootstrap step reviewed once; the Windows-style names get a final keep-or-rename decision; every rename lands now, with migration notes |

@@ -99,3 +99,14 @@ repositories.conf|startup-day-start-hour|6|modules/Git/bin/Invoke-StartupReposit
 ROWS
 	[ "$failed" -eq 0 ]
 }
+
+@test "upstream.conf is a plain manifest: the four keys once, own and mirror lines, nothing per machine" {
+	manifest=$UNIX_DIR/config/upstream.conf
+	run awk '!/^[[:space:]]*(#|$)/ { print $1 }' "$manifest"
+	[ -z "$(printf '%s\n' "$output" | grep -vxE 'name|url|tag-prefix|changelog|own|mirror')" ]
+	for key in name url tag-prefix changelog; do
+		[ "$(printf '%s\n' "$output" | grep -cx -- "$key")" -eq 1 ]
+	done
+	[ "$(awk '$1 == "name" { print $2 }' "$manifest")" = foundation ]
+	[ ! -e "$UNIX_DIR/config/upstream.local.conf" ]
+}

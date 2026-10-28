@@ -1,5 +1,5 @@
 <!--
-Thanks for contributing to Foundation! Please read CONTRIBUTING.md first.
+Thanks for contributing to Foundation! Please read Unix/CONTRIBUTING.md first.
 Non-trivial changes should start as an issue or Discussion so the approach can be agreed.
 The maintainer reviews and authorizes all merges, so a complete PR speeds up review.
 -->
@@ -16,7 +16,7 @@ Closes #
 
 - [ ] Bug fix
 - [ ] New command, flag or config line kind
-- [ ] Rename or removal of a command, flag, config line kind or Bootstrap step (with a migration note in `CHANGELOG.md`; from 1.0.0 on, a deprecation first - see VERSIONING.md)
+- [ ] Rename or removal of a command, flag, config line kind or Bootstrap step (with a migration note in `Unix/CHANGELOG.md`; from 1.0.0 on, a deprecation first - see Unix/VERSIONING.md)
 - [ ] Documentation only
 - [ ] Tests only
 - [ ] Refactor / chore (no behavior change)
@@ -43,10 +43,10 @@ Run-Tests ...
 
 ## Documentation & manifests
 
-- [ ] I updated `docs/unix/modules/<Module>.md` and the module's `module.conf` for any added/renamed/removed/changed command.
-- [ ] I added/updated its guide under `docs/unix/guides/<module>/` and that folder's `README.md`.
-- [ ] I updated `docs/unix/configuration.md` and the file's header for a new or changed config line kind.
-- [ ] I updated `docs/unix/_sidebar.md` and `docs/unix/docs_overview.md` if a page was added/removed.
+- [ ] I updated `docs/foundation/modules/<Module>.md` and the module's `module.conf` for any added/renamed/removed/changed command.
+- [ ] I added/updated its guide under `docs/foundation/guides/<module>/` and that folder's `README.md`.
+- [ ] I updated `docs/foundation/configuration.md` and the file's header for a new or changed config line kind.
+- [ ] I updated `docs/foundation/_sidebar.md` and `docs/foundation/docs_overview.md` if a page was added/removed.
 - [ ] `List-Functions --list-discrepancies` reports nothing.
 - [ ] N/A - no command or config changed.
 

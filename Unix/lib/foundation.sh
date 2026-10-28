@@ -14,7 +14,7 @@
 #
 # Written to run under bash 3.2 as well (no associative arrays, no mapfile, no ${x,,}) so the
 # pure helpers stay testable on a stock macOS; the version gate is a policy decision, not a
-# technical need of this file. See docs/unix/README.md.
+# technical need of this file. See docs/foundation/README.md.
 
 # Guard against double sourcing.
 if [ -n "${FOUNDATION_LIB_LOADED:-}" ]; then
@@ -118,12 +118,12 @@ foundation_module_name() { # DIR
 }
 
 # The page of module NAME (foundation_module_name), relative to the repository root:
-# docs/unix/modules/<Module>.md, or docs/unix/custom/<module>.md (lowercase, as docs/custom on
+# docs/foundation/modules/<Module>.md, or docs/foundation/custom/<module>.md (lowercase, as docs/custom on
 # Windows) for a Custom module.
 foundation_module_page() { # NAME
 	case $1 in
-		Custom/*) printf 'docs/unix/custom/%s.md\n' "$(foundation_lower "${1#Custom/}")" ;;
-		*) printf 'docs/unix/modules/%s.md\n' "$1" ;;
+		Custom/*) printf 'docs/foundation/custom/%s.md\n' "$(foundation_lower "${1#Custom/}")" ;;
+		*) printf 'docs/foundation/modules/%s.md\n' "$1" ;;
 	esac
 }
 

@@ -99,4 +99,4 @@ built as above (`Brewfile.local` for `Unix/Brewfile.local`).
 
 - [Bootstrap a Mac](bootstrap.md) - which steps back up what on a first run
 - [Troubleshooting](troubleshooting.md) - recovery recipes
-- [Backups on Windows](https://ivanpavlak.github.io/WinuX/#/reference/backups) - the same sink and contract in WinuX
+- [Backups on Windows](https://ivanpavlak.github.io/WinuX/#/winux/reference/backups) - the same sink and contract in WinuX

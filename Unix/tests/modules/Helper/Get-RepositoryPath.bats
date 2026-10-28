@@ -26,9 +26,9 @@ setup() {
 
 @test "--start-path walks up from any folder of another tree to its anchor file" {
 	other=$(cd "$BATS_TEST_TMPDIR" && pwd -P)/clone
-	mkdir -p "$other/Unix/lib" "$other/Unix/modules/Helper/bin" "$other/docs/unix"
+	mkdir -p "$other/Unix/lib" "$other/Unix/modules/Helper/bin" "$other/docs/foundation"
 	touch "$other/Unix/lib/foundation.sh"
-	run "${BASH:-bash}" "$cmd" --start-path "$other/docs/unix"
+	run "${BASH:-bash}" "$cmd" --start-path "$other/docs/foundation"
 	[ "$status" -eq 0 ]
 	[ "$output" = "$other" ]
 	run "${BASH:-bash}" "$cmd" modules -StartPath "$other/Unix/modules/Helper/bin"

@@ -72,7 +72,7 @@ module it reloaded. `List-Functions --list-discrepancies` checks every manifest 
 folder and its page.
 
 A fork's own commands live in the [Custom area](custom/README.md), `Unix/modules/Custom/<Module>`,
-with the same layout and their pages in `docs/unix/custom`. The engine wins on a name clash.
+with the same layout and their pages in `docs/foundation/custom`. The engine wins on a name clash.
 
 | Module | Contents |
 | --- | --- |

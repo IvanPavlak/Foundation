@@ -14,7 +14,7 @@
 # gives 70. Each window is scaled around its center, kept at least 100 points wide and high and
 # clamped to the work area. A tiled window is floated first: a tile
 # always fills its slot, so resizing it only moves the split to the neighbour (and an app minimum
-# width can push it off screen) - measured under AeroSpace 0.21, see docs/unix/modules/Window.md.
+# width can push it off screen) - measured under AeroSpace 0.21, see docs/foundation/modules/Window.md.
 # Reset-Windows tiles everything again. Each window's frame is read from the window server by its
 # window id and set through the Accessibility API on that same window (found by its frame), so
 # same-titled windows of one app are each scaled once; setting needs the terminal to be allowed in

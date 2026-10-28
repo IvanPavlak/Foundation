@@ -3,10 +3,10 @@
 #
 # Usage: List-Functions [PATTERN...] [--module NAME...] [--category [NAME...]] [--function [NAME...]] [--list-discrepancies] [--quiet] [--names]
 #
-# Parses the man-style entries of the module pages docs/unix/modules/<Module>.md - a
+# Parses the man-style entries of the module pages docs/foundation/modules/<Module>.md - a
 # `## [Name](url)` heading followed by `- **Key:** value` bullets - exactly as the Windows
 # List-Functions parses docs/modules; the fork-only modules of the Custom area
-# (Unix/modules/Custom/<Module>) are documented in docs/unix/custom/<module>.md and listed as
+# (Unix/modules/Custom/<Module>) are documented in docs/foundation/custom/<module>.md and listed as
 # Custom/<Module>. Every module gets a centered `[Module]` border; each entry shows its name, its
 # description and then every other bullet as `Key => value`, one more indent and the next colour
 # each; a `[Total function count => N]` border closes the list and the discrepancy report follows
@@ -72,11 +72,11 @@ for argument in "$@"; do
 	esac
 done
 
-pages=$DOTFILES_ROOT/docs/unix/modules
-[ -d "$pages" ] || foundation_die "Missing docs/unix/modules"
+pages=$DOTFILES_ROOT/docs/foundation/modules
+[ -d "$pages" ] || foundation_die "Missing docs/foundation/modules"
 # The Custom area's pages, without its README (the area's overview, no module).
 custom_pages=()
-for page in "$DOTFILES_ROOT"/docs/unix/custom/*.md; do
+for page in "$DOTFILES_ROOT"/docs/foundation/custom/*.md; do
 	[ -f "$page" ] && [ "${page##*/}" != README.md ] && custom_pages+=("$page")
 done
 
@@ -163,7 +163,7 @@ page_key() {
 # whitespace separators, so an empty field would vanish).
 entries=$(awk '
 	function flush() { if (name != "") printf "%s\037%s\037%s\037%s\n", module, name, desc, pairs; name = "" }
-	FNR == 1 { flush(); custom = (FILENAME ~ /\/docs\/unix\/custom\//); module = FILENAME; sub(/.*\//, "", module); sub(/\.md$/, "", module); if (custom) module = "Custom/" module }
+	FNR == 1 { flush(); custom = (FILENAME ~ /\/docs\/foundation\/custom\//); module = FILENAME; sub(/.*\//, "", module); sub(/\.md$/, "", module); if (custom) module = "Custom/" module }
 	/^## \[/ { flush(); name = $0; sub(/^## \[/, "", name); sub(/\].*/, "", name); desc = pairs = ""; inblock = 1; seen = 0; next }
 	# The bullet block may be preceded by one blank line; it ends at the first other line.
 	inblock && /^[[:space:]]*$/ { if (seen) inblock = 0; next }
@@ -250,7 +250,7 @@ discrepancy_report() {
 		module = $1; previous = $2 }')
 	for page in "$pages"/*.md; do
 		module=$(basename "$page" .md)
-		[ "$module" != Custom ] && [ -d "$FOUNDATION_UNIX/modules/$module" ] || problem "Page without a module => docs/unix/modules/$module.md" ''
+		[ "$module" != Custom ] && [ -d "$FOUNDATION_UNIX/modules/$module" ] || problem "Page without a module => docs/foundation/modules/$module.md" ''
 	done
 	for page in ${custom_pages[@]+"${custom_pages[@]}"}; do
 		module=$(basename "$page" .md)
@@ -258,7 +258,7 @@ discrepancy_report() {
 		for dir in "$FOUNDATION_UNIX"/modules/Custom/*/; do
 			[ -d "$dir" ] && foundation_ieq "$(basename "$dir")" "$module" && found_module=1
 		done
-		[ "$found_module" -eq 1 ] || problem "Page without a module => docs/unix/custom/$module.md" ''
+		[ "$found_module" -eq 1 ] || problem "Page without a module => docs/foundation/custom/$module.md" ''
 	done
 }
 
@@ -275,7 +275,7 @@ if [ "$discrepancies" -eq 1 ]; then
 		print_report "$report"
 		exit 1
 	fi
-	[ "$quiet" -eq 1 ] || printf '\n%s=> No discrepancies between the Unix modules, their manifests and docs/unix/modules!%s\n' "$c_success" "$reset"
+	[ "$quiet" -eq 1 ] || printf '\n%s=> No discrepancies between the Unix modules, their manifests and docs/foundation/modules!%s\n' "$c_success" "$reset"
 	exit 0
 fi
 

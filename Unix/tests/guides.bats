@@ -1,9 +1,9 @@
 #!/usr/bin/env bats
 # Infrastructure-ConfigurationGuides analog: every command line of every manifest has exactly one
-# configuration guide under docs/unix/guides (docs/unix/guides/README.md has the rules and
+# configuration guide under docs/foundation/guides (docs/foundation/guides/README.md has the rules and
 # templates), listed in its folder's index; a FULL guide keeps the template's headings and decision
 # shape and names every Unix/config file the command reads; a STUB carries the sentinel sentence and
-# belongs to a command that reads none. The Foundation sidebar (docs/unix/_sidebar.md) lists every
+# belongs to a command that reads none. The Foundation sidebar (docs/foundation/_sidebar.md) lists every
 # module page, every guide index and the FoundationConfigurator page.
 
 load helpers
@@ -12,7 +12,7 @@ load doclinks
 
 setup() {
 	setup_foundation
-	GUIDES=$(dirname "$UNIX_DIR")/docs/unix/guides
+	GUIDES=$(dirname "$UNIX_DIR")/docs/foundation/guides
 	SENTINEL='This command reads no `Unix/config` files. There is nothing to configure.'
 }
 
@@ -56,19 +56,19 @@ report() {
 @test "the Foundation sidebar lists every module page, every guide index and the configurator page" {
 	# Infrastructure-ConfigurationGuides on Windows: the sidebar lists every module guide index and
 	# the configurator page exists and is registered. The Unix pages have their own sidebar, which
-	# docsify shows on every page under /unix/; the shared docs/_sidebar.md stays WinuX's.
+	# docsify shows on every page under /foundation/; the root docs/_sidebar.md is the landing.
 	problems=''
 	docs=$(dirname "$UNIX_DIR")/docs
-	sidebar=$docs/unix/_sidebar.md
-	[ -f "$sidebar" ] || problems+="missing docs/unix/_sidebar.md"$'\n'
-	[ -f "$docs/unix/foundation-configurator.md" ] || problems+="missing docs/unix/foundation-configurator.md"$'\n'
-	pages=(unix/foundation-configurator.md)
+	sidebar=$docs/foundation/_sidebar.md
+	[ -f "$sidebar" ] || problems+="missing docs/foundation/_sidebar.md"$'\n'
+	[ -f "$docs/foundation/foundation-configurator.md" ] || problems+="missing docs/foundation/foundation-configurator.md"$'\n'
+	pages=(foundation/foundation-configurator.md)
 	while IFS= read -r dir; do
 		module=$(foundation_module_name "$dir")
-		pages+=("$(foundation_module_page "$module" | sed 's#^docs/##')" "unix/guides/$(foundation_lower "$module")/README.md")
+		pages+=("$(foundation_module_page "$module" | sed 's#^docs/##')" "foundation/guides/$(foundation_lower "$module")/README.md")
 	done < <(foundation_module_dirs)
 	for page in "${pages[@]}"; do
-		grep -qF -- "](/$page)" "$sidebar" 2>/dev/null || problems+="docs/unix/_sidebar.md does not list /$page"$'\n'
+		grep -qF -- "](/$page)" "$sidebar" 2>/dev/null || problems+="docs/foundation/_sidebar.md does not list /$page"$'\n'
 	done
 	report
 }

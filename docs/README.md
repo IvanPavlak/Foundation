@@ -1,12 +1,16 @@
 # Foundation Documentation
 
-The documentation lives under [`unix/`](unix/README.md), the same path it has in a fork that holds
-both WinuX and Foundation. The site ([ivanpavlak.github.io/Foundation](https://ivanpavlak.github.io/Foundation/))
-opens on [the Foundation overview](unix/README.md); serve it locally from the repository root with
+Foundation's pages live under [`foundation/`](foundation/README.md), the same path they have in a fork
+that merges both WinuX and Foundation. Serve the site locally from the repository root with
 `npx docsify-cli serve docs`.
 
-- [Overview and getting started](unix/README.md)
-- [Commands](unix/commands.md) and [configuration guides](unix/guides/README.md)
-- [Configuration](unix/configuration.md)
-- [Fork Model](unix/fork-model.md) and [Roadmap](unix/roadmap.md)
-- [Docs overview](docs_overview.md) - how the docs are laid out and maintained
+- [Overview and getting started](foundation/README.md)
+- [Commands](foundation/commands.md) and [configuration guides](foundation/guides/README.md)
+- [Configuration](foundation/configuration.md)
+- [Fork Model](foundation/fork-model.md) and [Roadmap](foundation/roadmap.md)
+- [Docs overview](foundation/docs_overview.md) - how the docs are laid out and maintained
+
+> [!NOTE]
+> Foundation's pages moved from `unix/` to `foundation/`: a link of the form `#/unix/commands` is now
+> `#/foundation/commands`. Foundation is one half of a two-OS dotfiles system together with
+> [WinuX](https://github.com/IvanPavlak/WinuX), its Windows counterpart; a fork can merge both.

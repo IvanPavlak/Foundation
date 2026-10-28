@@ -71,8 +71,8 @@ setup() {
 	# A copy of the pages without the Countdown entry: Countdown becomes undocumented.
 	export DOTFILES_ROOT=$BATS_TEST_TMPDIR/root
 	mkdir -p "$DOTFILES_ROOT/docs"
-	cp -R "$UNIX_DIR/../docs/unix" "$DOTFILES_ROOT/docs/unix"
-	awk '/^## \[Countdown\]/ { skip = 1; next } skip && /^## / { skip = 0 } !skip' "$UNIX_DIR/../docs/unix/modules/Helper.md" >"$DOTFILES_ROOT/docs/unix/modules/Helper.md"
+	cp -R "$UNIX_DIR/../docs/foundation" "$DOTFILES_ROOT/docs/foundation"
+	awk '/^## \[Countdown\]/ { skip = 1; next } skip && /^## / { skip = 0 } !skip' "$UNIX_DIR/../docs/foundation/modules/Helper.md" >"$DOTFILES_ROOT/docs/foundation/modules/Helper.md"
 	run "${BASH:-bash}" "$cmd" --list-discrepancies
 	[ "$status" -eq 1 ]
 	[[ $output == *" [Discrepancy Report] "* ]]
@@ -90,11 +90,11 @@ setup() {
 	# A copy of the pages with the Countdown entry moved to the end of the Helper page.
 	export DOTFILES_ROOT=$BATS_TEST_TMPDIR/root
 	mkdir -p "$DOTFILES_ROOT/docs"
-	cp -R "$UNIX_DIR/../docs/unix" "$DOTFILES_ROOT/docs/unix"
+	cp -R "$UNIX_DIR/../docs/foundation" "$DOTFILES_ROOT/docs/foundation"
 	awk '/^## \[Countdown\]/ { moving = 1 } moving && /^## / && !/^## \[Countdown\]/ { moving = 0 }
 		moving { block = block $0 "\n"; next } { print } END { printf "\n%s", block }' \
-		"$UNIX_DIR/../docs/unix/modules/Helper.md" >"$DOTFILES_ROOT/docs/unix/modules/Helper.md"
-	last=$(grep -oE '^## \[[^]]+\]' "$UNIX_DIR/../docs/unix/modules/Helper.md" | tail -1 | sed 's/^## \[//; s/\]$//')
+		"$UNIX_DIR/../docs/foundation/modules/Helper.md" >"$DOTFILES_ROOT/docs/foundation/modules/Helper.md"
+	last=$(grep -oE '^## \[[^]]+\]' "$UNIX_DIR/../docs/foundation/modules/Helper.md" | tail -1 | sed 's/^## \[//; s/\]$//')
 	run "${BASH:-bash}" "$cmd" --list-discrepancies
 	[ "$status" -eq 1 ]
 	[[ $output == *"[Helper] Countdown belongs before $last (a page lists its entries alphabetically)"* ]]
@@ -122,11 +122,11 @@ setup() {
 	# A copy of the pages whose Countdown entry links a page in its description and its usage.
 	export DOTFILES_ROOT=$BATS_TEST_TMPDIR/root COLUMNS=400
 	mkdir -p "$DOTFILES_ROOT/docs"
-	cp -R "$UNIX_DIR/../docs/unix" "$DOTFILES_ROOT/docs/unix"
+	cp -R "$UNIX_DIR/../docs/foundation" "$DOTFILES_ROOT/docs/foundation"
 	awk '/^## \[Countdown\]/ { entry = 1 }
 		entry && /^- \*\*Description:\*\*/ { $0 = $0 " See [Some Page](../some-page.md#an-anchor) and [`Other`](https://example.invalid)." }
 		entry && /^- \*\*Usage:\*\*/ { $0 = $0 ", [Countdown 5](#countdown)"; entry = 0 }
-		{ print }' "$UNIX_DIR/../docs/unix/modules/Helper.md" >"$DOTFILES_ROOT/docs/unix/modules/Helper.md"
+		{ print }' "$UNIX_DIR/../docs/foundation/modules/Helper.md" >"$DOTFILES_ROOT/docs/foundation/modules/Helper.md"
 	run "${BASH:-bash}" "$cmd" Countdown
 	[ "$status" -eq 0 ]
 	[[ $output == *"See Some Page and Other."* ]]

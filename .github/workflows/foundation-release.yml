@@ -1,0 +1,76 @@
+name: Foundation Release
+
+# Tags and publishes a Foundation release from its changelog, so nothing is tagged by hand
+# (Unix/VERSIONING.md).
+#
+# On every push to master it reads the newest "## [x.y.z]" heading of Unix/CHANGELOG.md. When the tag
+# foundation/vX.Y.Z does not exist yet it creates it, annotated, on the pushed commit, and publishes
+# the GitHub release with that changelog section as its body. A merge that only touched [Unreleased]
+# finds its newest version already tagged and does nothing.
+#
+# It runs only in the repository the url line of Unix/config/upstream.conf names, so the same file
+# inside a fork that merges Foundation never tags the fork.
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: foundation-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Tag and release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Create the tag and the release when the changelog has a new release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          manifest=Unix/config/upstream.conf
+          url=$(awk '$1 == "url" { print $2; exit }' "$manifest")
+          prefix=$(awk '$1 == "tag-prefix" { print $2; exit }' "$manifest")
+          changelog=$(awk '$1 == "changelog" { print $2; exit }' "$manifest")
+          home=$(printf '%s' "$url" | sed -E 's#^https?://[^/]*github\.com/##; s#\.git$##; s#/$##' | tr '[:upper:]' '[:lower:]')
+          here=$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          if [ "$home" != "$here" ]; then
+            echo "This is $GITHUB_REPOSITORY, not $home (the manifest's url) - a fork is never tagged here."
+            exit 0
+          fi
+          version=$(sed -nE 's/^## \[([0-9]+\.[0-9]+\.[0-9]+[^]]*)\].*/\1/p' "$changelog" | head -n 1)
+          if [ -z "$version" ]; then
+            echo "$changelog has no released version yet - nothing to tag."
+            exit 0
+          fi
+          tag="$prefix/v$version"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "$tag exists - the newest release is already tagged."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" -m "$tag" "$GITHUB_SHA"
+          git push origin "refs/tags/$tag"
+
+          # The release body is the changelog section of this version (up to the next "## [").
+          awk -v v="$version" '
+            index($0, "## [" v "]") == 1 { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' "$changelog" > "$RUNNER_TEMP/release-notes.md"
+          [ -s "$RUNNER_TEMP/release-notes.md" ] ||
+            printf 'See [%s](https://github.com/%s/blob/master/%s).\n' "$changelog" "$GITHUB_REPOSITORY" "$changelog" > "$RUNNER_TEMP/release-notes.md"
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "Foundation v$version" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" --verify-tag
+          echo "Released $tag."

@@ -36,7 +36,7 @@ mini_repo() {
 	printf 'load ../../helpers\n@test "two" { run Cmd-Two; }\n' >Unix/tests/modules/A/Cmd-Two.bats
 	printf 'load ../../helpers\n@test "w" { run Open-Workspace Sample; }\n' >Unix/tests/modules/B/Open-Workspace.bats
 	printf 'load helpers\n# Cmd-One is only named in this comment\n@test "o" { :; }\n' >Unix/tests/other.bats
-	printf 'load helpers\n@test "docs" { ls "$DOTFILES_ROOT/docs/unix/modules"; }\n' >Unix/tests/commands.bats
+	printf 'load helpers\n@test "docs" { ls "$DOTFILES_ROOT/docs/foundation/modules"; }\n' >Unix/tests/commands.bats
 	corpus=$BATS_TEST_TMPDIR/corpus
 	testrun_corpus "$corpus"
 }
@@ -218,7 +218,7 @@ picked() {
 
 @test "a file outside Unix selects the suites that read its folder" {
 	mini_repo
-	run picked $'M\tdocs/unix/modules/A.md'
+	run picked $'M\tdocs/foundation/modules/A.md'
 	[ "$output" = Unix/tests/commands.bats ]
 	run picked $'M\tWindows/PowerShell/Profile.ps1'
 	[ -z "$output" ]
@@ -234,7 +234,7 @@ picked() {
 @test "the lint runs for a changed shell file under Unix only" {
 	printf 'M\tUnix/lib/foo.sh\n' >"$BATS_TEST_TMPDIR/c1"
 	printf 'M\tUnix/modules/A/bin/Cmd-One\n' >"$BATS_TEST_TMPDIR/c2"
-	printf 'M\tUnix/config/workspaces.conf\nM\tdocs/unix/README.md\nM\tUnix/tests/fixtures/config/apps.conf\n' >"$BATS_TEST_TMPDIR/c3"
+	printf 'M\tUnix/config/workspaces.conf\nM\tdocs/foundation/README.md\nM\tUnix/tests/fixtures/config/apps.conf\n' >"$BATS_TEST_TMPDIR/c3"
 	testrun_needs_lint "$BATS_TEST_TMPDIR/c1"
 	testrun_needs_lint "$BATS_TEST_TMPDIR/c2"
 	run testrun_needs_lint "$BATS_TEST_TMPDIR/c3"

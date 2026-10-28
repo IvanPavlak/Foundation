@@ -1,6 +1,6 @@
 # Shell Conventions
 
-How code, tests, docs and configuration are written in Foundation (`Unix/`, `docs/unix/`). Read
+How code, tests, docs and configuration are written in Foundation (`Unix/`, `docs/foundation/`). Read
 [UNIX_CONTEXT](../Context/UNIX_CONTEXT.md) first for the layout. These rules bind every change;
 the suites named after a rule enforce it.
 
@@ -29,7 +29,7 @@ the suites named after a rule enforce it.
   `foundation_normalize_args "$@"` and `foundation_common_flags "$@"`.
 - The header comment is the man page: `# Name - one line.`, a blank comment line, `# Usage: ...`,
   then the behaviour. `--help` prints it, `foundation_normalize_args` reads its `--flags` to accept
-  the Windows spelling (`-OwnedOnly` for `--owned-only`, `-WhatIf` for `--dry-run`), and the docs
+  the Windows spelling (`-IncludeCurrent` for `--include-current`, `-WhatIf` for `--dry-run`), and the docs
   entry is written from it.
 - A flag the command does not know is an error, never a value; nothing runs before arguments are
   checked.
@@ -58,7 +58,7 @@ a Linux driver can replace it later.
 - Overlay rules: lines before the first section are added after the base ones (the last `KEY`
   line wins for `conf_value`); a `[Section]` replaces the base section whole; `-LINE` takes a base
   line back; `@TYPE` (or `@TYPE,TYPE`) limits a line to machine types of `machines.conf`.
-- A new file or line kind: document it in the file's header, in `docs/unix/configuration.md`
+- A new file or line kind: document it in the file's header, in `docs/foundation/configuration.md`
   (the Files table and its section) and in the guide of every command that reads it; teach
   `Test-ConfigurationSchema` when it refers to another file.
 
@@ -85,19 +85,19 @@ a Linux driver can replace it later.
 Docs are updated in the same change as the code; a change to a documented surface without its
 page is incomplete.
 
-- A command added, renamed or removed: its entry on `docs/unix/modules/<Module>.md` (a
+- A command added, renamed or removed: its entry on `docs/foundation/modules/<Module>.md` (a
   `## [Name](source URL)` heading followed at once by the `- **Description:**` and
   `- **Usage:**` bullets, plus `- **Alias:**` when it has one; alphabetical), the `command` line of
-  `Unix/modules/<Module>/module.conf`, its guide `docs/unix/guides/<module>/<Command>.md` (FULL when
-  it reads a `Unix/config` file, STUB otherwise; templates in `docs/unix/guides/README.md`) and its
+  `Unix/modules/<Module>/module.conf`, its guide `docs/foundation/guides/<module>/<Command>.md` (FULL when
+  it reads a `Unix/config` file, STUB otherwise; templates in `docs/foundation/guides/README.md`) and its
   row in that folder's `README.md`, and its suite. `List-Functions --list-discrepancies` must
   report none; `tests/commands.bats` and `tests/guides.bats` enforce the set.
 - A flag or behaviour change: the entry's Usage and Description, and the guide when it reads
   configuration.
-- A doc page or module added or removed: `docs/unix/_sidebar.md` and `docs/unix/docs_overview.md`.
-- A `Unix/Brewfile` change: `docs/unix/software-list.md` (`tests/docpages.bats` compares them).
-- A new failure mode or workaround: `docs/unix/troubleshooting.md`.
-- Links inside `docs/unix` are relative and checked by `tests/doclinks.bats`; a link to a WinuX
-  page is absolute (`https://ivanpavlak.github.io/WinuX/#/...`).
+- A doc page or module added or removed: `docs/foundation/_sidebar.md` and `docs/foundation/docs_overview.md`.
+- A `Unix/Brewfile` change: `docs/foundation/software-list.md` (`tests/docpages.bats` compares them).
+- A new failure mode or workaround: `docs/foundation/troubleshooting.md`.
+- Links inside `docs/foundation` are relative and checked by `tests/doclinks.bats`; a link to a WinuX
+  page is absolute (`https://ivanpavlak.github.io/WinuX/#/winux/...`).
 - Docs and guides are public pages: generic values only (`MyProject`, `MyRepo`, `My-Mac`,
   `you@example.com`, `$DEV/MyRepo`), never a real host, address, account or path.

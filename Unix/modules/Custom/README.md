@@ -22,8 +22,8 @@ Unix/modules/
 Each Custom module has:
 
 - its `module.conf` and `bin`, exactly as an engine module;
-- its page `docs/unix/custom/<module>.md` (lowercase), in the same man-style entry format as
-  `docs/unix/modules/<Module>.md`;
+- its page `docs/foundation/custom/<module>.md` (lowercase), in the same man-style entry format as
+  `docs/foundation/modules/<Module>.md`;
 - one suite per command, `Unix/tests/modules/Custom/<Module>/<Command>.bats` (it loads
   `../../../helpers`).
 
@@ -41,6 +41,6 @@ Each Custom module has:
 ## Graduating a command upstream
 
 Move `bin/<Command>` into the engine module's `bin`, its `command` line into that module's
-`module.conf`, its page entry into `docs/unix/modules/<Module>.md` and its suite into
+`module.conf`, its page entry into `docs/foundation/modules/<Module>.md` and its suite into
 `Unix/tests/modules/<Module>/` (the suite then loads `../../helpers`). Remove the Custom module
 once it is empty.

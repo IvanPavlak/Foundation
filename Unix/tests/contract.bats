@@ -2,7 +2,7 @@
 # Infrastructure-Contract analog: no command, documented flag, line kind of a shipped base
 # Unix/config file or Bootstrap step of the last release's baseline (contract-baseline.tsv) is gone
 # without a shipped deprecation, and every release's version bump matches its changelog sections.
-# Both skip until Foundation cuts 1.0.0 (a baseline and its CHANGELOG.md): no rules apply in 0.x, as in
+# Both skip until Foundation cuts 1.0.0 (a baseline and its Unix/CHANGELOG.md): no rules apply in 0.x, as in
 # WinuX before its 1.0.0. The checker itself is pinned on a miniature tree and changelog fixtures.
 
 load helpers
@@ -43,7 +43,7 @@ mini_unix() {
 }
 
 @test "every release's version bump matches its changelog sections" {
-	changelog=$(testrun_changelog_path "$ROOT") || skip "no Foundation CHANGELOG.md (in Dotfiles the root one is WinuX's)"
+	changelog=$(testrun_changelog_path "$ROOT") || skip "no Unix/CHANGELOG.md"
 	run testrun_version_bumps "$changelog"
 	[ -z "$output" ] || {
 		printf '%s\n' "$output"
@@ -178,15 +178,18 @@ MD
 	[ "${#lines[@]}" -eq 5 ]
 }
 
-@test "the changelog is Foundation's: FOUNDATION_CHANGELOG, else the root one outside Dotfiles" {
+@test "the changelog is Foundation's: FOUNDATION_CHANGELOG, else Unix/CHANGELOG.md, never the root pointer" {
 	repo=$BATS_TEST_TMPDIR/repo
-	mkdir -p "$repo"
+	mkdir -p "$repo/Unix"
 	printf '## [Unreleased]\n' >"$repo/CHANGELOG.md"
 	run testrun_changelog_path "$repo"
-	[ "$output" = "$repo/CHANGELOG.md" ]
+	[ "$status" -ne 0 ]
+	printf '## [Unreleased]\n' >"$repo/Unix/CHANGELOG.md"
+	run testrun_changelog_path "$repo"
+	[ "$output" = "$repo/Unix/CHANGELOG.md" ]
 	mkdir -p "$repo/Windows/PowerShell"
 	run testrun_changelog_path "$repo"
-	[ "$status" -ne 0 ]
+	[ "$output" = "$repo/Unix/CHANGELOG.md" ]
 	printf '## [Unreleased]\n' >"$BATS_TEST_TMPDIR/draft.md"
 	FOUNDATION_CHANGELOG=$BATS_TEST_TMPDIR/draft.md run testrun_changelog_path "$repo"
 	[ "$output" = "$BATS_TEST_TMPDIR/draft.md" ]

@@ -1,10 +1,11 @@
 #!/usr/bin/env bats
 # Infrastructure-DocumentationLinks analog for the Unix pages: every relative (or docsify-rooted)
-# Markdown link under docs/unix reaches a file, and a link to a heading of a Markdown page reaches
-# that heading's docsify anchor (docs/unix/_sidebar.md included). In a clone that holds both halves
-# the shared docs/_sidebar.md is WinuX's, byte for byte, so it carries no Unix or Decisions entry;
-# in Foundation alone (no Windows/ folder) the root sidebar is Foundation's own and those two
-# checks skip.
+# Markdown link under docs/foundation reaches a file, and a link to a heading of a Markdown page reaches
+# that heading's docsify anchor (docs/foundation/_sidebar.md included). Foundation's pages live in its
+# own folder: its sidebar links only pages under /foundation/ (and the WinuX docs). The root docs
+# landing (docs/README.md, docs/_sidebar.md) is a hallway file, the fork's or the root owner's, so
+# only its link to the Foundation overview is checked, and docs/index.html, the docsify shell every
+# project shares byte for byte, names no project.
 
 load helpers
 load doclinks
@@ -14,33 +15,37 @@ setup() {
 	DOCS=$(dirname "$UNIX_DIR")/docs
 }
 
-# Skips a test that holds only where WinuX's docs share the site.
-need_both_halves() {
-	[ -d "$(dirname "$UNIX_DIR")/Windows" ] || skip "Foundation alone: the root docs are its own"
-}
-
-@test "every link under docs/unix reaches its file and anchor" {
-	run doclinks_broken "$DOCS/unix" "$DOCS"
+@test "every link under docs/foundation reaches its file and anchor" {
+	run doclinks_broken "$DOCS/foundation" "$DOCS"
 	[ -z "$output" ] || {
 		printf '%s\n' "$output"
 		return 1
 	}
 }
 
-@test "the shared docs sidebar carries no Unix or Decisions entry" {
-	need_both_halves
-	# The Unix pages are reached through docs/unix/_sidebar.md and the fork-owned custom page; an
-	# entry here would make the shared sidebar differ from WinuX's.
-	run grep -nE '\]\(/?(unix|adr)/' "$DOCS/_sidebar.md"
-	[ "$status" -eq 1 ] || {
-		printf '%s\n' "$output"
+@test "the Foundation sidebar links only Foundation pages and the WinuX docs" {
+	# A docsify-rooted link outside /foundation/ would make the Foundation pages depend on a page of
+	# another project or of the fork.
+	run grep -noE '\]\(/[^)]*\)' "$DOCS/foundation/_sidebar.md"
+	[ "$status" -eq 0 ]
+	outside=$(printf '%s\n' "$output" | grep -vE '\]\(/foundation/' | grep -vE '\]\(/winux/README\.md\)' | grep -vE '\]\(/\)' || true)
+	[ -z "$outside" ] || {
+		printf '%s\n' "$outside"
 		return 1
 	}
 }
 
-@test "the fork-owned custom page links the Foundation docs" {
-	need_both_halves
-	grep -qF '](../unix/README.md)' "$DOCS/custom/README.md"
+@test "the root docs landing links the Foundation overview" {
+	grep -qE '\]\((\./|/)?foundation/(README\.md)?\)' "$DOCS/README.md" "$DOCS/_sidebar.md"
+}
+
+@test "docs/index.html names no project" {
+	[ -f "$DOCS/index.html" ]
+	run grep -niE 'winux|foundation|dotfiles' "$DOCS/index.html"
+	[ "$status" -eq 1 ] || {
+		printf '%s\n' "$output"
+		return 1
+	}
 }
 
 @test "the checker itself: a missing file, a missing anchor and a link inside code" {

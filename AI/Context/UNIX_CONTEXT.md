@@ -2,7 +2,7 @@
 
 > **Purpose**: Repository context for Foundation, the macOS counterpart of WinuX (the Unix half):
 > what lives where, how a command is built, which files are the source of truth. Read it before any
-> work under `Unix/` or `docs/unix/`; write code by [ShellConventions](../Instructions/ShellConventions.md).
+> work under `Unix/` or `docs/foundation/`; write code by [ShellConventions](../Instructions/ShellConventions.md).
 
 ## Safety - never act destructively on your own
 
@@ -14,18 +14,18 @@ Creating and editing files for the task and running read-only commands are fine.
 
 ## Source of truth
 
-The docsify pages under `docs/unix/` are the single source of truth. This file is a map and may
+The docsify pages under `docs/foundation/` are the single source of truth. This file is a map and may
 lag them; when they disagree, the pages win.
 
 | Question | Page |
 | --- | --- |
-| What a command does, its flags and alias | `docs/unix/modules/<Module>.md` (one man-style entry per command, parsed by `List-Functions`) |
-| What a command reads from `Unix/config` and how to set it | `docs/unix/guides/<module>/<Command>.md` |
-| The config file formats, base and overlay | `docs/unix/configuration.md` |
-| Bootstrap steps, chezmoi links, the first run | `docs/unix/bootstrap.md` |
-| Workspaces, layouts, AeroSpace | `docs/unix/macos-workspaces.md`, `docs/unix/adr/` |
-| Forking, `.local` overlays, merging upstream | `docs/unix/fork-model.md` |
-| Where the project is headed | `docs/unix/roadmap.md` |
+| What a command does, its flags and alias | `docs/foundation/modules/<Module>.md` (one man-style entry per command, parsed by `List-Functions`) |
+| What a command reads from `Unix/config` and how to set it | `docs/foundation/guides/<module>/<Command>.md` |
+| The config file formats, base and overlay | `docs/foundation/configuration.md` |
+| Bootstrap steps, chezmoi links, the first run | `docs/foundation/bootstrap.md` |
+| Workspaces, layouts, AeroSpace | `docs/foundation/macos-workspaces.md`, `docs/foundation/adr/` |
+| Forking, `.local` overlays, rooms and hallway, `Merge-Upstreams` | `docs/foundation/fork-model.md` |
+| Where the project is headed | `docs/foundation/roadmap.md` |
 
 ## Layout
 
@@ -51,8 +51,10 @@ Unix/
 Shared asset folders stay at the repository root at WinuX's paths (`Git/`, `Btop/`, `FastFetch/`,
 `WezTerm/`, `Oh-My-Posh/`, `Wallpapers/`, `LazyGit/`, `LazyDocker/`) and are linked by chezmoi. A
 file that must differ per OS gets a `Unix/` sibling (`FastFetch/Unix/`, `Btop/Unix/`, `Git/Unix/`).
-`Unix/config/upstream.conf` records which root paths Foundation owns and which it mirrors
-byte-identical from WinuX.
+`Unix/config/upstream.conf` is Foundation's upstream manifest: the paths it owns (its rooms) and
+the files every upstream ships byte-identical (`mirror`), read by `Merge-Upstreams`. Foundation's
+project documents (`CHANGELOG.md`, `VERSIONING.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CONTEXT.md`,
+...) live in `Unix/`; the root files of those names are generic pointers.
 
 ## A command
 
@@ -73,7 +75,9 @@ No central hub: one file per concern in `Unix/config`, read through `Unix/lib/co
 generic values; a fork's own values go in `NAME.local.conf`, which Foundation's `.gitignore`
 ignores and a fork may commit. Every line may start with `@TYPE` to apply on one machine type
 (`machines.conf`); the base ships the `Test` type only. `Test-ConfigurationSchema` checks the files
-against each other.
+against each other. The one exception is `upstream.conf`, the project manifest: plain `KEY VALUE`
+lines read from git by `Merge-Upstreams`, no `@TYPE` and no overlay (a fork's merge settings live
+in `Git/upstreams.local.conf`).
 
 ## Tests
 

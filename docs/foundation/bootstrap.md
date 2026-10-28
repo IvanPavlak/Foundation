@@ -1,6 +1,6 @@
 # Bootstrap a Mac
 
-`Bootstrap` is the macOS twin of the Windows [Bootstrap](https://ivanpavlak.github.io/WinuX/#/modules/bootstrap): one command that provisions the machine in a fixed order, where every step is idempotent and can be switched on or off per machine. Rerunning it converges the Mac on what the repository says.
+`Bootstrap` is the macOS twin of the Windows [Bootstrap](https://ivanpavlak.github.io/WinuX/#/winux/modules/bootstrap): one command that provisions the machine in a fixed order, where every step is idempotent and can be switched on or off per machine. Rerunning it converges the Mac on what the repository says.
 
 On a fresh Mac, `Unix/bootstrap.sh` does the first run on the stock bash 3.2: it installs chezmoi when needed, backs up the real files the dotfile links replace and runs `chezmoi init` and `chezmoi apply`, whose first apply installs Homebrew and Homebrew bash and runs `Bootstrap --with-initial-setup` (see [Getting started on a Mac](README.md#getting-started-on-a-mac)). Its first step, Initialize-Configuration, asks for the git identity, this Mac's name and machine type (chezmoi's answer is the default) and the dev root, and writes them into `git.local.conf` and `machines.local.conf`; a fork that committed its overlays is asked only what they lack. After that, `Bootstrap` is the command to rerun.
 

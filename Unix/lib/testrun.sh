@@ -675,17 +675,17 @@ testrun_contract_snapshot() {
 }
 
 # The changelog of Foundation, or nothing (status 1) when this checkout has none: FOUNDATION_CHANGELOG
-# when set, else CHANGELOG.md at the repository root ROOT - unless ROOT is the Dotfiles repository
-# (it holds Windows/PowerShell), whose root changelog is WinuX's. Usage: testrun_changelog_path ROOT
+# when set, else Unix/CHANGELOG.md under the repository root ROOT (Foundation's project documents
+# live in its own folder, so the same path holds in Foundation and in a fork of several upstreams;
+# the root CHANGELOG.md is a generic pointer). Usage: testrun_changelog_path ROOT
 testrun_changelog_path() {
 	if [ -n "${FOUNDATION_CHANGELOG:-}" ]; then
 		[ -r "$FOUNDATION_CHANGELOG" ] || return 1
 		printf '%s\n' "$FOUNDATION_CHANGELOG"
 		return 0
 	fi
-	[ -d "$1/Windows/PowerShell" ] && return 1
-	[ -r "$1/CHANGELOG.md" ] || return 1
-	printf '%s\n' "$1/CHANGELOG.md"
+	[ -r "$1/Unix/CHANGELOG.md" ] || return 1
+	printf '%s\n' "$1/Unix/CHANGELOG.md"
 }
 
 # The released versions of a Keep-a-Changelog file, newest first: VERSION<TAB>SUBSECTIONS (the
