@@ -85,6 +85,10 @@ ships the area empty and never writes inside it, so it never conflicts. See
    your first overlays.
 4. Put your packages in `Unix/Brewfile.local`, never in `Unix/Brewfile`.
 
+A private fork runs no workflow at all: every job of every upstream's workflows is skipped in a
+private repository, so no Actions minutes are spent on it. Run `Run-Tests` locally instead; the public
+upstreams run the same suites on every pull request.
+
 ## Rooms, mirror and hallway
 
 A fork can merge more than one project into the same repository: Foundation for the Mac, WinuX for
@@ -212,9 +216,10 @@ Merge-Upstreams foundation --dry-run
 Merge-Upstreams foundation
 ```
 
-The dry run fetches and lists what a merge would take per rule, every path it would decline, and
-every `mirror` file the project has differently from your branch (a broken contract: take it from
-the project that is right), merging nothing. The real run leaves the merge staged, never committed:
+The dry run fetches and computes the same merge with `git merge-tree` (git 2.38 or newer), touching
+neither your index nor your working tree, so it lists exactly what the real run would take per rule,
+put back and stop on as a conflict, and every `mirror` file whose merged copy would differ from the
+project's (a broken contract: take it from the project that is right), merging nothing. The real run leaves the merge staged, never committed:
 review it with `git diff --cached`, then commit it with the message it suggests (`Merge foundation
 master: 0.2.0`, the newest release of the project's changelog) and push it with the command it
 prints (on `master` it first branches off, `git switch -c merge-foundation`, so the merge goes

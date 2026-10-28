@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-28
+
+### Fixed
+
+- **`Merge-Upstreams --dry-run` lists exactly what the merge would do.** It listed everything the upstream changed since the last merge, so a fork that already had a change saw paths "taken" and "declined" that the real run never touched, and it could not say which conflicts the real run would stop on. It now has `git merge-tree` (git 2.38 or newer) compute the same merge, with the same attributes and merge drivers, into a tree of its own, touching neither the index nor the working tree. It lists the paths that tree changes against HEAD: what the real run would take, what it would put back (a conflict there included, since putting back resolves it), and the conflicts it would stop on. The mirror drift warning now means what it says: a mirror file whose merged copy would differ from the upstream's. Covered by `Unix/tests/modules/Git/Merge-Upstreams.bats` (the dry run is checked against the real run); documented in the Git module reference, its guide and the Fork Model.
+- **No workflow job runs in a private repository.** The `Mirror contract` job of `foundation.yml` and the `foundation-release.yml` job now carry the guard the macOS test job already had (`if: ${{ !github.event.repository.private }}`), so a private fork that merges Foundation starts none of Foundation's jobs and spends none of its Actions minutes on them. Foundation itself is public, where nothing changes. Documented in the Fork Model.
 ## [0.2.0] - 2026-10-28
 
 ### Added
@@ -40,6 +46,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Tests and CI.** One bats suite per command, the library suites, the docs and guide gates, shellcheck and shfmt, run by `Run-Tests` and by the `Unix Tests` check on macOS.
 - **Documentation.** The docsify site under `docs/unix/`: the getting-started overview, a man-style page per module, a configuration guide per command, configuration, bootstrap, workspaces, AI, software, backups, troubleshooting, the fork model and the roadmap.
 
-[Unreleased]: https://github.com/IvanPavlak/Foundation/compare/foundation/v0.2.0...HEAD
+[Unreleased]: https://github.com/IvanPavlak/Foundation/compare/foundation/v0.2.1...HEAD
+[0.2.1]: https://github.com/IvanPavlak/Foundation/compare/foundation/v0.2.0...foundation/v0.2.1
 [0.2.0]: https://github.com/IvanPavlak/Foundation/compare/foundation/v0.1.0...foundation/v0.2.0
 [0.1.0]: https://github.com/IvanPavlak/Foundation/releases/tag/foundation/v0.1.0

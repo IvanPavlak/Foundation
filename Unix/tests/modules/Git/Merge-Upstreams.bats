@@ -177,7 +177,7 @@ merging() { git -C "$REPO" rev-parse -q --verify MERGE_HEAD >/dev/null; }
 	[[ $output == *Unix/engine.sh* ]]
 }
 
-@test "--dry-run merges nothing, even on a dirty tree, and lists the declined paths and mirror drift" {
+@test "--dry-run merges nothing, even on a dirty tree, and lists the declined paths" {
 	second_upstream
 	upstream Unix/engine.sh "engine v2"
 	upstream README.md "their readme"
@@ -189,9 +189,53 @@ merging() { git -C "$REPO" rev-parse -q --verify MERGE_HEAD >/dev/null; }
 	[ -z "$(staged)" ]
 	[ "$(cat "$REPO/Unix/engine.sh")" = engine ]
 	[ "$(tail -n1 "$REPO/README.md")" = "work in progress" ]
-	[[ $output == *README.md* ]]
-	[[ $output == *LICENSE* ]]
-	[[ $output != *Unix/engine.sh* ]]
+	[[ $output == *"M README.md"* ]]
+	[[ $output == *"own 1, take 0, mirror 1, hallway 0, declined 1"* ]]
+	# LICENSE is simply taken: the merged copy is the upstream's, so it is no drift.
+	[[ $output != *"Mirror drift"* ]]
+}
+
+@test "--dry-run lists exactly what the real run puts back and stops on" {
+	second_upstream
+	echo "our readme" >"$REPO/README.md"
+	echo "our engine" >"$REPO/Unix/engine.sh"
+	git -C "$REPO" commit -qam "Fork edits"
+	upstream README.md "their readme"
+	upstream Unix/engine.sh "their engine"
+	upstream Hall.md "a new hallway file"
+	merge foundation --dry-run
+	[ "$status" -eq 0 ]
+	! merging || false
+	# README.md conflicts too, but putting it back resolves it; Unix/engine.sh is left to resolve.
+	[[ $output == *"U README.md"* ]]
+	[[ $output == *"A Hall.md"* ]]
+	[[ $output == *"Would stop on these conflicts"* ]]
+	[[ $output == *"  Unix/engine.sh"* ]]
+	merge foundation
+	[ "$status" -eq 1 ]
+	[ "$(git -C "$REPO" diff --name-only --diff-filter=U)" = Unix/engine.sh ]
+}
+
+@test "--dry-run lists nothing the branch already has, however much the upstream changed" {
+	echo "engine v2" >"$REPO/Unix/engine.sh"
+	git -C "$REPO" commit -qam "The same change, made here first"
+	upstream Unix/engine.sh "engine v2"
+	merge foundation --dry-run
+	[ "$status" -eq 0 ]
+	[[ $output == *"own 0, take 0, mirror 0, hallway 0, declined 0"* ]]
+}
+
+@test "--dry-run warns of a mirror file whose merged copy would differ from the upstream's" {
+	upstream LICENSE "$(printf 'line 1\nline 2\nline 3\nline 4')"
+	merge foundation
+	[ "$status" -eq 0 ]
+	git -C "$REPO" commit -qm "Merge the four-line license"
+	printf 'line 1 mine\nline 2\nline 3\nline 4\n' >"$REPO/LICENSE"
+	git -C "$REPO" commit -qam "Fork edit to a mirror file"
+	upstream LICENSE "$(printf 'line 1\nline 2\nline 3\nline 4 theirs')"
+	merge foundation --dry-run
+	[ "$status" -eq 0 ]
+	[[ $output == *"Mirror drift: LICENSE"* ]]
 }
 
 @test "the Windows -WhatIf is the dry run and -Name the upstream" {
