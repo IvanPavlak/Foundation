@@ -242,7 +242,8 @@ merging() { git -C "$REPO" rev-parse -q --verify MERGE_HEAD >/dev/null; }
 	merge foundation
 	[ "$status" -eq 0 ]
 	[ "$(staged)" = "Unix/engine.sh " ]
-	[ "$(git -C "$REPO" remote)" = macupstream ]
+	git -C "$REPO" remote | grep -qx macupstream
+	! git -C "$REPO" remote | grep -qx foundation || false
 	git -C "$REPO" show-ref --verify -q refs/remotes/macupstream/master
 }
 

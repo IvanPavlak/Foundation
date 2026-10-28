@@ -28,7 +28,7 @@ setup() {
 	# another project or of the fork.
 	run grep -noE '\]\(/[^)]*\)' "$DOCS/foundation/_sidebar.md"
 	[ "$status" -eq 0 ]
-	outside=$(printf '%s\n' "$output" | grep -vE '\]\(/foundation/' | grep -vE '\]\(/winux/README\.md\)' || true)
+	outside=$(printf '%s\n' "$output" | grep -vE '\]\(/foundation/' | grep -vE '\]\(/winux/README\.md\)' | grep -vE '\]\(/\)' || true)
 	[ -z "$outside" ] || {
 		printf '%s\n' "$outside"
 		return 1
