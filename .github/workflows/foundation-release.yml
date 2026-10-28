@@ -26,6 +26,8 @@ permissions:
 jobs:
   release:
     name: Tag and release
+    # Never in a private repository, where no Actions minutes are spent (a fork is never tagged).
+    if: ${{ !github.event.repository.private }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

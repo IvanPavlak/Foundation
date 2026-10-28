@@ -29,8 +29,10 @@
 # the conflicts left, or the staged summary, the suggested commit message (the newest release of
 # the project's changelog) and the push command. It never commits, pushes or writes git config.
 #
-# --dry-run (the Windows -WhatIf) fetches and lists what would be taken and declined, and each
-# mirror file the upstream has differently from HEAD, merging nothing. Exit status 0 when the merge
+# --dry-run (the Windows -WhatIf) fetches and computes the same merge with git merge-tree (git
+# 2.38 or newer), touching neither the index nor the working tree, so it lists exactly what the
+# real run would take, decline and stop on as a conflict, and each mirror file whose merged copy
+# would differ from the upstream's. It merges nothing. Exit status 0 when the merge
 # is staged without conflicts or there is nothing to merge, 1 when conflicts are left or it could
 # not start. `git merge --abort` undoes a staged merge.
 _foundation=${BASH_SOURCE[0]}
@@ -288,23 +290,52 @@ declined_lines=''
 log_step "Merging $ref ($(git rev-list --count "$base..$ref") commits) - root owner: $root_owner"
 
 if [ "$dry_run" -eq 1 ]; then
+	# git merge-tree makes the same merge the real run makes - the same merge machinery, the same
+	# attributes and merge drivers - into a tree of its own, touching neither the index nor the
+	# working tree. Comparing that tree with HEAD lists exactly what the real run would stage, and
+	# the conflicted paths it would stop on, rather than everything the upstream changed.
+	merge_status=0
+	merge_out=$(git -c core.quotepath=off merge-tree --write-tree --name-only --no-messages HEAD "$ref" 2>/dev/null) || merge_status=$?
+	tree=$(printf '%s\n' "$merge_out" | head -n 1)
+	if [ "$merge_status" -gt 1 ] || ! [[ $tree =~ ^[0-9a-f]{40,64}$ ]]; then
+		log_error "git merge-tree could not compute the merge (it needs git 2.38 or newer)"
+		exit 1
+	fi
 	drift=''
-	while IFS= read -r -d '' status && IFS= read -r -d '' path; do
+	conflict_lines=''
+	# Every path the merge would change, with its status against HEAD; a conflicted one is U.
+	changes=$({
+		git -c core.quotepath=off diff --name-status --no-renames HEAD "$tree"
+		printf '%s\n' "$merge_out" | tail -n +2 | awk 'NF { print "U\t" $0 }'
+	} | awk -F'\t' 'NF >= 2 { if (!($2 in status)) order[++n] = $2; status[$2] = $1 } END { for (i = 1; i <= n; i++) print status[order[i]] "\t" order[i] }')
+	while IFS=$'\t' read -r status path; do
+		[ -n "$path" ] || continue
 		classify "$path"
-		[ "$class" = declined ] && declined_lines+="$status $path"$'\n'
+		if [ "$class" = declined ]; then
+			declined_lines+="$status $path"$'\n'
+			continue
+		fi
+		if [ "$status" = U ]; then
+			conflict_lines+="$path"$'\n'
+			continue
+		fi
 		if [ "$class" = mirror ]; then
 			theirs=$(git rev-parse -q --verify "$ref:$path" 2>/dev/null) || theirs=''
-			ours=$(git rev-parse -q --verify "HEAD:$path" 2>/dev/null) || ours=''
-			[ "$theirs" = "$ours" ] || drift+="$path"$'\n'
+			merged=$(git rev-parse -q --verify "$tree:$path" 2>/dev/null) || merged=''
+			[ "$theirs" = "$merged" ] || drift+="$path"$'\n'
 		fi
-	done < <(git diff --name-status --no-renames -z "$base" "$ref")
+	done <<<"$changes"
 	log_step "Would stage: $(summary)"
 	if [ -n "$declined_lines" ]; then
-		log_step "Would decline (kept as this branch has them):"
+		log_step "Would decline (put back as this branch has them; git show $ref:PATH reads any):"
 		while IFS= read -r line; do [ -n "$line" ] && log_step "  $line"; done <<<"$declined_lines"
 	fi
+	if [ -n "$conflict_lines" ]; then
+		log_warning "Would stop on these conflicts, left for you to resolve:"
+		while IFS= read -r path; do [ -n "$path" ] && log_warning "  $path"; done <<<"$conflict_lines"
+	fi
 	while IFS= read -r path; do
-		[ -n "$path" ] && log_warning "Mirror drift: $path differs between $ref and HEAD - a mirror file must be byte-identical in every upstream"
+		[ -n "$path" ] && log_warning "Mirror drift: $path - after the merge this branch's copy would differ from $ref's; a mirror file must be byte-identical in every upstream"
 	done <<<"$drift"
 	log_success "Dry run - nothing was merged"
 	exit 0

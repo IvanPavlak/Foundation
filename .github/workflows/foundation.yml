@@ -76,6 +76,7 @@ jobs:
   # only in the repository the manifest's url names; a fork's mirror files are its own.
   mirror:
     name: Mirror contract
+    if: ${{ !github.event.repository.private }}   # never in a private repository (see the test job)
     runs-on: ubuntu-latest
     env:
       SIBLING: IvanPavlak/WinuX
