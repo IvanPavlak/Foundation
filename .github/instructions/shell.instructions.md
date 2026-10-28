@@ -15,8 +15,8 @@ Read and follow these files before generating or modifying anything under `Unix/
 messages; always use a plain hyphen `-`. The sole exception is the browser-title class of the title
 patterns in `Unix/config/layouts/*`.
 
-A change to a command updates its entry on `docs/unix/modules/<Module>.md`, its `module.conf`
-line, its guide under `docs/unix/guides/<module>/` and its suite in the same change. Do not run
+A change to a command updates its entry on `docs/foundation/modules/<Module>.md`, its `module.conf`
+line, its guide under `docs/foundation/guides/<module>/` and its suite in the same change. Do not run
 the suites yourself: hand the developer the `Run-Tests` command that covers the change.
 
 ## CRITICAL SAFETY - Never Act Destructively On Your Own

@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 # The Unix reference pages that list what the code does, checked against the code, in the style of
-# doclinks.bats: docs/unix/backups.md names every category and fixed key prefix of a backup_item
-# call under Unix/, and docs/unix/software-list.md lists exactly the entries of Unix/Brewfile.
+# doclinks.bats: docs/foundation/backups.md names every category and fixed key prefix of a backup_item
+# call under Unix/, and docs/foundation/software-list.md lists exactly the entries of Unix/Brewfile.
 
 load helpers
 
@@ -25,8 +25,8 @@ key_prefix() {
 	printf '%s' "${key%%.*}"
 }
 
-@test "every backup_item category and fixed key prefix under Unix appears in docs/unix/backups.md" {
-	page=$DOCS/unix/backups.md
+@test "every backup_item category and fixed key prefix under Unix appears in docs/foundation/backups.md" {
+	page=$DOCS/foundation/backups.md
 	[ -f "$page" ]
 	calls=$(backup_calls "$UNIX_DIR")
 	# The scan finds the writers it should (a broken pattern would pass on nothing).
@@ -39,7 +39,7 @@ key_prefix() {
 		[ -z "$prefix" ] || grep -qF "\`$prefix" "$page" || missing="$missing key $category/$key"$'\n'
 	done <<<"$calls"
 	[ -z "$missing" ] || {
-		printf 'not in docs/unix/backups.md:\n%s' "$missing"
+		printf 'not in docs/foundation/backups.md:\n%s' "$missing"
 		return 1
 	}
 }
@@ -77,9 +77,9 @@ page_entries() {
 		}' "$1" | LC_ALL=C sort
 }
 
-@test "docs/unix/software-list.md lists exactly the entries of Unix/Brewfile" {
+@test "docs/foundation/software-list.md lists exactly the entries of Unix/Brewfile" {
 	brewfile=$(brewfile_entries "$UNIX_DIR/Brewfile")
-	page=$(page_entries "$DOCS/unix/software-list.md")
+	page=$(page_entries "$DOCS/foundation/software-list.md")
 	[ -n "$brewfile" ]
 	[ "$brewfile" = "$page" ] || {
 		printf 'Unix/Brewfile only:\n%s\nthe page only:\n%s\n' \

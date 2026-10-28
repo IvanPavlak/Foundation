@@ -42,7 +42,7 @@ conf_add_section() {
 		# One blank line between sections, whatever the file ended with.
 		[ -z "$(tail -c 1 "$target")" ] || printf '\n' >>"$target"
 	else
-		printf '# Overlay of %s: its sections replace same-named sections there and add new ones\n# (docs/unix/configuration.md).\n' "${file##*/}" >"$target" || return 1
+		printf '# Overlay of %s: its sections replace same-named sections there and add new ones\n# (docs/foundation/configuration.md).\n' "${file##*/}" >"$target" || return 1
 	fi
 	{
 		printf '\n[%s]\n' "$name"
@@ -67,7 +67,7 @@ conf_set_value() {
 	if [ -f "$target" ]; then
 		backup_item Config "$(conf__backup_key "$target")" "$target" >/dev/null || return 1
 	else
-		printf '# Overlay of %s: its sections replace same-named sections there and add new ones\n# (docs/unix/configuration.md).\n' "${file##*/}" >"$target" || return 1
+		printf '# Overlay of %s: its sections replace same-named sections there and add new ones\n# (docs/foundation/configuration.md).\n' "${file##*/}" >"$target" || return 1
 	fi
 	tmp=$(mktemp) || return 1
 	# Blank lines are held back until the next line, so a new line lands right after the last

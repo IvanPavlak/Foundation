@@ -14,7 +14,7 @@
 #
 # PATTERN picks the suites of Unix/tests and Unix/tests/modules whose path contains it (case-insensitive:
 # Run-Tests layout => layout.bats); several patterns run the union. Without a pattern every
-# suite runs and the lint covers the same files as .github/workflows/unix.yml; with one the
+# suite runs and the lint covers the same files as .github/workflows/foundation.yml; with one the
 # lint runs only with --lint, and --no-lint always skips it. --filter REGEX runs only the tests
 # whose name matches (bats --filter). --path DIR (the -Path of Windows) narrows every selection
 # to the suites below DIR, a folder of Unix/tests (Run-Tests --path Unix/tests/modules/Git). A
@@ -44,8 +44,8 @@
 # Release step, runs no tests and combines with nothing: --update-contract-baseline rewrites
 # Unix/tests/contract-baseline.tsv from the working tree (the commands, their documented flags, the
 # line kinds of the shipped base Unix/config files and the Bootstrap steps), stamped with the newest
-# release of Foundation's CHANGELOG.md (FOUNDATION_CHANGELOG, or the repository root's outside
-# Dotfiles) and keeping the deprecation records that still apply. tests/contract.bats then fails
+# release of Foundation's changelog (FOUNDATION_CHANGELOG, else Unix/CHANGELOG.md)
+# and keeping the deprecation records that still apply. tests/contract.bats then fails
 # every removal without a shipped deprecation (-UpdateContractBaseline of Windows). The first
 # baseline is written at 1.0.0: no rules apply in 0.x, as in WinuX before its 1.0.0.
 #
@@ -176,7 +176,7 @@ if [ "$update_baseline" -eq 1 ]; then
 		[ -n "$audit_since" ] || [ "$impact" -eq 1 ] || [ "$lint" != auto ] || [ "$workers" -ne 0 ]; } &&
 		foundation_die "--update-contract-baseline runs no tests; it cannot be combined with any other flag"
 	changelog=$(testrun_changelog_path "$DOTFILES_ROOT") ||
-		foundation_die "No Foundation CHANGELOG.md to stamp the baseline with (in Dotfiles the root one is WinuX's: set FOUNDATION_CHANGELOG)"
+		foundation_die "No Unix/CHANGELOG.md to stamp the baseline with (or set FOUNDATION_CHANGELOG)"
 	release=$(testrun_changelog_releases "$changelog" | head -1 | cut -f1)
 	[ -n "$release" ] || foundation_die "${changelog#"$DOTFILES_ROOT"/} has no released version to stamp the baseline with"
 	baseline=$tests/contract-baseline.tsv

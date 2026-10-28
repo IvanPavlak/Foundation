@@ -1,6 +1,8 @@
-# Foundation: shellcheck, shfmt and the bats suites on macOS, the only Unix it runs on.
+# Foundation: shellcheck, shfmt and the bats suites on macOS, the only Unix it runs on. The file is
+# named after the project so it never collides with another upstream's workflows in a fork that
+# merges several (winux.yml is WinuX's).
 # Only the pure helpers and file checks run here; AeroSpace and WezTerm are exercised by hand.
-name: Unix
+name: Foundation
 
 # Every pull request runs it, and every push to master: the repository is all Unix, so the
 # required `Unix Tests` check always reports. A push to any other branch does not, since its pull
@@ -67,3 +69,36 @@ jobs:
           name: unix-run-log
           path: Unix/tests/Results/TestRun_*.log
           if-no-files-found: warn
+
+  # The mirror contract: every mirror line of Unix/config/upstream.conf names a file the sibling upstream ships with
+  # the same bytes. A drift is reported here, at the pull request, as a warning per file (both
+  # sides of a coordinated change cannot both be merged first, so it never fails the run). Runs
+  # only in the repository the manifest's url names; a fork's mirror files are its own.
+  mirror:
+    name: Mirror contract
+    runs-on: ubuntu-latest
+    env:
+      SIBLING: IvanPavlak/WinuX
+    steps:
+      - uses: actions/checkout@v5
+      - name: Compare the mirror files with WinuX
+        shell: bash
+        run: |
+          manifest=Unix/config/upstream.conf
+          home=$(awk '$1 == "url" { print $2; exit }' "$manifest" | sed -E 's#^https?://[^/]*github\.com/##; s#\.git$##' | tr '[:upper:]' '[:lower:]')
+          if [ "$home" != "$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')" ]; then
+            echo "Not $home - the mirror contract is checked only in the upstream itself."
+            exit 0
+          fi
+          drift=0
+          for path in $(awk '$1 == "mirror" { print $2 }' "$manifest"); do
+            if ! curl -fsSL "https://raw.githubusercontent.com/$SIBLING/master/$path" -o "$RUNNER_TEMP/sibling"; then
+              echo "::warning file=$path::$SIBLING does not ship the mirror file $path"
+              drift=1
+            elif ! cmp -s "$RUNNER_TEMP/sibling" "$path"; then
+              echo "::warning file=$path::$path differs from $SIBLING's copy - the mirror contract says both upstreams ship the same bytes"
+              drift=1
+            fi
+          done
+          [ "$drift" -eq 0 ] && echo "Every mirror file matches $SIBLING."
+          exit 0

@@ -4,7 +4,7 @@ description: Interview the user decision by decision and write their answers int
 argument-hint: "Everything, a config file name, a task such as 'add MyProject end to end' or 'provision this Mac', or 'review'"
 ---
 
-The user wants the Unix half (Foundation) of their fork configured by interview. The protocol is not in this file: it lives in the repository, in `docs/unix/foundation-configurator.md`. Read it and run it.
+The user wants the Unix half (Foundation) of their fork configured by interview. The protocol is not in this file: it lives in the repository, in `docs/foundation/foundation-configurator.md`. Read it and run it.
 
 ## Step 1 - Locate the repository
 
@@ -16,7 +16,7 @@ This skill is linked into the harness's user-level skills directory, so the curr
 
 ## Step 2 - Read the protocol
 
-Read `<RepoRoot>/docs/unix/foundation-configurator.md` in full before the first question. It carries the ground rules, the prerequisites, the modes, the walk order, the decisions per config file and the tasks. Read each config file's header comment before writing to it; the header is its format.
+Read `<RepoRoot>/docs/foundation/foundation-configurator.md` in full before the first question. It carries the ground rules, the prerequisites, the modes, the walk order, the decisions per config file and the tasks. Read each config file's header comment before writing to it; the header is its format.
 
 ## Step 3 - Run the session
 

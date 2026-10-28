@@ -17,7 +17,7 @@ WezTerm for the orchestrated terminal, chezmoi for the dotfile links, Homebrew f
 > [!NOTE]
 > Foundation is in its 0.x series: it works end to end on the maintainer's Macs, but any release may
 > still rename or remove a command, flag or config line, with a migration note in the changelog.
-> See the [roadmap](docs/unix/roadmap.md).
+> See the [roadmap](docs/foundation/roadmap.md).
 
 ## What it does
 
@@ -52,7 +52,7 @@ git clone https://github.com/IvanPavlak/Foundation.git ~/Development/GitHub/Foun
 
 Read [`Unix/bootstrap.sh`](Unix/bootstrap.sh) before running it, and start on a test user or a
 virtual machine. To keep your own values in git, fork the repository first: see the
-[Fork Model](docs/unix/fork-model.md).
+[Fork Model](docs/foundation/fork-model.md).
 
 ## Documentation
 
@@ -60,7 +60,7 @@ virtual machine. To keep your own values in git, fork the repository first: see 
 and a man-style reference for every command.
 
 Read it at [ivanpavlak.github.io/Foundation](https://ivanpavlak.github.io/Foundation/), browse it
-under [`docs/unix/`](docs/unix/README.md), or serve it locally:
+under [`docs/foundation/`](docs/foundation/README.md), or serve it locally:
 
 ```bash
 npx docsify-cli serve docs
@@ -76,13 +76,13 @@ on both. The two diverge until Foundation is as established as WinuX, then merge
 ## License
 
 Foundation is released under the [MIT License](LICENSE). Third-party components keep their own
-licenses: see [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md).
+licenses: see [THIRD-PARTY-LICENSES.md](Unix/THIRD-PARTY-LICENSES.md).
 
 ## Contributing
 
 Contributions of all kinds are welcome - code, docs, tests, bug reports and ideas. Please read
-[CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md) first. For security
-issues, follow [SECURITY.md](SECURITY.md).
+[CONTRIBUTING.md](Unix/CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md) first. For security
+issues, follow [SECURITY.md](Unix/SECURITY.md).
 
 ---
 
@@ -101,4 +101,4 @@ Foundation is free and open-source. If it saves you time, please consider suppor
 
 AI was used throughout this project and is ingrained in it - but everything has been tested by hand
 on the maintainer's Macs. Regardless, use it at your own discretion. Known problems and their
-workarounds live in [Troubleshooting on a Mac](docs/unix/troubleshooting.md).
+workarounds live in [Troubleshooting on a Mac](docs/foundation/troubleshooting.md).

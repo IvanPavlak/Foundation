@@ -5,7 +5,7 @@ into the AI apps a Mac uses, installs the Claude Code plugin marketplaces and ad
 the mechanism and its own product skills; which artifacts a Mac gets, and into which apps, is the
 fork's choice, configured in `Unix/config` overlays like everything else. Why the rules are linked
 and why enforcement lives in Claude Code's managed settings is described on WinuX's
-[CoreAiRules](https://ivanpavlak.github.io/WinuX/#/ai/coreairules) and [AI Skills](https://ivanpavlak.github.io/WinuX/#/ai/skills) pages; this page holds the
+[CoreAiRules](https://ivanpavlak.github.io/WinuX/#/winux/ai/coreairules) and [AI Skills](https://ivanpavlak.github.io/WinuX/#/winux/ai/skills) pages; this page holds the
 mechanism as Foundation builds it. The commands are on the [AI module page](modules/AI.md).
 
 ## Artifacts
@@ -195,7 +195,7 @@ The Claude Code CLI is the `claude-code` cask (`brew install --cask claude-code`
 
 ## MCP servers
 
-MCP servers are not an artifact kind either: Claude Code keeps them in `~/.claude.json`, Codex in `~/.codex/config.toml`, so they are written there rather than linked (the design is WinuX's [AI MCP Servers](https://ivanpavlak.github.io/WinuX/#/ai/mcp-servers)). `Deploy-AiMcpServers` reads a `deploy` line and one `[section]` per server from `Unix/config/ai-mcp-servers.conf` (the base file ships a commented example only; a fork's servers go in `ai-mcp-servers.local.conf`):
+MCP servers are not an artifact kind either: Claude Code keeps them in `~/.claude.json`, Codex in `~/.codex/config.toml`, so they are written there rather than linked (the design is WinuX's [AI MCP Servers](https://ivanpavlak.github.io/WinuX/#/winux/ai/mcp-servers)). `Deploy-AiMcpServers` reads a `deploy` line and one `[section]` per server from `Unix/config/ai-mcp-servers.conf` (the base file ships a commented example only; a fork's servers go in `ai-mcp-servers.local.conf`):
 
 ```
 deploy claude-code codex

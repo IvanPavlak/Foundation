@@ -100,7 +100,7 @@ layout file in the set (and the set folder when it is missing, as on Windows).
 | `language.conf` | `DisplayLanguages`, `Locales`, `KeyboardLayouts`, `KeyboardLayoutSets`, `DefaultDisplayLanguage`, `DefaultLocale`, `DefaultKeyboardLayoutSet` | Display-SystemLanguageSettings, Set-DisplayLanguage, Set-Locale, Set-KeyboardLayouts |
 | `vscode-profiles.conf` | `VSCodeProfiles` | Deploy-VSCodeProfiles (Bootstrap's VSCodeProfiles step), Export-VSCodeProfile |
 | `browser-groups.conf` | `BrowserGroups` | Open-Browser, Invoke-Browser |
-| `ai-artifacts.conf` | `AiSkills`, `AiMods` and the `AI` entries of `SymbolicLinks` (WinuX's `AiArtifacts` once its build lands) | Deploy-AiArtifacts (Bootstrap's AiArtifacts step), Update-AiArtifacts, List-AiArtifacts, Test-ConfigurationSchema |
+| `ai-artifacts.conf` | `AiArtifacts` | Deploy-AiArtifacts (Bootstrap's AiArtifacts step), Update-AiArtifacts, List-AiArtifacts, Test-ConfigurationSchema |
 | `ai-harnesses.conf` | WinuX's `AiHarnesses` | Deploy-AiArtifacts, List-AiArtifacts, Test-ConfigurationSchema |
 | `ai-marketplaces.conf` | `AiMarketplaces.Marketplaces`, `AiMarketplaces.PluginConfigs` (a `[plugin:NAME]` section for a plugin no marketplace lists) | Deploy-AiMarketplaces (Bootstrap's AiMarketplaces step) |
 | `ai-mcp-servers.conf` | `AiMcpServers.Deploy` (`deploy`), `AiMcpServers.Servers` (one section per server; `machine` for `Machine`) | Deploy-AiMcpServers (Bootstrap's AiMcpServers step) |
@@ -131,7 +131,7 @@ layout file in the set (and the set folder when it is missing, as on Windows).
 | `repositories.conf` | `RepositoryGroups`, `Universal.GitHub.Base`, `RepositoryUpdate` | Update-Repositories, Invoke-StartupRepositoryUpdate |
 | `greeting.conf` | `TerminalGreeting`, `Universal.FastFetchImageLogo` | Show-TerminalGreeting (`c`), Invoke-Clear (`clear`), Invoke-Fastfetch (`fastfetch*`, `image-logo`), Invoke-Onefetch (`onefetch*`), Open-ProjectTerminals (`onefetch-in-project-terminals`) |
 | `kill-all.conf` | `KillAll.Steps`, `VisibleWindowExclusions`, `TerminateProcessNames` | Kill-All, Open-Workspace |
-| `upstream.conf` | (none: the path ownership of a fork of two upstreams, which WinuX does not need) | Merge-Upstream |
+| `upstream.conf` | WinuX's own manifest, `Windows/PowerShell/Upstream.conf` (same format) | Merge-Upstreams |
 
 Each file's header documents its line kinds. The essentials:
 
@@ -416,19 +416,25 @@ the call replace the configured ones. The base ships no line; all of them go in 
 ### upstream.conf
 
 ```
-own Unix/
-own docs/unix/
-mirror LICENSE
-owned-only macupstream
+name        foundation
+url         https://github.com/IvanPavlak/Foundation.git
+tag-prefix  foundation
+changelog   Unix/CHANGELOG.md
+own         Unix/
+own         docs/foundation/
+mirror      LICENSE
 ```
 
-Which paths Foundation owns, for Merge-Upstream. `own PATH` is a path Foundation ships and a fork
-takes from it (a folder ends in `/` and covers everything under it); `mirror PATH` is a WinuX file
-Foundation ships byte-identical and never edits, which a fork takes from WinuX; `owned-only
-REMOTE...` names the remotes whose merges take only the `own` paths without `--owned-only` being
-given. The base ships the `own` and `mirror` lines and no `owned-only` line: a fork of Foundation
-alone takes every path. A fork that merges both WinuX and Foundation adds its Foundation remote in
-`upstream.local.conf`. See [Fork Model](fork-model.md).
+Foundation's upstream manifest, read by Merge-Upstreams from the commit it merges (never from the
+working tree). `name` is the project's name and the name of its remote in a fork; `url` its
+repository (the remote whose fetch URL matches it is used, under any name); `tag-prefix` the
+prefix of its release tags (`foundation/v0.2.0`); `changelog` the changelog whose newest
+`## [x.y.z]` names the merge in the suggested commit message. `own PATH` is a path only Foundation
+ships (a PATH ending in `/` covers everything under it, any other PATH is one file); `mirror PATH`
+is a file every upstream ships byte-identical, by contract (WinuX's manifest lists the same ones).
+Unlike the other files it is not per machine and not layered: no `@TYPE` lines and no
+`upstream.local.conf` overlay. A fork's own choices (`root-owner`, `take`) go in
+`Git/upstreams.local.conf`. See [Fork Model](fork-model.md).
 
 ### special-folders.conf
 

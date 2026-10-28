@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # The unified backup sink of the Unix half: Backup-RepositoryItem and the retention rules of
-# Clear-OldBackups (docs/unix/backups.md). Every writer that replaces or displaces an
+# Clear-OldBackups (docs/foundation/backups.md). Every writer that replaces or displaces an
 # existing file copies it first into
 #
 #   <repo>/Backups/Unix/<Category>/<Key>/<yyyy-MM-dd_HH-mm-ss>/

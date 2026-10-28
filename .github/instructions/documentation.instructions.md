@@ -9,16 +9,16 @@ Read and follow the Documentation section of `AI/Instructions/ShellConventions.m
 generating or modifying documentation, and `AI/Context/UNIX_CONTEXT.md` for the system the pages
 describe.
 
-- The docsify pages under `docs/unix/` are the single source of truth. `README.md` at the
+- The docsify pages under `docs/foundation/` are the single source of truth. `README.md` at the
   repository root is a short pointer to them and carries no command reference.
-- One man-style entry per command on `docs/unix/modules/<Module>.md`: a `## [Name](source URL)`
+- One man-style entry per command on `docs/foundation/modules/<Module>.md`: a `## [Name](source URL)`
   heading followed at once by the `- **Description:**`, `- **Usage:**` and (when there is one)
   `- **Alias:**` bullets; alphabetical. `List-Functions --list-discrepancies` parses them.
-- Every command has exactly one guide, `docs/unix/guides/<module>/<Command>.md`: the FULL template
+- Every command has exactly one guide, `docs/foundation/guides/<module>/<Command>.md`: the FULL template
   when it reads a `Unix/config` file, the STUB template otherwise (both in
-  `docs/unix/guides/README.md`), listed in that folder's `README.md`.
-- A page added or removed updates `docs/unix/_sidebar.md` and `docs/unix/docs_overview.md`.
-- Links inside `docs/unix` are relative and checked by `Unix/tests/doclinks.bats`; a link to a
+  `docs/foundation/guides/README.md`), listed in that folder's `README.md`.
+- A page added or removed updates `docs/foundation/_sidebar.md` and `docs/foundation/docs_overview.md`.
+- Links inside `docs/foundation` are relative and checked by `Unix/tests/doclinks.bats`; a link to a
   WinuX page is absolute (`https://ivanpavlak.github.io/WinuX/#/...`).
 - Generic example values only (`MyProject`, `MyRepo`, `My-Mac`, `you@example.com`) - no real
   personal identifiers.

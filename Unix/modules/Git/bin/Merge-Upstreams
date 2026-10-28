@@ -1,0 +1,364 @@
+#!/usr/bin/env bash
+# Merge-Upstreams - merges one upstream project into the current branch by path ownership and stops before the commit.
+#
+# Usage: Merge-Upstreams NAME [--branch BRANCH] [--dry-run]
+#
+# Merges the upstream project NAME into the current branch of this repository ($DOTFILES_ROOT,
+# wherever it is called from) as a merge that is left staged: you review it and commit it yourself.
+# Run it once per upstream (Merge-Upstreams winux, commit, Merge-Upstreams foundation, commit).
+# NAME may also be given as --name NAME (the Windows -Name).
+#
+# Every project ships a manifest (a tracked file named upstream.conf, any case: name, url,
+# tag-prefix, changelog, own and mirror lines). The remote is the one whose fetch URL matches the
+# manifest's url, under any name, else the remote named NAME; a missing one, or one named NAME that
+# points elsewhere, is printed as the git remote add or git remote set-url to run, and nothing is
+# done. BRANCH defaults to the remote's HEAD branch, then master, then main. Only the project's own
+# tags are fetched, PREFIX/* of its tag-prefix, so the tags of two upstreams never clash.
+#
+# Every path the merge changes is handled by one rule, the first that matches: a path under
+# another upstream's `own` line is declined; a path under NAME's `own` line is taken; a path a
+# `take NAME PATH` line of Git/upstreams.local.conf names is taken; a `mirror` file is taken; any
+# other path is the hallway, taken only when the root owner is NAME. The root owner is the
+# `root-owner NAME|fork` line of Git/upstreams.local.conf, else the only upstream when the
+# repository knows one, else `fork`. NAME's rules come from its manifest as the merged commit has
+# it. A declined path is put back as HEAD has it; one HEAD lacks is unstaged and removed, and its
+# empty folders with it. Every declined path is listed, one `git show REF:PATH` away.
+#
+# It refuses to start with uncommitted changes to tracked files or a merge in progress. An upstream
+# that shares no history with the branch is refused with the one-time bridge to run. It then prints
+# the conflicts left, or the staged summary, the suggested commit message (the newest release of
+# the project's changelog) and the push command. It never commits, pushes or writes git config.
+#
+# --dry-run (the Windows -WhatIf) fetches and lists what would be taken and declined, and each
+# mirror file the upstream has differently from HEAD, merging nothing. Exit status 0 when the merge
+# is staged without conflicts or there is nothing to merge, 1 when conflicts are left or it could
+# not start. `git merge --abort` undoes a staged merge.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+usage="Usage: Merge-Upstreams NAME [--branch BRANCH] [--dry-run]"
+name=''
+branch=''
+dry_run=0
+while [ $# -gt 0 ]; do
+	case $1 in
+		--branch)
+			[ $# -ge 2 ] || foundation_die "--branch needs a branch name"
+			branch=$2
+			shift
+			;;
+		--name)
+			[ $# -ge 2 ] || foundation_die "--name needs an upstream name"
+			[ -z "$name" ] || foundation_die "One upstream at a time - got [$name] and [$2]"
+			name=$2
+			shift
+			;;
+		--dry-run) dry_run=1 ;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument => $1" ;;
+		*)
+			[ -z "$name" ] || foundation_die "One upstream at a time - got [$name] and [$1]"
+			name=$1
+			;;
+	esac
+	shift
+done
+[ -n "$name" ] || foundation_die "$usage"
+
+cd "$DOTFILES_ROOT" 2>/dev/null || foundation_die "The repository folder [$DOTFILES_ROOT] does not exist"
+top=$(git rev-parse --show-toplevel 2>/dev/null) || foundation_die "[$DOTFILES_ROOT] is not a git repository"
+cd "$top" || exit 1
+
+settings_file=Git/upstreams.local.conf
+
+# The lines of a manifest or settings text, comments, blank lines and carriage returns dropped.
+# Usage: text_lines TEXT
+text_lines() {
+	local line
+	while IFS= read -r line || [ -n "$line" ]; do
+		line=${line%$'\r'}
+		line=${line#"${line%%[![:space:]]*}"}
+		case $line in '' | '#'*) continue ;; esac
+		printf '%s\n' "$line"
+	done <<<"$1"
+}
+# The values of the KEY lines of a manifest text, one per line. Usage: text_values KEY TEXT
+text_values() {
+	local key value rest
+	while read -r key value rest; do
+		[ "$key" = "$1" ] && [ -n "$value" ] && printf '%s\n' "$value"
+	done < <(text_lines "$2")
+	return 0
+}
+# The first value of KEY in a manifest text; status 1 when there is none. Usage: text_value KEY TEXT
+text_value() {
+	local value
+	value=$(text_values "$1" "$2" | head -n1)
+	[ -n "$value" ] || return 1
+	printf '%s\n' "$value"
+}
+# Whether a file name is a manifest: its base name is upstream.conf in any case. Usage: is_manifest PATH
+is_manifest() {
+	[ "$(printf '%s' "${1##*/}" | tr '[:upper:]' '[:lower:]')" = upstream.conf ]
+}
+# The paths of every manifest a commit tracks, one per line. Usage: manifest_paths REV
+manifest_paths() {
+	local path
+	while IFS= read -r -d '' path; do
+		is_manifest "$path" && printf '%s\n' "$path"
+	done < <(git ls-tree -r --name-only -z "$1" 2>/dev/null)
+	return 0
+}
+# A URL reduced for comparison: lower case, git@HOST:PATH as https://HOST/PATH, no user@ in an
+# https URL, no trailing / or .git. Usage: normalize_url URL
+normalize_url() {
+	local url
+	url=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+	case $url in
+		git@*:*)
+			url=${url#git@}
+			url="https://${url%%:*}/${url#*:}"
+			;;
+	esac
+	case $url in https://*@*) url="https://${url#https://*@}" ;; esac
+	url=${url%/}
+	url=${url%.git}
+	url=${url%/}
+	printf '%s\n' "$url"
+}
+# Whether PATH is covered by SPEC: a SPEC ending in / covers everything under it, any other SPEC
+# is one file. Usage: covers SPEC PATH
+covers() {
+	case $1 in
+		*/) case $2 in "$1"*) return 0 ;; esac ;;
+		*) [ "$2" = "$1" ] && return 0 ;;
+	esac
+	return 1
+}
+# Whether any of the newline-separated SPECS covers PATH. Usage: covered_by SPECS PATH
+covered_by() {
+	local spec
+	while IFS= read -r spec; do
+		[ -n "$spec" ] && covers "$spec" "$2" && return 0
+	done <<<"$1"
+	return 1
+}
+
+# The manifests of HEAD: NAME's text, the other upstreams' own lines and every name it knows.
+head_text=''
+other_owns=''
+names=''
+while IFS= read -r path; do
+	[ -n "$path" ] || continue
+	text=$(git show "HEAD:$path" 2>/dev/null) || continue
+	upstream=$(text_value name "$text") || continue
+	case $'\n'"$names" in *$'\n'"$upstream"$'\n'*) continue ;; esac
+	names+="$upstream"$'\n'
+	if [ "$upstream" = "$name" ]; then
+		head_text=$text
+	else
+		other_owns+=$(text_values own "$text")$'\n'
+	fi
+done < <(manifest_paths HEAD)
+
+# The fork's settings: root-owner and the take lines for NAME.
+settings=''
+[ -f "$settings_file" ] && settings=$(cat "$settings_file")
+root_owner=$(text_value root-owner "$settings") || root_owner=''
+takes=''
+while read -r key upstream path rest; do
+	[ "$key" = take ] && [ "$upstream" = "$name" ] && [ -n "$path" ] && takes+="$path"$'\n'
+done < <(text_lines "$settings")
+if [ -z "$root_owner" ]; then
+	case $'\n'"$names" in *$'\n'"$name"$'\n'*) ;; *) names+="$name"$'\n' ;; esac
+	if [ "$(printf '%s' "$names" | grep -c .)" -eq 1 ]; then root_owner=$name; else root_owner=fork; fi
+fi
+
+# The remote: the one whose fetch URL is the manifest's url, else the one named NAME.
+remote=''
+if [ -n "$head_text" ] && url=$(text_value url "$head_text"); then
+	want=$(normalize_url "$url")
+	while IFS= read -r candidate; do
+		[ -n "$candidate" ] || continue
+		[ "$(normalize_url "$(git remote get-url "$candidate" 2>/dev/null)")" = "$want" ] && remote=$candidate && break
+	done < <(git remote)
+	if [ -z "$remote" ]; then
+		if git remote get-url "$name" >/dev/null 2>&1; then
+			log_error "The remote [$name] points at $(git remote get-url "$name"), not at $url - point it there, then run Merge-Upstreams $name again:"
+			log_step "  git remote set-url $name $url"
+		else
+			log_error "No remote fetches $url - add it, then run Merge-Upstreams $name again:"
+			log_step "  git remote add $name $url"
+		fi
+		exit 1
+	fi
+elif git remote get-url "$name" >/dev/null 2>&1; then
+	remote=$name
+else
+	foundation_die "Unknown upstream [$name] - no manifest of HEAD names it and no remote has that name (the remotes are: $(git remote | tr '\n' ' '))"
+fi
+
+if [ "$dry_run" -eq 0 ]; then
+	git rev-parse -q --verify MERGE_HEAD >/dev/null &&
+		foundation_die "A merge is already in progress - commit it or undo it with git merge --abort first"
+	git diff --quiet && git diff --cached --quiet ||
+		foundation_die "Uncommitted changes to tracked files - commit or stash them first, so putting a path back cannot lose them"
+fi
+
+log_title "Merge-Upstreams $name"
+git fetch --no-tags -q "$remote" || foundation_die "git fetch $remote failed"
+prefix=$(text_value tag-prefix "$head_text") || prefix=''
+[ -z "$prefix" ] || git fetch --no-tags -q "$remote" "+refs/tags/$prefix/*:refs/tags/$prefix/*" >/dev/null 2>&1 || true
+if [ -z "$branch" ]; then
+	head=$(git symbolic-ref -q --short "refs/remotes/$remote/HEAD" 2>/dev/null) && branch=${head#"$remote"/}
+	for candidate in master main; do
+		[ -z "$branch" ] && git show-ref --verify -q "refs/remotes/$remote/$candidate" && branch=$candidate
+	done
+	[ -n "$branch" ] || foundation_die "$remote has no HEAD, master or main branch - name one with --branch"
+fi
+ref=$remote/$branch
+git show-ref --verify -q "refs/remotes/$ref" || foundation_die "$remote has no branch [$branch]"
+
+if git merge-base --is-ancestor "$ref" HEAD; then
+	log_success "Already up to date with $ref - nothing to merge"
+	exit 0
+fi
+if ! base=$(git merge-base HEAD "$ref"); then
+	log_error "This branch shares no history with $ref - bridge it once, then run Merge-Upstreams $name again:"
+	log_step "  git merge -s ours --allow-unrelated-histories -m \"Bridge $name as an upstream\" $ref"
+	exit 1
+fi
+
+# NAME's rules, from its manifest as the merged commit has it, else as HEAD has it.
+rules=''
+while IFS= read -r path; do
+	[ -n "$path" ] || continue
+	text=$(git show "$ref:$path" 2>/dev/null) || continue
+	[ "$(text_value name "$text")" = "$name" ] && rules=$text && break
+done < <(manifest_paths "$ref")
+[ -n "$rules" ] || rules=$head_text
+owns=$(text_values own "$rules")
+mirrors=$(text_values mirror "$rules")
+changelog=$(text_value changelog "$rules") || changelog=''
+
+# Sets class to the class of a path, the first rule that matches (declined, own, take, mirror or
+# hallway), and counts it. Usage: classify PATH
+classify() {
+	local file
+	class=''
+	if covered_by "$other_owns" "$1"; then
+		class=declined
+	elif covered_by "$owns" "$1"; then
+		class=own
+	elif covered_by "$takes" "$1"; then
+		class=take
+	else
+		while IFS= read -r file; do
+			[ -n "$file" ] && [ "$file" = "$1" ] && class=mirror && break
+		done <<<"$mirrors"
+	fi
+	if [ -z "$class" ]; then
+		if [ "$root_owner" = "$name" ]; then class=hallway; else class=declined; fi
+	fi
+	case $class in
+		own) count_own=$((count_own + 1)) ;;
+		take) count_take=$((count_take + 1)) ;;
+		mirror) count_mirror=$((count_mirror + 1)) ;;
+		hallway) count_hallway=$((count_hallway + 1)) ;;
+		declined) count_declined=$((count_declined + 1)) ;;
+	esac
+}
+# The counts per class, one line. Usage: summary
+summary() {
+	printf 'own %d, take %d, mirror %d, hallway %d, declined %d' \
+		"$count_own" "$count_take" "$count_mirror" "$count_hallway" "$count_declined"
+}
+class=''
+count_own=0 count_take=0 count_mirror=0 count_hallway=0 count_declined=0
+declined_lines=''
+log_step "Merging $ref ($(git rev-list --count "$base..$ref") commits) - root owner: $root_owner"
+
+if [ "$dry_run" -eq 1 ]; then
+	drift=''
+	while IFS= read -r -d '' status && IFS= read -r -d '' path; do
+		classify "$path"
+		[ "$class" = declined ] && declined_lines+="$status $path"$'\n'
+		if [ "$class" = mirror ]; then
+			theirs=$(git rev-parse -q --verify "$ref:$path" 2>/dev/null) || theirs=''
+			ours=$(git rev-parse -q --verify "HEAD:$path" 2>/dev/null) || ours=''
+			[ "$theirs" = "$ours" ] || drift+="$path"$'\n'
+		fi
+	done < <(git diff --name-status --no-renames -z "$base" "$ref")
+	log_step "Would stage: $(summary)"
+	if [ -n "$declined_lines" ]; then
+		log_step "Would decline (kept as this branch has them):"
+		while IFS= read -r line; do [ -n "$line" ] && log_step "  $line"; done <<<"$declined_lines"
+	fi
+	while IFS= read -r path; do
+		[ -n "$path" ] && log_warning "Mirror drift: $path differs between $ref and HEAD - a mirror file must be byte-identical in every upstream"
+	done <<<"$drift"
+	log_success "Dry run - nothing was merged"
+	exit 0
+fi
+
+git merge -q --no-commit --no-ff "$ref" >/dev/null 2>&1
+git rev-parse -q --verify MERGE_HEAD >/dev/null ||
+	foundation_die "git merge $ref did not start (an untracked file in the way?) - run it by hand to see why"
+
+# Every path the merge staged or left in conflict, once each.
+candidates=$({
+	git diff --cached --name-only --no-renames -z HEAD
+	git diff --name-only --diff-filter=U -z
+} | tr '\0' '\n' | awk 'NF && !seen[$0]++')
+while IFS= read -r path; do
+	[ -n "$path" ] || continue
+	classify "$path"
+	[ "$class" = declined ] || continue
+	declined_lines+="$path"$'\n'
+	if git cat-file -e "HEAD:$path" 2>/dev/null; then
+		git checkout -q HEAD -- "$path"
+	else
+		git rm -q -f --cached -- "$path" >/dev/null 2>&1
+		rm -f -- "$path"
+		dir=$(dirname -- "$path")
+		[ "$dir" = . ] || rmdir -p -- "$dir" 2>/dev/null || true
+	fi
+done <<<"$candidates"
+
+conflicts=$(git diff --name-only --diff-filter=U)
+if [ -n "$conflicts" ]; then
+	log_warning "Conflicts left to resolve:"
+	while IFS= read -r path; do log_warning "  $path"; done <<<"$conflicts"
+	log_step "Resolve them, git add each, then commit - or undo the whole merge with git merge --abort"
+	exit 1
+fi
+
+staged=$(git diff --cached --name-only HEAD | grep -c .)
+log_success "Staged $staged changed paths from $ref ($(summary)) - review with git diff --cached (git merge --abort undoes it)"
+if [ -n "$declined_lines" ]; then
+	log_step "Declined (kept as this branch has them; read one with git show $ref:PATH):"
+	while IFS= read -r path; do [ -n "$path" ] && log_step "  $path"; done <<<"$declined_lines"
+fi
+version=''
+[ -z "$changelog" ] || version=$(git show "$ref:$changelog" 2>/dev/null |
+	sed -nE 's/^## \[([0-9]+\.[0-9]+\.[0-9]+)\].*/\1/p' | head -n1)
+log_step "Commit it with:"
+log_step "  git commit -m \"Merge $name $branch: ${version:-unreleased changes}\""
+current=$(git symbolic-ref -q --short HEAD 2>/dev/null) || current=''
+log_step "Then push it for a pull request:"
+case $current in
+	master | main)
+		log_step "  git switch -c merge-$name"
+		log_step "  git push -u origin merge-$name"
+		;;
+	*) log_step "  git push -u origin ${current:-BRANCH}" ;;
+esac

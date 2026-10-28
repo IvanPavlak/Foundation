@@ -10,7 +10,7 @@ conflict with it. Upstream ships the area empty.
 | Part | Where |
 | --- | --- |
 | Commands | `Unix/modules/Custom/<Module>/bin`, with its `module.conf` manifest and an optional `functions.sh` |
-| Reference | `docs/unix/custom/<module>.md` (lowercase), one man-style entry per command, as the [module pages](../commands.md) |
+| Reference | `docs/foundation/custom/<module>.md` (lowercase), one man-style entry per command, as the [module pages](../commands.md) |
 | Suites | `Unix/tests/modules/Custom/<Module>/<Command>.bats` |
 
 A Custom module is loaded like an engine module: its `bin` goes on PATH and its `functions.sh` is

@@ -6,7 +6,7 @@ argument-hint: "Command name or module (e.g., 'Open-Browser' or 'Workflow')"
 
 # Document a Foundation command
 
-The docs under `docs/unix/` are the single source of truth for Foundation's commands, and the test suites check them against the code. Write from the code, never from memory.
+The docs under `docs/foundation/` are the single source of truth for Foundation's commands, and the test suites check them against the code. Write from the code, never from memory.
 
 ## 1. Read the command
 
@@ -16,7 +16,7 @@ The docs under `docs/unix/` are the single source of truth for Foundation's comm
 
 ## 2. The module page entry
 
-On `docs/unix/modules/<Module>.md`, one entry per command, alphabetical:
+On `docs/foundation/modules/<Module>.md`, one entry per command, alphabetical:
 
 - `## [Command](https://github.com/<owner>/<repo>/blob/master/Unix/modules/<Module>/bin/<Command>)`
 - right under it, a contiguous bullet block: `- **Description:**` first, then `- **Usage:**` (the header's usage line), then `- **Alias:**` when the shared rc defines one; omit a bullet that does not apply
@@ -24,12 +24,12 @@ On `docs/unix/modules/<Module>.md`, one entry per command, alphabetical:
 
 ## 3. The configuration guide
 
-Every `command` line has exactly one guide, `docs/unix/guides/<module>/<Command>.md`, listed in that folder's `README.md`. Follow `docs/unix/guides/README.md` exactly: the FULL template when the command (or a library it loads, the shared ones excepted) reads a `Unix/config` file, with every such file in its `## Configuration Keys` table; the STUB template otherwise. Generic example values only (`MyProject`, `My-Mac`, `$DEV/MyRepo`), never a value from a `.local.conf` file.
+Every `command` line has exactly one guide, `docs/foundation/guides/<module>/<Command>.md`, listed in that folder's `README.md`. Follow `docs/foundation/guides/README.md` exactly: the FULL template when the command (or a library it loads, the shared ones excepted) reads a `Unix/config` file, with every such file in its `## Configuration Keys` table; the STUB template otherwise. Generic example values only (`MyProject`, `My-Mac`, `$DEV/MyRepo`), never a value from a `.local.conf` file.
 
 ## 4. Keep the rest in step
 
 - Added, renamed or removed command: the `command` line of `module.conf`, the guide file and its index row, and the bats suite `Unix/tests/modules/<Module>/<Command>.bats` (one per command).
-- A changed config file or line kind: `docs/unix/configuration.md` and the guide of every command that reads it.
+- A changed config file or line kind: `docs/foundation/configuration.md` and the guide of every command that reads it.
 - Links are relative and checked; anchors follow docsify (lower case, punctuation dropped, spaces become hyphens).
 - No em-dashes anywhere: a plain hyphen.
 

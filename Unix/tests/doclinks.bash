@@ -1,4 +1,4 @@
-# Relative Markdown links and their anchors under docs/unix - the Infrastructure-DocumentationLinks
+# Relative Markdown links and their anchors under docs/foundation - the Infrastructure-DocumentationLinks
 # check of the Windows half, plus anchors. Load after helpers; used by doclinks.bats and guides.bats.
 
 # The lines of a Markdown file outside code fences. A fence closes only with a run of at least as

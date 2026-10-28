@@ -1,5 +1,5 @@
 # The commands of the module manifests and the Unix/config files each one reads - the
-# classification behind the configuration guides (docs/unix/guides/README.md). Load after
+# classification behind the configuration guides (docs/foundation/guides/README.md). Load after
 # helpers; shared by guides.bats.
 
 # The shared libraries every command loads; the files they read configure everything, not one
@@ -7,7 +7,7 @@
 GUIDES_SHARED_LIBS='^(config|apps|logfile|log|backup|spinner|drivers/.*)$'
 
 # Every command line of every manifest: MODULE<TAB>NAME<TAB>EXECUTABLE<TAB>GUIDE, the guide path
-# relative to docs/unix/guides (Custom area: custom/<module>/).
+# relative to docs/foundation/guides (Custom area: custom/<module>/).
 guides_commands() {
 	local manifest dir module folder kind name
 	for manifest in "$UNIX_DIR"/modules/*/module.conf "$UNIX_DIR"/modules/Custom/*/module.conf; do

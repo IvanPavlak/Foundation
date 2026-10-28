@@ -2,14 +2,14 @@
 # projects, ...), layered over the base Unix/config/NAME.conf at read time by Unix/lib/config.sh.
 # Written by Initialize-Configuration, the Add-* commands and the FoundationConfigurator. Foundation
 # ships only the generic base, so the overlays are ignored here. A fork that runs several Macs can
-# commit its own (git add -f; see docs/unix/fork-model.md) - upstream never tracks them, so
+# commit its own (git add -f; see docs/foundation/fork-model.md) - upstream never tracks them, so
 # committing them downstream never conflicts on a merge.
 Unix/config/*.local.conf
 Unix/config/layouts/*/*.local.conf
 Unix/Brewfile.local
 
 # Terminal overrides - a fork's own WezTerm and Ghostty settings, loaded last by the shared configs
-# and linked by chezmoi only when they exist (docs/unix/fork-model.md).
+# and linked by chezmoi only when they exist (docs/foundation/fork-model.md).
 WezTerm/wezterm.local.lua
 Unix/ghostty/config.local
 
@@ -17,7 +17,7 @@ Unix/ghostty/config.local
 # displaces, a rewritten config file) is first copied into Backups/Unix/<Category>/<Key>/<timestamp>/,
 # bounded by Clear-OldBackups. Kept in the repository so a replaced file is easy to find again, but
 # it is your machine's own data (and may hold secrets), so it is never committed. See
-# docs/unix/backups.md.
+# docs/foundation/backups.md.
 Backups/*
 !Backups/.gitkeep
 

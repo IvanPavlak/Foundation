@@ -121,7 +121,7 @@ overlay_set() {
 				for (i = 1; i <= n; i++) if (got[i] != want[i]) { print; next }
 			}' "$target" >"$target.tmp" && mv "$target.tmp" "$target" || return 1
 	else
-		printf '# Overlay of %s: written by Initialize-Configuration, edited by hand from then on\n# (docs/unix/configuration.md).\n' "${base##*/}" >"$target" || return 1
+		printf '# Overlay of %s: written by Initialize-Configuration, edited by hand from then on\n# (docs/foundation/configuration.md).\n' "${base##*/}" >"$target" || return 1
 	fi
 	[ -z "$(tail -c 1 "$target")" ] || printf '\n' >>"$target"
 	printf '%s\n' "$line" >>"$target"

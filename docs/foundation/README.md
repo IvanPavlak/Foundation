@@ -228,7 +228,7 @@ Get-RepositoryPath                       # the repository root the commands use
 ```
 Unix/
 ├── modules/<Module>/ module.conf manifest, bin/ of Verb-Noun executables, optional functions.sh
-│   └── Custom/<Module>/  the fork-owned Custom area, laid out the same - see docs/unix/custom
+│   └── Custom/<Module>/  the fork-owned Custom area, laid out the same - see docs/foundation/custom
 ├── lib/             sourced bash: foundation.sh (core), config, steps, repository, apps, layout, project, state, terminal, testrun (Run-Tests),
 │   └── drivers/     aerospace.sh, wezterm.sh, inputsource.sh (+ .swift) - the only files that call those tools
 ├── config/          workspaces, layouts/<Type>/<Workspace>_<Type>, projects, browser-groups, apps, zones, machines, kill-all
@@ -236,7 +236,7 @@ Unix/
 │                    zshrc, bashrc, bash_profile, the files ~/.zshrc and friends link to under chezmoi;
 │                    autocomplete-guard.zsh, the time limit on zsh-autocomplete's worker
 ├── home/            chezmoi source state (.chezmoiroot): one link template per dotfile, the config
-│                    template and the first-apply script - see docs/unix/bootstrap.md
+│                    template and the first-apply script - see docs/foundation/bootstrap.md
 ├── tests/           bats suites (run: Run-Tests)
 ├── logs/            session and error logs of every command (gitignored, Pinned/ kept)
 ├── Brewfile         the runtime the Unix half needs (do not add your own apps here)
@@ -278,7 +278,7 @@ too, serially. The suites cover
 the pattern rules, the config readers against a generic fixture config
 (`Unix/tests/fixtures/config`, never your `Unix/config`), and the
 commands-versus-docs completeness check (the Test-ManifestCompleteness analog). CI runs them on
-macOS (`.github/workflows/unix.yml`), the only Unix Foundation runs on, through `Run-Tests
+macOS (`.github/workflows/foundation.yml`), the only Unix Foundation runs on, through `Run-Tests
 --audit-since` (the full suite, plus a warning for every failing suite `--changed` would have
 missed), together with shellcheck over the list `Run-Tests --lint-files` prints and shfmt; the job
 reports as the `Unix Tests` check, can be re-run by hand (`workflow_dispatch`), and keeps the run log

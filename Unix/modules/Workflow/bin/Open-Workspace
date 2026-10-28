@@ -16,7 +16,7 @@
 # opens (an --alongside open of it opens no window); with none left the open exits 1.
 #
 # A workspace may be a template instance (`template NAME` of config/workspace-templates.conf, see
-# docs/unix/configuration.md): its actions are the template's, with the workspace's set, replace,
+# docs/foundation/configuration.md): its actions are the template's, with the workspace's set, replace,
 # drop and add lines applied and {Workspace} and the variables substituted. A template error is
 # reported and that workspace opens nothing (nothing is recorded for it).
 #

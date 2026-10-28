@@ -2,12 +2,12 @@
 #
 # Foundation is meant to be forked. Your fork keeps its own version of the files listed below while
 # still merging engine, command and documentation improvements from upstream. The "ours" merge
-# driver makes `git merge upstream/master` (or Merge-Upstream) keep YOUR copy of a listed file
+# driver makes `git merge foundation/master` (or Merge-Upstreams) keep YOUR copy of a listed file
 # whenever both you and upstream changed it. Git only runs a merge driver when both sides changed
 # the file: a listed file you never edited simply follows upstream (it is still the generic one)
 # until you do, and an upstream deletion of a file you edited is a modify/delete conflict you
 # resolve by hand. Mirrored and root files of a fork of both WinuX and Foundation need more than
-# this: Merge-Upstream --owned-only (docs/unix/fork-model.md).
+# this: Merge-Upstreams (docs/foundation/fork-model.md).
 #
 # The driver must be registered before git runs it: Foundation's git overrides
 # (Git/Unix/gitconfig.local, linked to ~/.gitconfig.local by chezmoi) set merge.ours.driver, so a
@@ -35,4 +35,4 @@ Firefox/user.js                                                merge=ours
 # Custom-area docs landing page - upstream ships it saying "None yet"; your fork lists its own
 # custom pages there. (Custom commands and per-module custom pages need no attribute: upstream
 # never tracks those paths.)
-docs/unix/custom/README.md                                     merge=ours
+docs/foundation/custom/README.md                                     merge=ours

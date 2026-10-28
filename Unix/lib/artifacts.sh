@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # The AI artifacts mechanism shared by Deploy-AiArtifacts, Update-AiArtifacts and List-AiArtifacts
-# (docs/unix/ai.md): the artifacts root, the roster of each kind, the harness definitions of
+# (docs/foundation/ai.md): the artifacts root, the roster of each kind, the harness definitions of
 # ai-harnesses.conf and the deployment plan built from both. Needs lib/config.sh.
 #
 # An artifact is an item folder <root>/<Kind>/<source>/<item>. The sources read are `own` first,

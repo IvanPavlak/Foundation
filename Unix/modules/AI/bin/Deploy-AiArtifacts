@@ -8,7 +8,7 @@
 # a [section] of ai-harnesses.conf (the base catalogue: claude-code, codex, gemini-cli, copilot,
 # all inactive until named); the items are every <root>/<Kind>/<source>/<item> of the sources read
 # (own first, then foundation, example and the vendored sources in name order; the first wins an
-# item name two carry, with a warning), minus the `exclude` lines. Design: docs/unix/ai.md.
+# item name two carry, with a warning), minus the `exclude` lines. Design: docs/foundation/ai.md.
 #
 # Per destination of an app:
 #   each   one link per item in the folder: the item folder itself (`.`), or the first file of the

@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Readers for the per-domain config files under Unix/config (see docs/unix/configuration.md).
+# Readers for the per-domain config files under Unix/config (see docs/foundation/configuration.md).
 #
 # Format shared by every file: `#` starts a comment line, blank lines are ignored, `[Name]`
 # opens a section (names compare case-insensitively, like PowerShell hashtable keys), every
