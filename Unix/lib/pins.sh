@@ -31,7 +31,7 @@ pins_sync() {
 # The Brewfiles Bootstrap bundles: the `brewfile` lines of bootstrap.conf [Packages] (relative to
 # the repository root), else Unix/Brewfile and Unix/Brewfile.local. One path per line.
 pins__brewfiles() {
-	local file line kind rest found=''
+	local file kind rest found=''
 	if file=$(conf_path bootstrap.conf); then
 		while read -r kind rest; do
 			[ "$kind" = brewfile ] && [ -n "$rest" ] || continue
