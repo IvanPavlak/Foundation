@@ -74,6 +74,7 @@ takes `@TYPE`. What the base files ship:
 | `ai-artifacts.conf` | `use rules CoreAiRules` (the example rules) and a commented source example; no `deploy` line, no source | its `deploy` lines, sources, `exclude` and `use` lines (Dotfiles: Claude Code, Codex and Gemini CLI, the mattpocock skills, its own rules) |
 | `ai-harnesses.conf` | the inactive catalogue: `claude-code`, `codex`, `gemini-cli`, `copilot` | a section of its own for another app, or one replacing a base harness |
 | `ai-marketplaces.conf`, `wake-on-lan.conf`, `pdfs.conf`, `dnd.conf` | a commented example, no entries | its marketplaces and `[plugin:NAME]` sections, machines, PDF groups and campaigns |
+| `package-pins.conf` | the line kind and a commented example, no pin | its `brew FORMULA` lines |
 | `ai-mcp-servers.conf` | the line kinds and a commented example; no `deploy` line, no server | its `deploy` line and servers (Dotfiles: Linear and Supermemory into Claude Code and Codex) |
 | `greeting.conf` | the clear and fastfetch settings, onefetch off with no arguments, separator or colors (WinuX's base), no `image-logo` (every machine type shows the text logo of its fastfetch config) | its `@TYPE image-logo` lines; `onefetch on` with its arguments, separator and colors |
 | `spinners.conf` | the 19 styles of WinuX's base verbatim, plus Bounce | styles it changes |
@@ -123,6 +124,7 @@ layout file in the set (and the set folder when it is missing, as on Windows).
 | `login-items.conf` | (Windows Startup apps) | Set-LoginItems |
 | `dotnet.conf` | `DotnetEFVersion`, `MachineSpecificPaths.NuGetConfig`, `DotnetProjectsSearchPath`, the .NET 6 SDK of `WinGetApps.local.csv` | Install-DotnetEf, Install-DotnetSdks (`sdk-channel`), Configure-NuGetConfig, Determine-DotnetDependencies |
 | `conda-environments.conf` | `BootstrapConfig.DataFiles.CondaEnvironments` | Install-CondaEnvironments |
+| `package-pins.conf` | the `Version` column of `WinGetApps.csv`, `ScoopApps.csv` and `ChocolateyApps.csv` | Upgrade-All |
 | `bootstrap.conf` | `BootstrapConfig.Steps`, `BootstrapConfig.RepositoryUpdateScope`, `BootstrapConfig.PersonalSteps` | Bootstrap |
 | `Unix/home/` (not in `config/`: chezmoi's link templates) | `SymbolicLinks` | chezmoi, Bootstrap's Dotfiles step, `Unix/bootstrap.sh`, Add-SymbolicLink - see [Dotfiles with chezmoi](bootstrap.md#dotfiles-with-chezmoi) |
 | `wallpapers.conf` | `WallpaperDarkSettings`, `WallpaperLightSettings` | Set-Wallpaper |
@@ -547,6 +549,27 @@ in order by the PersonalSteps step: a Foundation command or any command on PATH,
 no shell (no quoting, pipes or `&&`); an unknown command is skipped with a warning and a failing
 line fails the step without stopping the others. A section of
 `bootstrap.local.conf` replaces the same section here.
+
+### package-pins.conf
+
+```
+brew node
+@Work brew postgresql@16
+```
+
+One `brew FORMULA` line per Homebrew formula Upgrade-All must leave where it is, the `Version`
+column of the Windows app lists. Before `brew upgrade` Upgrade-All makes Homebrew's own pins match
+the file, in both directions, as Sync-AppPins does on Windows: an installed formula with a line is
+pinned (`brew pin`), and a formula named by a bundled Brewfile (the `brewfile` lines of
+`bootstrap.conf`, else `Unix/Brewfile` and `Unix/Brewfile.local`) that is pinned without a line is
+unpinned, so taking a line back releases the formula. A pin on a formula no Brewfile names was made
+by hand and stays. A line for a formula that is not installed yet is reported and pinned by the
+first Upgrade-All after it is. When the pins cannot be read or set, the Homebrew upgrade is
+skipped and the run fails.
+
+Homebrew pins the installed version: it cannot install an arbitrary one as winget can, and casks
+cannot be pinned. The first field names the package manager, so a manager that can pin joins with a
+line kind of its own. The base ships no pin; `-brew FORMULA` in the overlay takes a base line back.
 
 ### dotnet.conf and conda-environments.conf
 

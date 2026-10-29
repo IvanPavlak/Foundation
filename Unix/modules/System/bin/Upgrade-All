@@ -4,10 +4,14 @@
 # Usage: Upgrade-All [PACKAGE-MANAGER...]
 #
 # PACKAGE-MANAGER is Homebrew, AppStore or MacOS; without one Homebrew and AppStore run, as the
-# Windows Upgrade-All upgrades every manager in use. Homebrew runs `brew update` and `brew upgrade`
-# (formulae and casks; casks that update themselves are left to it); pinned formulae (`brew pin`)
-# are listed first and skipped, the Show-PinnedAppsWarning analog. AppStore upgrades the App Store
-# apps with `mas upgrade`, which needs the administrator password, so it asks only when
+# Windows Upgrade-All upgrades every manager in use. Homebrew first makes its pins match
+# package-pins.conf (the Sync-AppPins analog): every `brew FORMULA` line is pinned (`brew pin`),
+# and a formula of the bundled Brewfiles that is pinned without a line is unpinned; a pin on a
+# formula no Brewfile names is left alone. The pinned formulae are listed and skipped (the
+# Show-PinnedAppsWarning analog), then `brew update` and `brew upgrade` run (formulae and casks;
+# casks that update themselves are left to it). When the pins cannot be read or set, the Homebrew
+# upgrade is skipped and the run fails: it would move a formula that should stay. AppStore
+# upgrades the App Store apps with `mas upgrade`, which needs the administrator password, so it asks only when
 # `mas outdated` lists an app; without mas it is skipped with a warning. MacOS installs pending
 # system updates with `softwareupdate` (administrator password too); it runs only when named,
 # because it may restart the Mac. An unknown manager or flag is an error before anything runs.
@@ -21,6 +25,7 @@ while [ -L "$_foundation" ]; do
 done
 . "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
 foundation_require_bash || exit 1
+foundation_load config pins
 
 foundation_normalize_args "$@"
 set -- "${FOUNDATION_ARGS[@]}"
@@ -52,10 +57,10 @@ for manager in "${managers[@]}"; do
 				continue
 			fi
 			log_title "Upgrading all Homebrew Software"
-			pinned=$(brew list --pinned 2>/dev/null) || pinned=''
-			if [ -n "$pinned" ]; then
-				log_warning "Skipping version-pinned packages"
-				printf '%s\n' "$pinned" | sed 's/^/  - /'
+			if ! pins_sync Homebrew; then
+				log_error "Upgrading all Homebrew Software skipped => its pins could not be confirmed"
+				failures=$((failures + 1))
+				continue
 			fi
 			brew update && brew upgrade || failures=$((failures + 1))
 			;;

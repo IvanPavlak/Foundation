@@ -34,7 +34,7 @@ data_lines() { grep -vE '^[[:space:]]*(#|$)' "$base/$1" || true; }
 }
 
 @test "the personal files ship empty" {
-	for file in git.conf language.conf wake-on-lan.conf special-folders.conf pdfs.conf dnd.conf; do
+	for file in git.conf language.conf wake-on-lan.conf special-folders.conf pdfs.conf dnd.conf package-pins.conf; do
 		run data_lines "$file"
 		[ -z "$output" ] || {
 			echo "$file must stay empty in the tracked base => $output"

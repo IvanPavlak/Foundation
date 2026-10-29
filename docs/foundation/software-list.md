@@ -28,8 +28,9 @@ Everything here is needed for Foundation to work end to end; do not add your own
 | `shfmt` | brew | Format check of the Unix half (Run-Tests, CI) |
 | `bats-core` | brew | Test runner of the Unix suites (Run-Tests, CI) |
 
-Casks cannot be version-pinned; a formula can be held with `brew pin FORMULA`, which Upgrade-All
-lists and skips.
+Casks cannot be version-pinned; a formula is held with a `brew FORMULA` line in
+[`package-pins.local.conf`](configuration.md#package-pinsconf), which Upgrade-All pins (`brew pin`)
+before it upgrades, then lists and skips.
 
 ## Your own packages: Brewfile.local
 

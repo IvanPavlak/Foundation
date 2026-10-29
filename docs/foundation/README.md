@@ -139,8 +139,10 @@ the Mac gets it from `Git/Unix/gitconfig.local`, because `~/.gitconfig` is a lin
   Measure-ShellStartup, and a clock read per stage would cost every start.
 - Nerd Font: a Brewfile cask (`font-jetbrains-mono-nerd-font`, the font the WezTerm and Ghostty
   configs name), no font menu as `Configure-NerdFont` has.
-- Version pins: `brew pin FORMULA` by hand (Upgrade-All lists and skips the pinned ones); the
-  Brewfile has no version column as the Windows app lists do.
+- Version pins: the Brewfile has no version column as the Windows app lists do, so the pins live
+  in `package-pins.conf` (`brew FORMULA` lines), which Upgrade-All reconciles with `brew pin` and
+  `brew unpin` before it upgrades, the Sync-AppPins of Windows. Homebrew pins the installed version;
+  it cannot install an arbitrary one.
 - Node: Windows installs Node LTS (`OpenJS.NodeJS.LTS`) next to mise; on the Mac mise alone
   provides it (`brew "mise"` in a `Brewfile.local`): a `[PersonalSteps]` line of `bootstrap.local.conf`,
   `mise use --global node@lts`, sets the global version, a project's `mise.toml` pins its own, and

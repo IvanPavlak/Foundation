@@ -8,12 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **`Upgrade-All` keeps Homebrew's pins in step with a new `package-pins.conf`, the `Version` column of WinuX's app lists.** Pins were only ever made by hand and Upgrade-All just listed them, so nothing in the repository said which formulae were held or why, and a pin outlived the decision behind it. One `brew FORMULA` line per formula to keep (`@TYPE` and the `.local.conf` overlay apply; the base ships none). Before `brew upgrade` Upgrade-All now reconciles both directions, as WinuX's `Sync-AppPins` does: an installed formula with a line is pinned (`brew pin`), and a formula of the bundled Brewfiles (the `brewfile` lines of `bootstrap.conf`, else `Unix/Brewfile` and `Unix/Brewfile.local`) that is pinned without a line is unpinned. A pin on a formula no Brewfile names was made by hand and stays; a line for a formula not installed yet is reported and pinned once it is. When the pins cannot be read or set the Homebrew upgrade is skipped and the run fails, since it would move a formula that should stay; before, a failed `brew list --pinned` was read as no pins. Homebrew pins the installed version and cannot pin a cask. The reconciliation lives in the new `Unix/lib/pins.sh`, keyed by package manager so another one that can pin joins with a line kind of its own. No time limit is put on the brew calls: unlike WinuX's `choco pin list`, none has been seen to stall, and `brew pin` and `brew list --pinned` only read and write the local Cellar. Covered by `Unix/tests/modules/System/Upgrade-All.bats`, `Unix/tests/pins.bats` and `Unix/tests/vanilla.bats`; documented in the System module reference, the Upgrade-All guide, Configuration, the software list and the overview.
+
 ## [0.2.1] - 2026-10-28
 
 ### Fixed
 
 - **`Merge-Upstreams --dry-run` lists exactly what the merge would do.** It listed everything the upstream changed since the last merge, so a fork that already had a change saw paths "taken" and "declined" that the real run never touched, and it could not say which conflicts the real run would stop on. It now has `git merge-tree` (git 2.38 or newer) compute the same merge, with the same attributes and merge drivers, into a tree of its own, touching neither the index nor the working tree. It lists the paths that tree changes against HEAD: what the real run would take, what it would put back (a conflict there included, since putting back resolves it), and the conflicts it would stop on. The mirror drift warning now means what it says: a mirror file whose merged copy would differ from the upstream's. Covered by `Unix/tests/modules/Git/Merge-Upstreams.bats` (the dry run is checked against the real run); documented in the Git module reference, its guide and the Fork Model.
 - **No workflow job runs in a private repository.** The `Mirror contract` job of `foundation.yml` and the `foundation-release.yml` job now carry the guard the macOS test job already had (`if: ${{ !github.event.repository.private }}`), so a private fork that merges Foundation starts none of Foundation's jobs and spends none of its Actions minutes on them. Foundation itself is public, where nothing changes. Documented in the Fork Model.
+
 ## [0.2.0] - 2026-10-28
 
 ### Added

@@ -5,8 +5,8 @@
 #
 # DO NOT add your own apps here: they belong in Unix/Brewfile.local, the WinGetApps.local.csv
 # analog, bundled right after this file. Mapping and every name's verification:
-# Backlog/MacOS/Research/PackageMapping.md. Casks cannot be version-pinned; formulae can be held
-# with `brew pin`.
+# Backlog/MacOS/Research/PackageMapping.md. Casks cannot be version-pinned; a formula is held by a
+# `brew FORMULA` line in config/package-pins.local.conf, which Upgrade-All pins.
 
 tap "nikitabobko/tap"             # AeroSpace's tap (the aerospace cask)
 
