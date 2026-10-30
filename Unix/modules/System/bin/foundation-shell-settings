@@ -3,13 +3,18 @@
 #
 # Usage: foundation-shell-settings [--prompt-theme]
 #
-# One `KEY VALUE` line each: prompt-theme (the Oh My Posh theme, see foundation-prompt-theme), the
-# line-editing settings of Unix/config/shell.conf - history-size, history-file (expanded),
-# edit-mode, list-lines - for this machine type, the .local overlay applied (a setting without a
-# line is left out, so the shell keeps its own default), and one `app TOKEN` line per apps.conf
-# token, for the Open-<TOKEN> aliases. One process for both startup stages: each
-# helper run costs a new shell about a tenth of a second. --prompt-theme prints the theme path
-# alone. Keeps no session log of its own (one per terminal would push the real command logs out).
+# One `KEY VALUE` line each: prompt-theme (the Oh My Posh theme, see foundation-prompt-theme),
+# eza-colors (the list-color lines of theme.conf as an EZA_COLORS value, when there are any), one
+# `app TOKEN` line per apps.conf token (for the Open-<TOKEN> aliases), then the line-editing
+# settings of Unix/config/shell.conf for this machine type, the .local overlay applied (the last
+# line of a kind wins): history-size, history-file (expanded), edit-mode, history-no-duplicates,
+# history-save-style, completion-ignore-case, prediction-source, prediction-view, the list's
+# prediction-list-marker and colours (color-list-prediction, color-list-prediction-selected, color-emphasis), and one `bindkey SEQUENCE WIDGET` line per key binding, the
+# `key` lines translated by lib/lineediting.sh over the Windows-mode keys of `edit-mode windows`.
+# A setting without a valid line is left out, so the shell keeps its own default. One process for
+# both startup stages: each helper run costs a new shell about a tenth of a second.
+# --prompt-theme prints the theme path alone. Keeps no session log of its own (one per terminal
+# would push the real command logs out).
 export FOUNDATION_LOGGING=off
 _foundation=${BASH_SOURCE[0]}
 while [ -L "$_foundation" ]; do
@@ -18,7 +23,7 @@ while [ -L "$_foundation" ]; do
 done
 . "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
 foundation_require_bash || exit 1
-foundation_load config apps
+foundation_load config apps lineediting
 
 # The prompt-theme line of theme.conf, {MachineType} replaced; the shipped theme without one.
 theme=''
@@ -32,21 +37,37 @@ if [ "${1:-}" = --prompt-theme ]; then
 fi
 printf 'prompt-theme %s\n' "$theme"
 
+# The list-color lines of theme.conf, as one EZA_COLORS value for the ls, ll, la and l aliases.
+if [ -n "$file" ]; then
+	colors=$(conf_lines "$file" | while read -r kind rest; do
+		[ "${kind,,}" = list-color ] && printf '%s\n' "$rest"
+	done | lineediting_eza_colors)
+	[ -n "$colors" ] && printf 'eza-colors %s\n' "$colors"
+fi
+
 while IFS= read -r token; do
 	[ -n "$token" ] && printf 'app %s\n' "$token"
 done < <(apps_list | cut -f1)
 
 file=$(conf_path shell.conf) || exit 0
-for key in history-size history-file edit-mode list-lines; do
-	value=$(conf_value "$file" "$key" 2>/dev/null) || continue
-	case $key in
-		history-size | list-lines) case $value in '' | *[!0-9]*) continue ;; esac ;;
-		history-file) value=$(foundation_expand_path "$value") ;;
-		edit-mode)
-			value=$(foundation_lower "$value")
-			case $value in emacs | vi) ;; *) continue ;; esac
+# One pass over the effective lines: the last valid line of each scalar kind wins, the key lines
+# keep their order for lineediting_bindings.
+declare -A setting=()
+keys=''
+while read -r kind rest; do
+	kind=${kind,,}
+	case $kind in
+		key) keys+="$rest"$'\n' ;;
+		history-size | history-file | edit-mode | history-no-duplicates | history-save-style | completion-ignore-case | prediction-source | prediction-view | prediction-list-marker | color-list-prediction | color-list-prediction-selected | color-emphasis)
+			value=$(lineediting_setting "$kind" "$rest") && setting[$kind]=$value
 			;;
 	esac
-	[ -n "$value" ] && printf '%s %s\n' "$key" "$value"
+done < <(conf_lines "$file")
+[ -n "${setting["history-file"]:-}" ] && setting["history-file"]=$(foundation_expand_path "${setting["history-file"]}")
+for kind in history-size history-file edit-mode history-no-duplicates history-save-style completion-ignore-case prediction-source prediction-view prediction-list-marker color-list-prediction color-list-prediction-selected color-emphasis; do
+	[ -n "${setting[$kind]:-}" ] && printf '%s %s\n' "$kind" "${setting[$kind]}"
 done
+while read -r sequence widget; do
+	[ -n "$widget" ] && printf 'bindkey %s %s\n' "$sequence" "$widget"
+done < <(printf '%s' "$keys" | lineediting_bindings "${setting["edit-mode"]:-}")
 exit 0

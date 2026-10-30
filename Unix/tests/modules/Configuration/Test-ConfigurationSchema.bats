@@ -176,3 +176,26 @@ setup() {
 	[ "$status" -eq 0 ]
 	[[ $output != *"is set in neither"* ]]
 }
+
+@test "a shell.conf line foundation-shell-settings would skip is a problem; the overlay counts too" {
+	cfg=$FOUNDATION_CONFIG_DIR
+	printf 'edit-mode windows\nkey UpArrow HistorySearchBackward\n' >"$cfg/shell.conf"
+	printf 'key Tab NoSuchFunction\nlist-lines 5\n' >"$cfg/shell.local.conf"
+	run "${BASH:-bash}" "$cmd" --strict --quiet
+	[ "$status" -eq 1 ]
+	[[ $output == *"shell.conf: key Tab: unknown function NoSuchFunction"* ]]
+	[[ $output == *"shell.conf: unknown line kind list-lines"* ]]
+	printf 'key Tab Complete\n' >"$cfg/shell.local.conf"
+	run "${BASH:-bash}" "$cmd" --strict --quiet
+	[[ $output != *shell.conf* ]]
+}
+
+@test "a list-color line of theme.conf with an unknown key or colour is a problem" {
+	cfg=$FOUNDATION_CONFIG_DIR
+	printf 'list-color user #FFA500\nlist-color colour red\nlist-color date orange\n' >"$cfg/theme.local.conf"
+	run "${BASH:-bash}" "$cmd" --strict --quiet
+	[ "$status" -eq 1 ]
+	[[ $output == *"theme.conf: list-color colour: unknown key"* ]]
+	[[ $output == *"theme.conf: list-color date: [orange] is not a colour"* ]]
+	[[ $output != *"list-color user"* ]]
+}

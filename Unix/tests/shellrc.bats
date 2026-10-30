@@ -2,7 +2,8 @@
 # Unix/shell/shellrc.sh, the shared interactive rc, and the tracked zshrc that sources it: the PATH
 # a source sets up (mise's shims folder once, only when it exists), and the completion setup -
 # Docker's completions on fpath before the completion system starts, no second compinit in zshrc,
-# and the line-editing settings of shell.conf; the startup stages (the skip list, the trace), the
+# and the line-editing settings of shell.conf (in zsh nothing without a line: no key, no history
+# option); the startup stages (the skip list, the trace), the
 # Windows aliases, the Greeting stage and the typed fastfetch and onefetch.
 # A non-interactive source stops before the interactive part, so nothing but PATH work runs.
 
@@ -50,10 +51,8 @@ rc_path() {
 @test "the tracked zshrc runs no compinit; the shared rc puts Docker's completions on fpath before the completion system" {
 	! grep -qE '^[^#]*compinit' "$UNIX_DIR/shell/zshrc" || false
 	docker=$(grep -nE '^[^#]*\.docker/completions' "$rc" | head -1 | cut -d: -f1)
-	plugin=$(grep -nE '^[^#]*\. "\$_zsh_autocomplete"' "$rc" | head -1 | cut -d: -f1)
 	compinit=$(grep -nE '^[^#]*compinit -C' "$rc" | head -1 | cut -d: -f1)
-	[ -n "$docker" ] && [ -n "$plugin" ] && [ -n "$compinit" ]
-	[ "$docker" -lt "$plugin" ]
+	[ -n "$docker" ] && [ -n "$compinit" ]
 	[ "$docker" -lt "$compinit" ]
 }
 
@@ -99,6 +98,66 @@ rc_interactive() {
 		"${BASH:-bash}" -i -c '. "$1" >/dev/null 2>&1; echo "$HISTSIZE $HISTFILESIZE $HISTFILE"; set -o | grep "^vi "' _ "$rc" </dev/null
 	[[ $output == *"123 123 $HOME/my_history"* ]]
 	[[ $output == *"vi"*"on"* ]]
+}
+
+# The zsh keys and history options after an interactive zsh sourced the rc with $cfg as the config.
+# Usage: zsh_line_editing
+zsh_line_editing() {
+	: >"$HOME/.zshrc"
+	env -i HOME="$HOME" PATH="$(dirname "$BASH"):/usr/bin:/bin" TERM=dumb DOTFILES_ROOT="$(dirname "$UNIX_DIR")" FOUNDATION_TTY=/dev/null \
+		FOUNDATION_CONFIG_DIR="$cfg" FOUNDATION_MACHINE_TYPE=Work \
+		FOUNDATION_STARTUP_SKIP=Aliases,Prompt,Plugins,Icons,Greeting,RepositoryUpdate \
+		"$(command -v zsh)" -i -c '. "$1" >/dev/null 2>&1; bindkey "^[[A"; bindkey "^[[H"; bindkey "^@"; bindkey "^I"
+			[[ -o HIST_FIND_NO_DUPS ]] && echo nodups; [[ -o INC_APPEND_HISTORY ]] && echo incappend; [[ -o HIST_IGNORE_DUPS ]] && echo ignoredups
+			[[ -o AUTO_LIST ]] || echo noautolist; zstyle -L ":completion:*" matcher-list; zmodload | grep -x zsh/complist
+			print "savehist=$SAVEHIST"; :' _ "$rc" </dev/null
+}
+
+@test "zsh: the base ships no line-editing lines, so zsh keeps its own keys and history options" {
+	command -v zsh >/dev/null 2>&1 || skip "zsh is not installed"
+	cfg=$BATS_TEST_TMPDIR/config
+	mkdir -p "$cfg"
+	cp "$UNIX_DIR/config/shell.conf" "$cfg/"
+	run zsh_line_editing
+	[[ $output == *'"^[[A" up-line-or-history'* ]]
+	[[ $output == *'"^[[H" undefined-key'* ]]
+	[[ $output != *nodups* ]]
+	[[ $output != *complist* ]]
+	[[ $output != *incappend* ]]
+	[[ $output != *noautolist* ]]
+	[[ $output != *matcher-list* ]]
+	[[ $output == *'"^I" expand-or-complete'* ]]
+}
+
+@test "zsh: edit-mode windows, key lines, history-no-duplicates, history-save-style and completion-ignore-case are applied" {
+	command -v zsh >/dev/null 2>&1 || skip "zsh is not installed"
+	cfg=$BATS_TEST_TMPDIR/config
+	mkdir -p "$cfg"
+	printf 'edit-mode windows\nkey UpArrow HistorySearchBackward\nkey Ctrl+Spacebar MenuComplete\nhistory-no-duplicates on\nhistory-save-style incrementally\ncompletion-ignore-case on\n' >"$cfg/shell.conf"
+	run zsh_line_editing
+	[[ $output == *'"^[[A" history-beginning-search-backward'* ]]
+	[[ $output == *'"^I" menu-complete'* ]]
+	[[ $output == *noautolist* ]]
+	[[ $output == *incappend* ]]
+	[[ $output == *ignoredups* ]]
+	[[ $output == *"matcher-list 'm:{a-zA-Z}={A-Za-z}'"* ]]
+	[[ $output == *'"^[[H" beginning-of-line'* ]]
+	[[ $output == *'"^@" menu-select'* ]]
+	[[ $output == *nodups* ]]
+	[[ $output == *zsh/complist* ]]
+}
+
+@test "zsh: history-save-style nothing saves no history; the prediction list takes Up and Down only with source history and view list" {
+	command -v zsh >/dev/null 2>&1 || skip "zsh is not installed"
+	cfg=$BATS_TEST_TMPDIR/config
+	mkdir -p "$cfg"
+	printf 'history-save-style nothing\nprediction-source history\nprediction-view inline\n' >"$cfg/shell.conf"
+	run zsh_line_editing
+	[[ $output == *savehist=0* ]]
+	[[ $output == *'"^[[A" up-line-or-history'* ]]
+	printf 'prediction-source history\nprediction-view list\n' >"$cfg/shell.conf"
+	run zsh_line_editing
+	[[ $output == *'"^[[A" foundation-prediction-up'* ]]
 }
 
 @test "every apps.conf token without a command of its own becomes an Open-<TOKEN> alias" {
