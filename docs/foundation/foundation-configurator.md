@@ -112,7 +112,7 @@ Files that others refer to come first, so a reference is never written before it
 | 6 | `vscode-folders.conf`, `vscode-workspaces.conf` | What `Open-VSCode` opens for a project |
 | 7 | `zones.conf`, `layouts/<Type>/` | Zone sets, then where each window of a workspace goes |
 | 8 | `workspace-templates.conf`, `workspaces.conf` | Ties everything above together; a template stamps out sibling workspaces |
-| 9 | `bootstrap.conf`, then `Unix/Brewfile.local` and the files of the steps it turns on: `system-defaults.conf`, `power.conf`, `dock.conf`, `login-items.conf`, `dotnet.conf`, `conda-environments.conf` | Provisioning: which [Bootstrap](bootstrap.md) steps run on this Mac, then what each one sets |
+| 9 | `bootstrap.conf`, then `Unix/Brewfile.local` with its `package-pins.conf` (the formulae Upgrade-All keeps where they are), and the files of the steps it turns on: `system-defaults.conf`, `power.conf`, `dock.conf`, `login-items.conf`, `dotnet.conf`, `conda-environments.conf` | Provisioning: which [Bootstrap](bootstrap.md) steps run on this Mac, then what each one sets |
 | 10 | The rest | Ask the Decisions of the guides that name each file (its header comment as a fallback): `obsidian`, `git` (`status-arguments`; the identity is Step 0's), `docker`, `theme`, `wallpapers`, `language`, `special-folders`, `greeting`, `kill-all`, `window`, `wake-on-lan`, `pdfs`, `dnd`, `ai-artifacts` (which harnesses this Mac deploys into, the vendored sources, `exclude` and `use` lines), `ai-harnesses` (only an app the catalogue lacks), `ai-marketplaces`, `ai-mcp-servers` (the apps and the servers; never a token, only the variable holding it), `vscode-profiles`, `backups`, `logging`, `spinners`, `translate` |
 
 ## Decisions per file
