@@ -57,6 +57,15 @@
 # A workspace line may start with %SET[,SET] (before a +project scope): it runs only when SET is the
 # layout set this machine applies (see lib/workspace.sh).
 #
+# A line ending in a lone `&` runs in the background: the open starts it and goes on with the next
+# action at once, and waits for every background action before the next Set-WorkspaceWindowLayout,
+# Focus-VirtualDesktop, Terminate-WindowsTerminalTabs or Return and at the end of the workspace.
+# Only commands that just start apps, terminal tabs or containers may (Open-Application and every
+# Open-<App>, Open-Project, Open-ProjectTerminals, Open-VSCode, Open-VSCodeWorkspace,
+# Open-Obsidian, Open-ClaudeDesktop, Open-Docker, Open-Acrobat, Start-Containers); any other runs
+# in place with a warning. A background action cannot ask anything (a menu it would show fails
+# it), its output is shown when it is waited for, and a failure counts as one in place does.
+#
 # --alongside opens the workspace next to the ones already open, as on Windows. The whole open is
 # relaunched in a new WezTerm window (the calling shell gets its prompt back at once; without a
 # running WezTerm it runs here), so its terminal tabs join that window; the new window clears the
@@ -331,7 +340,7 @@ in_own_project_tab() {
 		[ "${words[0]:-}" = Open-Project ] || continue
 		names=()
 		for word in "${words[@]:1}"; do
-			case $word in -* | '{'*'}') continue ;; esac
+			case $word in -* | '{'*'}' | '&') continue ;; esac
 			foundation_split_list names "$word"
 		done
 		[ ${#names[@]} -gt 0 ] || names=(${workspace_projects[@]+"${workspace_projects[@]}"})
@@ -340,6 +349,32 @@ in_own_project_tab() {
 		done
 	done <<<"$actions"
 	return 1
+}
+
+# The background actions of the workspace being opened (a trailing `&`): their pids, names and
+# output files. join_background waits for each in start order, shows its output and counts a
+# failure as an action run in place does; the wait counts as action time.
+bg_pids=()
+bg_actions=()
+bg_outputs=()
+join_background() {
+	local i status join_start
+	[ ${#bg_pids[@]} -gt 0 ] || return 0
+	join_start=$(foundation_now_ms)
+	for i in "${!bg_pids[@]}"; do
+		status=0
+		wait "${bg_pids[i]}" || status=$?
+		cat "${bg_outputs[i]}" 2>/dev/null
+		rm -f "${bg_outputs[i]}"
+		if [ "$status" -ne 0 ]; then
+			log_warning "Action [${bg_actions[i]}] reported a failure"
+			failed_actions+=("${bg_actions[i]}")
+		fi
+	done
+	bg_pids=()
+	bg_actions=()
+	bg_outputs=()
+	actions_ms=$((actions_ms + $(foundation_now_ms) - join_start))
 }
 
 summary_printed=0
@@ -406,7 +441,7 @@ for workspace in "${workspaces[@]}"; do
 			[ "${words[0]}" = Open-Project ] || continue
 			named=0
 			for word in "${words[@]:1}"; do
-				case $word in -* | '{'*'}') continue ;; esac
+				case $word in -* | '{'*'}' | '&') continue ;; esac
 				named=1
 				printf '%s\n' ${fixed[@]+"${fixed[@]}"} | grep -qixF -- "$word" || fixed+=("$word")
 			done
@@ -458,11 +493,18 @@ for workspace in "${workspaces[@]}"; do
 	while IFS= read -r line; do
 		[ -n "$line" ] || continue
 		read -r -a words <<<"$line"
+		# A trailing `&`: run this action in the background (see the header).
+		background=0
+		if [ ${#words[@]} -gt 1 ] && [ "${words[${#words[@]} - 1]}" = '&' ]; then
+			background=1
+			words=("${words[@]:0:${#words[@]}-1}")
+		fi
 		action=${words[0]}
 		arguments=("${words[@]:1}")
 		# Return: stop the open here, as the Windows action does (it returns from Open-Workspace),
 		# so later actions and workspaces do not run. What opened so far is still recorded.
 		if [ "$action" = Return ]; then
+			join_background
 			log_debug "[Open-Workspace] Return - stopping after [$name]"
 			returned=1
 			break
@@ -520,6 +562,13 @@ for workspace in "${workspaces[@]}"; do
 			done
 		fi
 
+		if [ "$background" -eq 1 ] && ! workspace_may_background "${command[1]}"; then
+			log_warning "Action [$action] cannot run in the background - running it in place"
+			background=0
+		fi
+		# These need every window the background actions start.
+		case $action in Set-WorkspaceWindowLayout | Focus-VirtualDesktop | Terminate-WindowsTerminalTabs) join_background ;; esac
+
 		# Terminate-WindowsTerminalTabs --only-current / --include-current closes the tab this runs
 		# in and ends this process with it: record the open and print the summary first, as Windows
 		# does, or the workspace would be untracked and cw could not close it.
@@ -543,8 +592,24 @@ for workspace in "${workspaces[@]}"; do
 		if [ "$action" = Set-WorkspaceWindowLayout ] && ! foundation_flush_deferred; then
 			failed_actions+=("deferred actions")
 		fi
-		log_debug "[Open-Workspace] => $action ${arguments[*]}"
 		action_start=$(foundation_now_ms)
+		if [ "$background" -eq 1 ]; then
+			log_debug "[Open-Workspace] => $action ${arguments[*]} (background)"
+			# No menu can wait for the keyboard (FOUNDATION_TTY names no file), the output is held
+			# for join_background, in colour when this open's is.
+			bg_outputs+=("$run_dir/background-${#bg_pids[@]}.out")
+			force_color=''
+			log_use_color && force_color=1
+			(
+				export FOUNDATION_LOG_FORCE_COLOR=$force_color FOUNDATION_TTY=$run_dir/no-tty
+				"${command[@]}" "${arguments[@]}"
+			) </dev/null >"${bg_outputs[${#bg_outputs[@]} - 1]}" 2>&1 &
+			bg_pids+=($!)
+			bg_actions+=("$action")
+			actions_ms=$((actions_ms + $(foundation_now_ms) - action_start))
+			continue
+		fi
+		log_debug "[Open-Workspace] => $action ${arguments[*]}"
 		if ! "${command[@]}" "${arguments[@]}" </dev/null; then
 			log_warning "Action [$action] reported a failure"
 			failed_actions+=("$action")
@@ -555,6 +620,7 @@ for workspace in "${workspaces[@]}"; do
 		# The terminal window has its final size now - draw the deferred tab panels.
 		[ "$action" = "Set-WorkspaceWindowLayout" ] && term_flush_deferred
 	done <<<"$actions"
+	join_background
 	foundation_flush_deferred || failed_actions+=("deferred actions")
 	term_flush_deferred
 

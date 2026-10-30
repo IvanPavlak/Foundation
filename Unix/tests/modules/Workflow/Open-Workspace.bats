@@ -438,3 +438,54 @@ default_line() {
 	[ "$status" -eq 0 ]
 	stub_called '^open -b com\.microsoft\.VSCode'
 }
+
+@test "a trailing & runs an action in the background, waited for before the next window action" {
+	printf '\n[Background]\nOpen-Application Code &\nFocus-VirtualDesktop 2\n' >>"$FOUNDATION_CONFIG_DIR/workspaces.conf"
+	run "${BASH:-bash}" "$cmd" Background -v
+	[ "$status" -eq 0 ]
+	[[ $output == *"=> Open-Application Code (background)"* ]]
+	stub_called '^open -b com\.microsoft\.VSCode'
+	# Its output comes before the action that waited for it.
+	opened=$(grep -n 'Opening Code' <<<"$output" | head -1 | cut -d: -f1)
+	focused=$(grep -n 'Focusing Virtual Desktop 2' <<<"$output" | head -1 | cut -d: -f1)
+	[ -n "$opened" ] && [ -n "$focused" ] && [ "$opened" -lt "$focused" ]
+	grep -qE $'^Background\twindow\t900\t' "$FOUNDATION_STATE_DIR/open-workspaces"
+	[[ $output == *"seconds!"* ]]
+}
+
+@test "a background action at the end of a workspace is waited for before the record" {
+	printf '\n[BackgroundLast]\nOpen-Code &\n' >>"$FOUNDATION_CONFIG_DIR/workspaces.conf"
+	run "${BASH:-bash}" "$cmd" BackgroundLast
+	[ "$status" -eq 0 ]
+	stub_called '^open -b com\.microsoft\.VSCode'
+	grep -qE $'^BackgroundLast\twindow\t900\t' "$FOUNDATION_STATE_DIR/open-workspaces"
+}
+
+@test "a failed background action is reported like one run in place" {
+	printf '\n[BackgroundFails]\nOpen-Application NoSuchAppAnywhere &\nFocus-VirtualDesktop 2\n' >>"$FOUNDATION_CONFIG_DIR/workspaces.conf"
+	run "${BASH:-bash}" "$cmd" BackgroundFails
+	[ "$status" -eq 0 ]
+	[[ $output == *"apps.conf has no entry for [NoSuchAppAnywhere]"* ]]
+	[[ $output == *"Action [Open-Application] reported a failure"* ]]
+	[[ $output == *"but Open-Application failed - see above!"* ]]
+	stub_called '^aerospace workspace -- 2'
+}
+
+@test "a trailing & on a command that may not run in the background runs it in place" {
+	printf '\n[NotBackground]\nFocus-VirtualDesktop 2 &\n' >>"$FOUNDATION_CONFIG_DIR/workspaces.conf"
+	run "${BASH:-bash}" "$cmd" NotBackground -v
+	[ "$status" -eq 0 ]
+	[[ $output == *"Action [Focus-VirtualDesktop] cannot run in the background - running it in place"* ]]
+	[[ $output != *"(background)"* ]]
+	stub_called '^aerospace workspace -- 2'
+}
+
+@test "a bare Open-Project in the background still asks up front and runs with the pick" {
+	printf '\n[MenuBackground]\nOpen-Project &\n+SampleApi Focus-VirtualDesktop 7\n+!SampleApi Focus-VirtualDesktop 8\n' >>"$FOUNDATION_CONFIG_DIR/workspaces.conf"
+	printf 'SampleApi\n' >"$BATS_TEST_TMPDIR/answers"
+	FOUNDATION_TTY=$BATS_TEST_TMPDIR/answers run "${BASH:-bash}" "$cmd" MenuBackground -v
+	[[ $output == *"[Available projects]"* ]]
+	[[ $output == *"=> Open-Project SampleApi (background)"* ]]
+	stub_called '^aerospace workspace -- 7'
+	! stub_called '^aerospace workspace -- 8' || false
+}

@@ -30,6 +30,17 @@ To fill them in by interview, run the [FoundationConfigurator](foundation-config
   `@TYPE` follows the machine type, `%` follows the layout actually applied, so a window count can
   match it (`%Work Open-Browser --no-menu --instances 2`). Test-ConfigurationSchema reports a set
   that is no `type` line and no `layouts/<Set>/` folder.
+- A workspace line ending in a lone `&` runs in the background (`Open-DBeaver &`): Open-Workspace
+  starts it and goes on with the next action, and waits for every background action before the next
+  `Set-WorkspaceWindowLayout`, `Focus-VirtualDesktop`, `Terminate-WindowsTerminalTabs` or `Return`
+  and at the end of the workspace, so the layout still sees every window. Only commands that just
+  start apps, terminal tabs or containers may: `Open-Application` and every `Open-<App>`,
+  `Open-Project`, `Open-ProjectTerminals`, `Open-VSCode`, `Open-VSCodeWorkspace`, `Open-Obsidian`,
+  `Open-ClaudeDesktop`, `Open-Docker`, `Open-Acrobat` and `Start-Containers`. The browser openers
+  stay in place: each takes the window that appears after its own launch. Any other command marked
+  `&` runs in place with a warning, and Test-ConfigurationSchema reports it. A background action
+  cannot ask anything (a menu fails it), its output appears when it is waited for, and its failure
+  is reported like any other. WinuX has no equivalent; workspaces without `&` open as before.
 - Before the first section, a line `-LINE` removes every earlier line equal to `LINE` (case and
   whitespace runs ignored), so an overlay can take back a line of the base file, as the `-<id>`
   rows of the Windows `.local.csv` overlays do: `-item /Applications/Tailscale.app hidden` in

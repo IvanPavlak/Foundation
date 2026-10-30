@@ -157,11 +157,21 @@ if [ -f "$file" ]; then
 				done < <(workspace_scope_projects "$scope")
 			fi
 			read -r -a words <<<"$line"
+			background=0
+			if [ ${#words[@]} -gt 1 ] && [ "${words[${#words[@]} - 1]}" = '&' ]; then
+				background=1
+				words=("${words[@]:0:${#words[@]}-1}")
+			fi
 			action=${words[0]}
 			known_action "$action" || {
 				problem "workspaces.conf [$ws]: unknown action [$action] (not a command, an apps.conf app or Return)"
 				continue
 			}
+			if [ "$background" -eq 1 ]; then
+				runs=$action
+				foundation_has_command "$action" || [ "$action" = Return ] || runs=Open-Application
+				workspace_may_background "$runs" || problem "workspaces.conf [$ws]: [$action] cannot run in the background (a trailing &) - it runs in place"
+			fi
 			skip_value=0
 			for arg in "${words[@]:1}"; do
 				# A flag's value (--instances 33) names nothing.

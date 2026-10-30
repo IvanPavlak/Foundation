@@ -12,7 +12,7 @@ layout), records what it opened for Close-Workspace and appends a benchmark row 
 
 | File | Line | Default (base) | What it controls |
 | ---- | ---- | -------------- | ---------------- |
-| [`workspaces.conf`](../../configuration.md#workspacesconf) | `[Workspace]` and its action lines | Example, Test, Fullscreen, Empty, Default, SecureBrowser | A workspace: one action per line, run top to bottom (a Foundation command, `Open-<App>` for an `apps.conf` app, or `Return`); `@TYPE`, `%SET` and `+A,B` / `+!A,B` prefixes limit a line |
+| [`workspaces.conf`](../../configuration.md#workspacesconf) | `[Workspace]` and its action lines | Example, Test, Fullscreen, Empty, Default, SecureBrowser | A workspace: one action per line, run top to bottom (a Foundation command, `Open-<App>` for an `apps.conf` app, or `Return`); `@TYPE`, `%SET` and `+A,B` / `+!A,B` prefixes limit a line; a trailing `&` runs an app-starting action in the background |
 | [`workspaces.conf`](../../configuration.md#workspacesconf) | `default-workspace NAME` | `Default` | What an empty Enter at the workspace menu opens |
 | [`workspaces.conf`](../../configuration.md#workspacesconf) | `template NAME`, `set`, `replace`, `drop`, `add` | none | A workspace that stamps out a template under its own name, with its changes |
 | [`workspaces.conf`](../../configuration.md#workspacesconf) | `benchmark on\|off` | `off` | Whether each open appends a row for Get-WorkspaceBenchmark (off without a line, as WinuX's `WorkspaceBenchmark.Enabled`) |
@@ -143,7 +143,7 @@ Test-ConfigurationSchema --quiet
 ```
 
 It reports a template that does not resolve, an action that is not a command, an `Open-Project` or
-`+A,B` scope naming an unknown project, a `%SET` scope naming no machine type or layout set, an `Open-Browser` group that does not exist, a layout
+`+A,B` scope naming an unknown project, a `%SET` scope naming no machine type or layout set, an `Open-Browser` group that does not exist, a trailing `&` on a command that cannot run in the background, a layout
 missing from a set the Mac uses, an unknown `default-workspace` and a `vscode-workspaces.conf`
 `default` without its file.
 
