@@ -3,7 +3,8 @@
 # reach Errors.log, FOUNDATION_LOGGING=off writes nothing, retention by age, count and size (a dry
 # run naming each file once), and logging.conf is read as every config file is (overlay, @TYPE,
 # -LINE), even before config.sh loads. Also the console side: debug lines only at verbose, the
-# quiet level, the level, directory, error-file and color lines.
+# quiet level, the level, directory, error-file and color lines. The command that logs is
+# Test-MachineOnline against a ping stand-in, so no packet leaves.
 
 load helpers
 
@@ -15,6 +16,10 @@ setup() {
 	# maintenance line has it on): it must only ever see throwaway folders.
 	export FOUNDATION_BACKUP_ROOT=$BATS_TEST_TMPDIR/backups FOUNDATION_TEST_RESULTS=$BATS_TEST_TMPDIR/results TMPDIR=$BATS_TEST_TMPDIR/tmp
 	mkdir -p "$TMPDIR"
+	# 127.0.0.1 answers, anything else does not; ping's last argument is the address. The real
+	# ping made these cases depend on the Mac (firewall stealth mode drops even a ping to
+	# 127.0.0.1) and on DNS.
+	stub_tool ping 'for a in "$@"; do last=$a; done; [ "$last" = 127.0.0.1 ]'
 	cmd=$UNIX_DIR/modules/System/bin/Test-MachineOnline
 }
 
