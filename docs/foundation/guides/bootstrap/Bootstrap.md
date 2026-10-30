@@ -88,7 +88,8 @@ The steps that run a command read that command's own file; their pages hold thos
 [Install-DotnetEf](Install-DotnetEf.md) (DotnetEf),
 [Install-CondaEnvironments](Install-CondaEnvironments.md) (CondaEnvironments),
 [Configure-NuGetConfig](Configure-NuGetConfig.md) (NuGetConfig),
-[Configure-NpmConfig](Configure-NpmConfig.md) (NpmConfig) and
+[Configure-NpmConfig](Configure-NpmConfig.md) (NpmConfig),
+[Configure-DockerDesktop](Configure-DockerDesktop.md) (DockerDesktop) and
 [Initialize-Configuration](Initialize-Configuration.md) (InitializeConfiguration).
 
 ## Steps Overview

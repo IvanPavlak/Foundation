@@ -63,6 +63,13 @@ case ":$PATH:" in
 	*":$HOME/.local/bin:"*) ;;
 	*) [ -d "$HOME/.local/bin" ] && PATH="$PATH:$HOME/.local/bin" ;;
 esac
+# ~/.docker/bin: the Docker CLI and its plugins when Docker Desktop installs them per user (Settings >
+# Advanced > User). Appended, as Docker Desktop itself would: it offers to add this line to
+# ~/.bash_profile and ~/.zshrc, which are links into this repository, so it lives here instead.
+case ":$PATH:" in
+	*":$HOME/.docker/bin:"*) ;;
+	*) [ -d "$HOME/.docker/bin" ] && PATH="$PATH:$HOME/.docker/bin" ;;
+esac
 # mise's shims folder: node, npm, npx and the other runtimes mise manages (the global version of
 # `mise use --global`, a project's own from its mise.toml), without running mise at every start.
 # Prepended, so a mise runtime wins over a Homebrew one of the same name.

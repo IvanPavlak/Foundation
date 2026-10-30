@@ -114,7 +114,7 @@ layout file in the set (and the set folder when it is missing, as on Windows).
 | `dnd.conf` | `CampaignResources` | Open-DnD |
 | `obsidian.conf` | `Obsidian.Vault`, `Obsidian.DefaultWorkspace`, `MachineSpecificPaths.ObsidianDirectory`, the Obsidian link of `SymbolicLinks` | Open-Obsidian, git-obsidian, Bootstrap's ObsidianSettings step |
 | `pdfs.conf` | `AcrobatPdfGroups`, the PDF paths of `MachineSpecificPaths` | Open-Acrobat |
-| `docker.conf` | `DockerComposeFiles`, `DockerTimeouts`, `DockerCleanupActions`, `DockerCleanupStartMode`, `PathTemplates.DockerDirectory` | Start-Containers, Open-Docker, DockerWizard, Docker-Cleanup, Run-Project, Kill-All |
+| `docker.conf` | `DockerComposeFiles`, `DockerTimeouts`, `DockerCleanupActions`, `DockerCleanupStartMode`, `PathTemplates.DockerDirectory`; `cli-install` is Foundation's own | Start-Containers, Open-Docker, DockerWizard, Docker-Cleanup, Run-Project, Kill-All, Configure-DockerDesktop |
 | `wake-on-lan.conf` | `WakeOnLanConfig`, `DefaultWakeOnLanMachine` | Send-WakeOnLan, Test-MachineOnline |
 | `theme.conf` | `Themes`, `SystemTheme.Steps`, the Oh My Posh theme of the profile | Set-SystemTheme, the shell rc (`prompt-theme`, through foundation-shell-settings) |
 | `shell.conf` | `PSReadLine` (`MaximumHistoryCount`, `HistorySavePath`, `EditMode`, the ListView length) | the LineEditing stage of the shell rc, through foundation-shell-settings: `history-size`, `history-file`, `edit-mode emacs\|vi`, `list-lines` |
@@ -343,8 +343,12 @@ A relative stack file resolves under the `directory PATH` folder (the `DockerDir
 a name wins, so an overlay line replaces the base stack of that name. `timeout start SECONDS`
 bounds every wait for the daemon to come up - Start-Containers, Docker-Cleanup and Run-Project;
 Open-Docker returns without waiting, as on Windows (180 without a line); `timeout stop SECONDS` is how
-long `Open-Docker --stop` and Kill-All's Docker step wait for Docker Desktop to quit before
-killing it (60 without a line). `cleanup` entries are
+long `Open-Docker --stop`, `DockerWizard --stop` and Kill-All's Docker step wait for Docker
+Desktop to quit (through `docker desktop stop`) before killing it (60 without a line).
+`cli-install system|user` is where Docker Desktop installs its command-line tools, written by
+Configure-DockerDesktop (step DockerDesktop): system links them into `/usr/local/bin`, user into
+`~/.docker/bin`, which Docker Desktop then adds to PATH by writing into the shell profiles at every
+start; the base ships no line, so Docker Desktop keeps its own choice. `cleanup` entries are
 `LABEL :: COMMAND [:: CONFIRMATION]`; Docker-Cleanup's menu adds All, and selected entries run in
 the order of these lines, so keep stops and container deletes before images and volumes.
 `cleanup-description LABEL :: TEXT` and `cleanup-preview LABEL :: COMMAND` are optional: the

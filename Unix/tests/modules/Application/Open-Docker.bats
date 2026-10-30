@@ -98,14 +98,19 @@ docker_desktop_running() {
 	! stub_called '^osascript' || false
 }
 
-@test "-Stop stops the running containers and quits Docker Desktop" {
+@test "-Stop stops the running containers, then quits Docker Desktop through its own CLI" {
 	docker_desktop_running
 	touch "$BATS_TEST_TMPDIR/docker-up"
 	run "${BASH:-bash}" "$cmd" -Stop
 	[ "$status" -eq 0 ]
 	stub_called '^docker stop abc def$'
-	stub_called "^osascript -e quit app \"Docker\"$"
+	# The stop timeout of docker.conf (5 in the fixture) bounds the CLI's own wait; no Apple Event quit, no kill.
+	stub_called '^docker desktop stop --timeout 5$'
+	! stub_called '^osascript' || false
+	! stub_called '^pkill' || false
 	! stub_called '^open' || false
+	# The containers go first.
+	[ "$(grep -n '^docker stop abc def$' "$STUB_LOG" | cut -d: -f1)" -lt "$(grep -n '^docker desktop stop --timeout ' "$STUB_LOG" | cut -d: -f1)" ]
 }
 
 @test "--stop with the daemon down still quits Docker Desktop, stopping no container" {
@@ -113,7 +118,34 @@ docker_desktop_running() {
 	run "${BASH:-bash}" "$cmd" --stop
 	[ "$status" -eq 0 ]
 	! stub_called '^docker (ps|stop)' || false
+	stub_called '^docker desktop stop --timeout 5$'
+}
+
+@test "--stop on a Docker Desktop without the desktop CLI quits it with an Apple Event" {
+	docker_desktop_running
+	cat >"$STUB_BIN/docker" <<'SH'
+#!/bin/sh
+echo "docker $*" >>"$STUB_LOG"
+case $1 in
+	info) exit 1 ;;
+	desktop) echo "docker: 'desktop' is not a docker command." >&2; exit 1 ;;
+esac
+exit 0
+SH
+	run "${BASH:-bash}" "$cmd" --stop
+	[ "$status" -eq 0 ]
 	stub_called '^osascript -e quit app "Docker"$'
+	! stub_called '^docker desktop stop --timeout' || false
+}
+
+@test "--stop kills a Docker Desktop still running when the stop timeout runs out" {
+	# Both processes keep running; a stop timeout of 0 makes the deadline pass at once.
+	printf '#!/bin/sh\necho "pgrep $*" >>"$STUB_LOG"\nexit 0\n' >"$STUB_BIN/pgrep"
+	printf 'timeout stop 0\n' >"$FOUNDATION_CONFIG_DIR/docker.local.conf"
+	run "${BASH:-bash}" "$cmd" --stop
+	[ "$status" -eq 0 ]
+	stub_called '^docker desktop stop --timeout 0$'
+	stub_called '^pkill -x Docker Desktop$'
 }
 
 @test "a missing timeout line waits as long as the base docker.conf line: start 180, stop 60" {

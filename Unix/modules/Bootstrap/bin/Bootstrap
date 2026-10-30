@@ -69,6 +69,8 @@
 #   NuGetConfig        Configure-NuGetConfig (off, interactive)
 #   NpmConfig          Configure-NpmConfig: the GitHub token of the npm.conf registries (off,
 #                      interactive)
+#   DockerDesktop      Configure-DockerDesktop: where Docker Desktop installs its tools, the
+#                      cli-install line of docker.conf (off)
 #   UpgradeAll         Upgrade-All (off)
 #   PersonalSteps      the [PersonalSteps] lines of bootstrap.conf, a fork's own commands (empty
 #                      in the base, so nothing to do)
@@ -140,6 +142,7 @@ CATALOG=(
 	"CondaEnvironments on"
 	"NuGetConfig off interactive"
 	"NpmConfig off interactive"
+	"DockerDesktop off"
 	"UpgradeAll off"
 	"PersonalSteps on"
 	"AeroSpace on"
@@ -710,6 +713,7 @@ run_step() {
 		CondaEnvironments) run_command --dry-run Install-CondaEnvironments ;;
 		NuGetConfig) run_command --dry-run Configure-NuGetConfig ;;
 		NpmConfig) run_command --dry-run Configure-NpmConfig ;;
+		DockerDesktop) run_command --dry-run Configure-DockerDesktop ;;
 		UpgradeAll) run_command '' Upgrade-All ;;
 		PersonalSteps) step_personal ;;
 		AeroSpace) step_aerospace ;;

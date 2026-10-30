@@ -53,6 +53,7 @@ In execution order. **Default** is the built-in state before any configuration; 
 | CondaEnvironments | on | | Install-CondaEnvironments | CondaEnvironments |
 | NuGetConfig | off | interactive | Configure-NuGetConfig | NuGetConfig |
 | NpmConfig | off | interactive | Configure-NpmConfig: the GitHub token of the `npm.conf` registries into `~/.npmrc` | NpmConfig |
+| DockerDesktop | off | | Configure-DockerDesktop: where Docker Desktop installs its tools, the `cli-install` line of `docker.conf` (system mode keeps it from writing into the shell profiles) | - |
 | UpgradeAll | off | | Upgrade-All (Homebrew and the App Store; `mas upgrade` asks for the password when an App Store app is outdated) | UpgradeAll |
 | PersonalSteps | on | | the `[PersonalSteps]` lines of `bootstrap.conf`, a fork's own commands, in order; the base ships none | PersonalSteps |
 | AeroSpace | on | | starts AeroSpace and checks its config | - |
