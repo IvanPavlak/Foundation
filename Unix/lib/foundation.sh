@@ -549,6 +549,8 @@ foundation__has_wildcard() {
 	return 1
 }
 
+# Sets the variable VAR (printf -v, no process: it runs for every title a layout wait tests).
+# Usage: foundation__to_ere PATTERN VAR
 foundation__to_ere() {
 	local re=$1
 	# .NET's inline case-insensitive flag, which ERE rejects; matching is case-insensitive anyway.
@@ -557,7 +559,7 @@ foundation__to_ere() {
 	re=${re//\\S/[^[:space:]]}
 	re=${re//\\d/[0-9]}
 	re=${re//\\w/[[:alnum:]_]}
-	printf '%s' "$re"
+	printf -v "$2" '%s' "$re"
 }
 
 # Case-insensitive glob and regex tests that restore the caller's nocasematch setting.
@@ -577,7 +579,7 @@ foundation__glob_match() {
 # ERE lacks); bash's own complaint about it is kept off the terminal.
 foundation__regex_match() {
 	local text=$1 pattern status restore=0
-	pattern=$(foundation__to_ere "$2")
+	foundation__to_ere "$2" pattern
 	shopt -q nocasematch || {
 		shopt -s nocasematch
 		restore=1

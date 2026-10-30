@@ -255,6 +255,13 @@ record_open() {
 	pre_windows=" $(tr '\n' ' ' <"$run_dir/pre-windows") "
 	placed=" $(tr '\n' ' ' <"$run_dir/placed") "
 	keep_file=$(conf_path kill-all.conf) || keep_file=''
+	# The keep apps, read once rather than for every window.
+	keep_tokens=()
+	if [ -n "$keep_file" ]; then
+		while read -r kind keep_token; do
+			[ "$kind" = "keep" ] && keep_tokens+=("$keep_token")
+		done < <(conf_lines "$keep_file")
+	fi
 	# An alongside open of a workspace already recorded is a further instance (NAME#N), as Windows
 	# appends one; a plain open replaces every instance of its name.
 	if [ "$alongside" -eq 1 ]; then
@@ -270,11 +277,9 @@ record_open() {
 			if [ "$new" -eq 0 ]; then
 				case $placed in *" $id "*) ;; *) continue ;; esac
 				kept=0
-				if [ -n "$keep_file" ]; then
-					while read -r kind keep_token; do
-						[ "$kind" = "keep" ] && app_matches "$keep_token" "$token" && kept=1
-					done < <(conf_lines "$keep_file")
-				fi
+				for keep_token in ${keep_tokens[@]+"${keep_tokens[@]}"}; do
+					app_matches "$keep_token" "$token" && kept=1 && break
+				done
 				[ "$kept" -eq 1 ] && continue
 			fi
 			printf 'window\t%s\t%s\t%s\t%s\n' "$id" "$token" "$bundle" "$title"
