@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+# Configure-NpmConfig - writes a GitHub token into the user npmrc for the private registries of
+# npm.conf, the Unix counterpart of the Windows Configure-NpmConfig.
+#
+# Usage: Configure-NpmConfig [--override] [--dry-run] [--backup-root DIR]
+#
+# Reads the `registry URL [SCOPE]` lines and `npmrc` (default ~/.npmrc, a relative path starts at
+# the repository root) from Unix/config/npm.conf. A registry is configured when the npmrc has its
+# //HOST/PATH/:_authToken line with a value and, for a SCOPE, the SCOPE:registry=URL line. When
+# every registry is configured nothing happens; otherwise, or with --override, the token (a GitHub
+# personal access token with read:packages, the one Configure-NuGetConfig asks for works) is asked
+# once on the terminal (an answer with whitespace in it is asked again: GitHub tokens have none)
+# and written for every registry that needs it. Every other line of the npmrc
+# is kept in its place; a stale line is replaced where it stands, a missing one is appended. The
+# token is never passed to another program, logged or printed, and the npmrc is made readable by
+# its owner only. An existing file is first copied into Backups/Unix/System/NpmConfig/
+# (gitignored) with every credential value (_authToken, _auth, _password) replaced by <redacted>,
+# so the undo keeps the other settings but never a token, and is left alone when that fails. Without registry lines it does nothing. --dry-run
+# says which registries would be written without asking or writing. --backup-root DIR puts the
+# backup under DIR/System/NpmConfig/ instead of Backups/Unix (the -BackupRoot of Windows).
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config backup
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+dry=0
+override=0
+while [ $# -gt 0 ]; do
+	case $1 in
+		--dry-run) dry=1 ;;
+		--override) override=1 ;;
+		--backup-root)
+			[ -n "${2:-}" ] || foundation_die "--backup-root needs a DIR"
+			case $2 in /*) FOUNDATION_BACKUP_ROOT=$2 ;; *) FOUNDATION_BACKUP_ROOT=$PWD/$2 ;; esac
+			export FOUNDATION_BACKUP_ROOT
+			shift
+			;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument [$1] - usage: Configure-NpmConfig [--override] [--dry-run] [--backup-root DIR]" ;;
+	esac
+	shift
+done
+
+# Asks until the answer is not empty, without echoing the typing. Reads fd 3.
+ask_secret() { # PROMPT
+	local answer=''
+	while [ -z "$answer" ]; do
+		printf '\n%s' "$1" >&2
+		IFS= read -rs answer <&3 || return 1
+		printf '\n' >&2
+		answer=$(foundation_trim "$answer")
+		[ -n "$answer" ] || log_error "The answer cannot be empty! Try again!"
+		if [[ $answer == *[[:space:]]* ]]; then
+			log_error "A token has no spaces - that looks like something else pasted! Try again!"
+			answer=''
+		fi
+	done
+	printf '%s' "$answer"
+}
+
+# The value of the first line of the npmrc whose key is KEY (`KEY=VALUE` or `KEY = VALUE`), or
+# nothing. Bash only, so the token read back never reaches another process.
+value_of() { # KEY
+	local line
+	for line in "${lines[@]}"; do
+		case $line in
+			"$1="* | "$1 ="*)
+				line=${line#"$1"}
+				line=$(foundation_trim "${line#*=}")
+				printf '%s' "$line"
+				return 0
+				;;
+		esac
+	done
+	return 1
+}
+
+# Backs up the npmrc as read (original) with every credential value replaced by <redacted>, and
+# prints the backup folder: the copy is made in a private temporary folder and removed after.
+backup_redacted() {
+	local folder line status=0
+	folder=$(mktemp -d "${TMPDIR:-/tmp}/npmrc.XXXXXX") || return 1
+	for line in "${original[@]}"; do
+		if [[ $line =~ ^([^=]*(_authToken|_auth|_password))[[:space:]]*= ]]; then
+			printf '%s=<redacted>\n' "${BASH_REMATCH[1]}"
+		else
+			printf '%s\n' "$line"
+		fi
+	done >"$folder/$(basename "$npmrc")" && backup_item System NpmConfig "$folder/$(basename "$npmrc")" || status=1
+	rm -rf "$folder"
+	return "$status"
+}
+
+# Sets KEY to VALUE: the first line of KEY is replaced where it stands and later ones dropped, or
+# the line is appended.
+set_line() { # KEY VALUE
+	local line found=0 kept=()
+	for line in "${lines[@]}"; do
+		case $line in
+			"$1="* | "$1 ="*)
+				[ "$found" -eq 1 ] || kept+=("$1=$2")
+				found=1
+				;;
+			*) kept+=("$line") ;;
+		esac
+	done
+	[ "$found" -eq 1 ] || kept+=("$1=$2")
+	lines=("${kept[@]}")
+}
+
+npmrc=$HOME/.npmrc
+urls=()
+scopes=()
+if config=$(conf_path npm.conf); then
+	value=$(conf_value "$config" npmrc) && [ -n "$value" ] && npmrc=$value
+	while read -r url scope; do
+		[ -n "$url" ] || continue
+		# One trailing slash, as npm writes the registry: .../ and ... are the same registry.
+		while [ "${url%/}" != "$url" ]; do url=${url%/}; done
+		url=$url/
+		found=0
+		for i in "${!urls[@]}"; do
+			if [ "${urls[i]}" = "$url" ]; then
+				scopes[i]=$scope
+				found=1
+			fi
+		done
+		[ "$found" -eq 1 ] || {
+			urls+=("$url")
+			scopes+=("$scope")
+		}
+	done < <(conf_lines "$config" | awk '$1 == "registry" { print $2, $3 }')
+fi
+npmrc=$(foundation_expand_path "$npmrc")
+case $npmrc in /*) ;; *) npmrc=$DOTFILES_ROOT/$npmrc ;; esac
+
+log_title "Configure-NpmConfig"
+if [ "${#urls[@]}" -eq 0 ]; then
+	log_warning "No registry lines in npm.conf - nothing to configure"
+	exit 0
+fi
+
+lines=()
+if [ -f "$npmrc" ]; then
+	while IFS= read -r line || [ -n "$line" ]; do lines+=("$line"); done <"$npmrc"
+fi
+original=("${lines[@]}")
+
+pending=()
+for i in "${!urls[@]}"; do
+	url=${urls[i]}
+	scope=${scopes[i]}
+	if [ "$override" -eq 0 ]; then
+		configured=1
+		token=$(value_of "//${url#*://}:_authToken") && [ -n "$token" ] || configured=0
+		if [ -n "$scope" ]; then
+			[ "$(value_of "$scope:registry")" = "$url" ] || configured=0
+		fi
+		token=
+		if [ "$configured" -eq 1 ]; then
+			log_success "Registry [$url] is already configured!"
+			continue
+		fi
+	fi
+	pending+=("$i")
+done
+
+if [ "${#pending[@]}" -eq 0 ]; then
+	log_success "npm config is already configured => $npmrc"
+	exit 0
+fi
+
+if [ "$dry" -eq 1 ]; then
+	for i in "${pending[@]}"; do
+		printf '  ask for the GitHub token, write [%s]%s into %s\n' "${urls[i]}" "${scopes[i]:+ for ${scopes[i]}}" "$npmrc"
+	done
+	exit 0
+fi
+
+tty=${FOUNDATION_TTY:-/dev/tty}
+{ exec 3<"$tty"; } 2>/dev/null || foundation_die "No terminal to ask for the GitHub token - run Configure-NpmConfig in a terminal"
+token=$(ask_secret "Enter GitHub Personal Access Token (PAT) with read:packages: ") || foundation_die "No token given"
+exec 3<&-
+
+for i in "${pending[@]}"; do
+	set_line "//${urls[i]#*://}:_authToken" "$token"
+	[ -z "${scopes[i]}" ] || set_line "${scopes[i]}:registry" "${urls[i]}"
+done
+token=
+
+mkdir -p "$(dirname "$npmrc")" || foundation_die "Could not create $(dirname "$npmrc")"
+# The npmrc may hold settings of other registries: keep an undo first, and write nothing when the
+# copy cannot be taken. Its tokens are redacted: a copy of a token is a second place it leaks from,
+# and a token is asked again anyway.
+if [ -f "$npmrc" ] && [ ! -L "$npmrc" ]; then
+	backup=$(backup_redacted) || foundation_die "Could not back up $npmrc - not changing it"
+	log_warning "Backed up the existing npmrc, tokens redacted => $backup"
+fi
+
+# printf is a builtin: the token goes straight into the file, never onto a command line.
+if (umask 077 && printf '%s\n' "${lines[@]}" >"$npmrc") && chmod 600 "$npmrc"; then
+	for i in "${pending[@]}"; do log_success "Registry [${urls[i]}]${scopes[i]:+ for ${scopes[i]}} written => $npmrc"; done
+else
+	log_error "Could not write $npmrc"
+	exit 1
+fi

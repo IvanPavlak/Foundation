@@ -32,7 +32,8 @@ All backups are taken by one bash primitive, `backup_item CATEGORY KEY PATH` in
 | `Config` | `git.local`, `machines.local` | [Initialize-Configuration](modules/Bootstrap.md#initialize-configuration) | Before its first write of a run to an existing overlay (the identity, the `host` and `dev-root` lines); nothing is written when the copy fails. |
 | `Config` | `WindowLayouts.<Type>.<Workspace>` | [Visualize-Layouts](modules/Window.md#visualize-layouts) `--update` | Before rewriting the drawing in `Unix/config/layouts/<Type>/<Workspace>_<Type>.conf`. |
 | `Config` | `obsidian.json` | [Enable-ObsidianCli](modules/Application.md#enable-obsidiancli) | Before switching the CLI on in `~/Library/Application Support/obsidian/obsidian.json`. |
-| `System` | `NuGetConfig` | [Configure-NuGetConfig](modules/Bootstrap.md#configure-nugetconfig) | Before overwriting an existing real NuGet config (default `~/.nuget/NuGet/NuGet.Config`). |
+| `System` | `NpmConfig` | [Configure-NpmConfig](modules/Bootstrap.md#configure-npmconfig) | Before rewriting an existing real npmrc (default `~/.npmrc`), with every credential value (`_authToken`, `_auth`, `_password`) replaced by `<redacted>`, so the copy keeps the other settings but no token. |
+| `System` | `NuGetConfig` | [Configure-NuGetConfig](modules/Bootstrap.md#configure-nugetconfig) | Before overwriting an existing real NuGet config (default `~/.nuget/NuGet/NuGet.Config`), with every `ClearTextPassword` and `Password` value replaced by `REDACTED`, so the copy keeps the sources but no token. |
 | `System` | `DockLayout` | [Set-DockPins](modules/Bootstrap.md#set-dockpins) | Before `clear on` empties the Dock: `com.apple.dock.plist` (`defaults export com.apple.dock`); the Dock is left as it is when this fails. |
 
 `Unix/tests/docpages.bats` checks that every category and every fixed key prefix a `backup_item`

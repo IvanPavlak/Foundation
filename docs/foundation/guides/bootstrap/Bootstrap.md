@@ -87,7 +87,8 @@ The steps that run a command read that command's own file; their pages hold thos
 (LoginItems), [Deploy-FirefoxProfile](Deploy-FirefoxProfile.md) (FirefoxProfile),
 [Install-DotnetEf](Install-DotnetEf.md) (DotnetEf),
 [Install-CondaEnvironments](Install-CondaEnvironments.md) (CondaEnvironments),
-[Configure-NuGetConfig](Configure-NuGetConfig.md) (NuGetConfig) and
+[Configure-NuGetConfig](Configure-NuGetConfig.md) (NuGetConfig),
+[Configure-NpmConfig](Configure-NpmConfig.md) (NpmConfig) and
 [Initialize-Configuration](Initialize-Configuration.md) (InitializeConfiguration).
 
 ## Steps Overview

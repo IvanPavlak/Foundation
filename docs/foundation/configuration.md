@@ -123,6 +123,7 @@ layout file in the set (and the set folder when it is missing, as on Windows).
 | `dock.conf` | `TaskbarConfiguration` | Set-DockPins |
 | `login-items.conf` | (Windows Startup apps) | Set-LoginItems |
 | `dotnet.conf` | `DotnetEFVersion`, `MachineSpecificPaths.NuGetConfig`, `DotnetProjectsSearchPath`, the .NET 6 SDK of `WinGetApps.local.csv` | Install-DotnetEf, Install-DotnetSdks (`sdk-channel`), Configure-NuGetConfig, Determine-DotnetDependencies |
+| `npm.conf` | `PathTemplates.NpmConfig`, `NpmRegistries` | Configure-NpmConfig |
 | `conda-environments.conf` | `BootstrapConfig.DataFiles.CondaEnvironments` | Install-CondaEnvironments |
 | `package-pins.conf` | the `Version` column of `WinGetApps.csv`, `ScoopApps.csv` and `ChocolateyApps.csv` | Upgrade-All |
 | `bootstrap.conf` | `BootstrapConfig.Steps`, `BootstrapConfig.RepositoryUpdateScope`, `BootstrapConfig.PersonalSteps` | Bootstrap |
@@ -597,6 +598,21 @@ exports in `Conda/Environments` carry win-64 builds, so the macOS copies live in
 `Conda/Environments/macOS` and use `conda-forge` with `nodefaults`. conda 26 still checks the Terms of Service of the defaults channels it is
 configured with, even for such a file, so a fresh Mac needs `conda tos accept` once; a refused
 run prints the full command. `update-base on` updates conda from the defaults channel.
+
+### npm.conf
+
+```
+npmrc ~/.npmrc
+registry https://npm.pkg.github.com/
+registry https://npm.pkg.github.com/ @my-org
+```
+
+Each `registry URL [SCOPE]` line is a private registry Configure-NpmConfig writes a GitHub token
+for into the `npmrc` (default `~/.npmrc`; a relative path starts at the repository root): the
+`//HOST/PATH/:_authToken` line and, with a SCOPE, the `SCOPE:registry=URL` line that sends the
+scope's packages there. A URL is the same registry with or without its trailing slash, and the
+last line of a URL wins, so an overlay line adds a scope to the base registry. The base ships
+GitHub Packages without a scope; the token is typed at the command's prompt, never stored here.
 
 ### ai-artifacts.conf and ai-harnesses.conf
 

@@ -104,6 +104,18 @@ answers that password authentication is not supported.
 from `Git/Unix/gitconfig.local`, which chezmoi links to `~/.gitconfig.local`; check the link with
 `readlink ~/.gitconfig.local` (see [Git credentials](README.md#git-credentials)).
 
+### npm install answers 401 Unauthorized from npm.pkg.github.com
+
+**Problem:** `npm install` stops with `E401` and `authentication token not provided` for a
+private scoped package (`@my-org/...`), and the scripts that need the installed packages then fail
+with `command not found`.
+
+**Solution:** npm has no token for GitHub Packages. Run `Configure-NpmConfig` (or turn the
+NpmConfig step on) with a classic personal access token that has `read:packages`; with an org that
+enforces SAML SSO, also authorize the token for the org on GitHub. Do not run `npm config set
+//npm.pkg.github.com/:_authToken TOKEN`: npm writes its own command line, the token included, into
+the debug log under `~/.npm/_logs/`.
+
 ### A new command is "not found" or its Bootstrap step fails to start
 
 **Problem:** A command under `Unix/modules/<Module>/bin` is on disk, but the shell answers
