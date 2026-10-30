@@ -194,11 +194,11 @@ runs `brew shellenv` before). Then, interactive shells only, these stages in ord
 
 | Stage | What it does |
 | ----- | ------------ |
-| LineEditing | Reads `shell.conf` (the PSReadLine settings) and the prompt theme; sets `LANG=en_US.UTF-8` when macOS left it empty; a shared, deduplicated zsh history (`history-size`, `history-file`); emacs or vi keys; history search on the arrow keys |
+| LineEditing | Reads `shell.conf` (the PSReadLine settings) and the prompt theme; sets `LANG=en_US.UTF-8` when macOS left it empty; the zsh or bash history (`history-size`, `history-file`); the edit mode (`emacs`, `vi`, or `windows` with PSReadLine's Windows-mode keys); the `key` handlers, `history-no-duplicates`, `history-save-style`, `completion-ignore-case` and the prediction list (zsh); the completion system with zsh's own defaults. Nothing without a `shell.conf` line (the base ships none) |
 | Aliases | `w`, `cw`, `rp` and the other short names of the Windows profile; an `Open-<App>` alias for every `apps.conf` token without a command of its own |
 | Prompt | Oh My Posh with the machine type's theme (`prompt-theme` of `theme.conf`; `OH_MY_POSH_THEME` wins); a warning with the install hint when it is missing |
-| Plugins | zsh-autosuggestions, zsh-autocomplete and zsh-syntax-highlighting, each only when installed; zsh-autocomplete's completion worker gets a 10-second hard limit (`autocomplete-guard.zsh`) |
-| Icons | `ls`, `ll`, `la` through `eza --icons` when eza is installed (the Terminal-Icons analog) |
+| Plugins | zsh-syntax-highlighting when installed (the prediction plugins zsh-autosuggestions and zsh-autocomplete are not loaded until the line editing is ported) |
+| Icons | `ls`, `ll`, `la` through `eza --icons` when eza is installed (the Terminal-Icons analog), in the `list-color` colours of `theme.conf` (`EZA_COLORS`) |
 | Greeting | Show-TerminalGreeting: clear, the fastfetch panel, onefetch inside a repository (`greeting.conf`) |
 | RepositoryUpdate | Invoke-StartupRepositoryUpdate when it is due (off unless `repositories.conf` says `startup on`) |
 
@@ -236,7 +236,7 @@ Unix/
 ├── config/          workspaces, layouts/<Type>/<Workspace>_<Type>, projects, browser-groups, apps, zones, machines, kill-all
 ├── shell/           shellrc.sh, the shared interactive rc (zsh on macOS, bash on Linux), aliases;
 │                    zshrc, bashrc, bash_profile, the files ~/.zshrc and friends link to under chezmoi;
-│                    autocomplete-guard.zsh, the time limit on zsh-autocomplete's worker
+│                    autocomplete-guard.zsh, the time limit on zsh-autocomplete's worker (not sourced now)
 ├── home/            chezmoi source state (.chezmoiroot): one link template per dotfile, the config
 │                    template and the first-apply script - see docs/foundation/bootstrap.md
 ├── tests/           bats suites (run: Run-Tests)

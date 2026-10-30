@@ -208,10 +208,11 @@ PID 1, and the kernel log has `memorystatus: killing zsh [PID] due to low-swap`.
 
 **Solution:** That is a completion worker of zsh-autocomplete left behind by a closed terminal:
 the plugin forks a worker and a helper zsh on a pseudo-terminal of its own for every key, and once
-the completion runs long nothing stops them. The shared rc wraps the worker with a hard limit
-(`Unix/shell/autocomplete-guard.zsh`): a worker still running after 10 seconds is killed with its
-helper. A shell started before the guard existed still has the unguarded worker - open a new
-terminal. To catch one still running, `sample PID 3` shows what it is doing.
+the completion runs long nothing stops them. The shared rc no longer loads zsh-autocomplete, so a
+new terminal starts none; `kill PID` ends one left over from an older shell. Should the plugin come
+back, `Unix/shell/autocomplete-guard.zsh` is the hard limit made for it: sourced right after the
+plugin, it kills a worker still running after 10 seconds with its helper. To catch one still
+running, `sample PID 3` shows what it is doing.
 
 ## Docker
 

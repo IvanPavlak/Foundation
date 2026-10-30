@@ -41,7 +41,9 @@ Unix/
 │   │                   upstream.conf names the paths Foundation owns
 │   └── layouts/<Type>/ one <Workspace>_<Type>.conf per workspace layout
 ├── shell/              shellrc.sh, the shared interactive rc (zsh on macOS, bash on Linux);
+│                       prediction-list.zsh, the zsh-only prediction list (PSReadLine's ListView);
 │                       autocomplete-guard.zsh, the zsh-only time limit on zsh-autocomplete's worker
+│                       (not sourced: zsh-autocomplete is no longer loaded)
 ├── home/               chezmoi source state: one link template per dotfile
 ├── tests/              bats suites (one per command under tests/modules/<Module>/), fixtures
 ├── Brewfile            the packages Foundation itself needs; Brewfile.local holds a fork's own

@@ -64,7 +64,7 @@ takes `@TYPE`. What the base files ship:
 | `repositories.conf` | `base https://github.com`, the update schedule, `[Private]` with the repository itself | its `base`, `startup on`, its groups |
 | `vscode-folders.conf`, `vscode-workspaces.conf` | the repository folder and `ExampleProject`, the workspaces `directory` | its folders, its `default` lines |
 | `dock.conf`, `login-items.conf` | `clear off` and WezTerm; AeroSpace | `clear on` and its pins; its login items (`-item` takes one back) |
-| `theme.conf`, `wallpapers.conf` | the SetWallpaper step, the shipped `WinuX_Test` prompt; `Black.jpg` / `White.png` for Test and Default | its `theme` and `prompt-theme` lines; its `[Dark]` / `[Light]` |
+| `theme.conf`, `wallpapers.conf` | the SetWallpaper step, the shipped `WinuX_Test` prompt, no `list-color` line (eza's own colours); `Black.jpg` / `White.png` for Test and Default | its `theme`, `prompt-theme` and `list-color` lines (Dotfiles: the user in orange, the date in red); its `[Dark]` / `[Light]` |
 | `kill-all.conf` | every step, keep Terminal, Finder and AeroSpace, quit Code | its `step`, `keep` and `quit` lines |
 | `obsidian.conf` | an example vault `directory`, a commented `settings` example | its vault, its `settings` folder |
 | `system-defaults.conf`, `power.conf`, `bootstrap.conf` | the generic groups, steps and values | whole sections it changes (an empty one turns a group off), its `step` lines |
@@ -78,7 +78,7 @@ takes `@TYPE`. What the base files ship:
 | `ai-mcp-servers.conf` | the line kinds and a commented example; no `deploy` line, no server | its `deploy` line and servers (Dotfiles: Linear and Supermemory into Claude Code and Codex) |
 | `greeting.conf` | the clear and fastfetch settings, onefetch off with no arguments, separator or colors (WinuX's base), no `image-logo` (every machine type shows the text logo of its fastfetch config) | its `@TYPE image-logo` lines; `onefetch on` with its arguments, separator and colors |
 | `spinners.conf` | the 19 styles of WinuX's base verbatim, plus Bounce | styles it changes |
-| `shell.conf` | WinuX's base: `history-size 4096` (PSReadLine's default), `edit-mode emacs`, `list-lines 10` | its line-editing values (Dotfiles: `history-size 32767`, as its Windows overlay) |
+| `shell.conf` | the line kinds and a commented example, no setting: zsh keeps its own keys and history options | its line-editing values (Dotfiles: WinuX's effective PSReadLine block - `history-size 32767`, `edit-mode windows`, prefix search on the arrows, no duplicates, incremental saving, case-insensitive Tab, the prediction list in its own colours) |
 | `apps.conf`, `zones.conf`, `window.conf`, `list-functions.conf`, `backups.conf`, `logging.conf`, `dotnet.conf`, `translate.conf`, `vscode-profiles.conf` | sensible defaults | what it changes |
 
 Writers (Add-Workspace, Add-Project, Add-BrowserGroup and the
@@ -116,8 +116,8 @@ layout file in the set (and the set folder when it is missing, as on Windows).
 | `pdfs.conf` | `AcrobatPdfGroups`, the PDF paths of `MachineSpecificPaths` | Open-Acrobat |
 | `docker.conf` | `DockerComposeFiles`, `DockerTimeouts`, `DockerCleanupActions`, `DockerCleanupStartMode`, `PathTemplates.DockerDirectory`; `cli-install` is Foundation's own | Start-Containers, Open-Docker, DockerWizard, Docker-Cleanup, Run-Project, Kill-All, Configure-DockerDesktop |
 | `wake-on-lan.conf` | `WakeOnLanConfig`, `DefaultWakeOnLanMachine` | Send-WakeOnLan, Test-MachineOnline |
-| `theme.conf` | `Themes`, `SystemTheme.Steps`, the Oh My Posh theme of the profile | Set-SystemTheme, the shell rc (`prompt-theme`, through foundation-shell-settings) |
-| `shell.conf` | `PSReadLine` (`MaximumHistoryCount`, `HistorySavePath`, `EditMode`, the ListView length) | the LineEditing stage of the shell rc, through foundation-shell-settings: `history-size`, `history-file`, `edit-mode emacs\|vi`, `list-lines` |
+| `theme.conf` | `Themes`, `SystemTheme.Steps`, the Oh My Posh theme of the profile, the Terminal-Icons colours of the listing (`list-color KEY COLOR`: KEY `directory`, `file`, `executable`, `symlink`, `symlink-path`, `user`, `user-other`, `group`, `group-other`, `date`, `size`, `size-unit`, `header`, `punctuation` or a two-letter key of `man eza_colors`; COLOR as in [shell.conf](#shellconf); a key without a line keeps eza's colour) | Set-SystemTheme, the shell rc (`prompt-theme`, and `list-color` as `EZA_COLORS` for the `ls`, `ll`, `la` and `l` aliases, through foundation-shell-settings), Test-ConfigurationSchema |
+| `shell.conf` | `PSReadLine` (`MaximumHistoryCount`, `HistorySavePath`, `EditMode`, `KeyHandlers`, `HistoryNoDuplicates`, `PredictionSource`, `PredictionViewStyle`) | the LineEditing stage of the shell rc, through foundation-shell-settings; Test-ConfigurationSchema |
 | `system-defaults.conf` | `ExplorerOptions`, `TaskbarSettings`, `VisualEffects` | Set-SystemDefaults |
 | `power.conf` | `PowerPlans`, `PowerButtonActions` | Set-PowerSettings |
 | `dock.conf` | `TaskbarConfiguration` | Set-DockPins |
@@ -554,6 +554,67 @@ in order by the PersonalSteps step: a Foundation command or any command on PATH,
 no shell (no quoting, pipes or `&&`); an unknown command is skipped with a warning and a failing
 line fails the step without stopping the others. A section of
 `bootstrap.local.conf` replaces the same section here.
+
+### shell.conf
+
+The `PSReadLine` block of WinuX's `Configuration.psd1`, for zsh's line editor. The base ships no
+setting: Foundation enforces no line-editing behaviour, and a kind without a line keeps the
+shell's own default (history in `~/.zsh_history`, 4096 lines, emacs keys, zsh's Tab). A fork sets
+what it wants in `shell.local.conf`; the last line of a kind wins, `key` lines merge per key.
+
+| Line | Windows key | Effect |
+| --- | --- | --- |
+| `history-size N` | `MaximumHistoryCount` | `HISTSIZE` and `SAVEHIST` (bash: `HISTSIZE`, `HISTFILESIZE`) |
+| `history-file PATH` | `HistorySavePath` | `HISTFILE`; `~` and `$VARIABLES` expand |
+| `edit-mode emacs\|vi\|windows` | `EditMode` | `bindkey -e` / `-v`; `windows` is emacs plus, under the `key` lines, the Windows-mode keys Foundation ports: Tab and Shift+Tab cycle through the completions in place (the first match goes in at once, no list, no bell: `AUTO_LIST` and `LIST_BEEP` off), Home, End, Delete, Ctrl+Left and Ctrl+Right |
+| `key KEY FUNCTION` | `KeyHandlers` | `bindkey` for every sequence a terminal sends for KEY |
+| `history-no-duplicates on\|off` | `HistoryNoDuplicates` | `HIST_FIND_NO_DUPS`: repeats are skipped when recalling, the file keeps every line |
+| `history-save-style incrementally\|at-exit\|nothing` | `HistorySaveStyle` | `incrementally`: each line is written as it runs (`INC_APPEND_HISTORY`, no live sharing, so a new tab sees every line and an open tab's Up does not); `at-exit`: zsh's default; `nothing`: `SAVEHIST=0`. Except `nothing`, a line equal to the one just before it is not written (`HIST_IGNORE_DUPS`), as PSReadLine does |
+| `completion-ignore-case on\|off` | (PowerShell always) | `on`: Tab matches in any case (`matcher-list 'm:{a-zA-Z}={A-Za-z}'`) |
+| `prediction-source none\|history` | `PredictionSource` | with `prediction-view list`: the prediction list below |
+| `prediction-view inline\|list` | `PredictionViewStyle` | `list`: the prediction list; `inline` is read and checked, not ported |
+| `prediction-list-marker TEXT` | (PSReadLine's `>`) | what starts each row of the list |
+| `color-list-prediction COLOR` | `Colors.ListPrediction` | the rows (default yellow) |
+| `color-list-prediction-selected COLOR` | `Colors.ListPredictionSelected` | the selected row's background (default 238, dark grey) |
+| `color-emphasis COLOR` | `Colors.Emphasis` | the typed text inside the rows (default 14, bright cyan) |
+
+KEY is a PSReadLine key name, in any case: `UpArrow`, `DownArrow`, `LeftArrow`, `RightArrow`,
+`Home`, `End`, `Insert`, `Delete`, `PageUp`, `PageDown`, `Tab`, `Shift+Tab`, `Enter`, `Escape`,
+`Backspace`, `Ctrl+Backspace`, `Ctrl+Delete`, `Ctrl+Spacebar`, `Ctrl+`, `Shift+` or `Alt+` an arrow
+(`Ctrl+` or `Shift+` Home and End too), `F1` to `F12`, `Ctrl+` a letter and `Alt+` a letter. A KEY
+starting with `^` is a bindkey sequence as it is (`^X^E`). FUNCTION is a PSReadLine function name
+(`HistorySearchBackward`, `HistorySearchForward`, `PreviousHistory`, `NextHistory`,
+`ReverseSearchHistory`, `Complete`, `MenuComplete`, `TabCompleteNext`, `TabCompletePrevious`,
+`AcceptLine`, `BeginningOfLine`, `EndOfLine`, `BackwardWord`, `ForwardWord`, `BackwardKillWord`,
+`KillLine`, `Undo`, `ClearScreen` and more: the table is in `Unix/lib/lineediting.sh`) or a zle
+widget name such as `up-line-or-beginning-search`. `-` in its place drops the key, a `windows`
+binding included, so the key keeps zsh's default: the `$null` of WinuX's `KeyHandlers`.
+
+```
+edit-mode              windows
+key UpArrow            HistorySearchBackward
+key DownArrow          HistorySearchForward
+history-no-duplicates  on
+history-save-style     incrementally
+completion-ignore-case on
+prediction-source      history
+prediction-view        list
+```
+
+**The prediction list** (`prediction-source history` with `prediction-view list`,
+`Unix/shell/prediction-list.zsh`): from the first character, the history lines that contain the
+typed text (in any case, not fuzzy, newest first, each line once) show below the line, at most 10
+rows under a `<n/N>` header, each `> line` with `[History]` on the right and every place the typed
+text occurs highlighted. While it shows, Up and Down move in it and the line follows the selected
+row (Down enters at the top, Up at the bottom, past either end the line is the typed text again);
+otherwise they keep their own binding (the prefix search of `key UpArrow HistorySearchBackward`).
+Enter runs the line, Right keeps it, Tab completes and closes the list, and a line recalled with
+Up opens none. It reads this shell's history only: lines another open tab runs appear in a new
+tab. COLOR is one of `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`,
+`default`, a number 0-255 or `#RRGGBB`.
+
+Everything but `history-size`, `history-file` and `edit-mode emacs|vi` is zsh only. A line the
+shell cannot use is skipped without a word; Test-ConfigurationSchema names it.
 
 ### package-pins.conf
 

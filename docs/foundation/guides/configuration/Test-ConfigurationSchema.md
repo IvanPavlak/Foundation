@@ -29,6 +29,8 @@ together) to check them against each other.
 | [`vscode-workspaces.conf`](../../configuration.md#files) | `default WORKSPACE NAME`, `directory` | the workspaces `directory` | The workspace exists and `NAME.code-workspace` is in the directory |
 | [`ai-artifacts.conf`](../../configuration.md#ai-artifactsconf-and-ai-harnessesconf) | `deploy`, `exclude`, `use` | `use rules CoreAiRules` | Every `deploy` name is a section of `ai-harnesses.conf`; `exclude` entries are `KIND/NAME` or `KIND/SOURCE/NAME`; `use` lines are `KIND NAME` |
 | [`ai-harnesses.conf`](../../configuration.md#ai-artifactsconf-and-ai-harnessesconf) | `[Harness]` destination lines | the inactive catalogue | Every line is `KIND PLACEMENT FILES [+HOOK...] PATH` with a known kind, placement and hook |
+| [`shell.conf`](../../configuration.md#shellconf) | every line | none | Every line is a kind it knows with a value that kind takes; a `key` line names a known key and a known PSReadLine function or a zle widget name |
+| [`theme.conf`](../../configuration.md#files) | `list-color KEY COLOR` | none | The key is an eza colour key or one of its friendly names, the colour a name, 0-255 or `#RRGGBB` |
 | [`git.conf`](../../configuration.md#files) | `name`, `email` | none | A note (not a problem) when neither these lines nor the global git config hold the identity |
 
 `apps.conf`, `docker.conf`, `pdfs.conf`, `zones.conf` and `browser-groups.conf` are read only as

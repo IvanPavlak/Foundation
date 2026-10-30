@@ -149,12 +149,18 @@ _foundation_stage_done() {
 #
 #   [console]::OutputEncoding = UTF8   ->  LANG / LC_ALL
 #   Import-Module PSReadLine           ->  zle, already built into zsh
-#   Up/DownArrow HistorySearch*        ->  up/down-line-or-beginning-search
-#   Set-PSReadLineOption -EditMode     ->  bindkey -e, plus the navigation keys
-#                                          zsh leaves unbound
-#   PredictionSource History           ->  zsh-autosuggestions, when installed
-#   PredictionViewStyle ListView       ->  zsh-autocomplete, when installed
+#   Set-PSReadLineOption -EditMode     ->  bindkey -e / -v (edit-mode windows: emacs plus the
+#                                          keys PSReadLine's Windows mode binds, lib/lineediting.sh)
+#   Set-PSReadLineKeyHandler           ->  bindkey, from the key lines of shell.conf
+#   -HistoryNoDuplicates               ->  setopt HIST_FIND_NO_DUPS
+#   -HistorySaveStyle                  ->  INC_APPEND_HISTORY / HIST_IGNORE_DUPS / SAVEHIST=0
+#   -PredictionViewStyle ListView      ->  Unix/shell/prediction-list.zsh
 #   Import-Module Terminal-Icons       ->  eza --icons, when installed
+#
+# Nothing here is enforced: every behaviour comes from a shell.conf line (the base ships none),
+# and without one zsh keeps its own default (Backlog/MacOS/51_LineEditingParity.md lists what is
+# ported and what is not). The completion system is started plainly; only completion-ignore-case
+# adds a style.
 #
 # The PowerShell original wraps its PSReadLine calls in try/catch because "a
 # cosmetic feature must never break shell startup". Same rule applies here: every
@@ -167,17 +173,34 @@ if _foundation_stage LineEditing; then
 	_foundation_history_size=4096
 	_foundation_history_file=
 	_foundation_edit_mode=emacs
-	_foundation_list_lines=10
+	_foundation_history_no_duplicates=
+	_foundation_history_save_style=
+	_foundation_completion_ignore_case=
+	_foundation_prediction_source=
+	_foundation_prediction_view=
+	_foundation_bindings=
 	_foundation_app_tokens=
 	while read -r _foundation_key _foundation_value; do
 		case $_foundation_key in
 			prompt-theme) _foundation_prompt_theme=$_foundation_value ;;
+			eza-colors) _foundation_eza_colors=$_foundation_value ;;
 			app) _foundation_app_tokens="$_foundation_app_tokens$_foundation_value
 " ;;
 			history-size) _foundation_history_size=$_foundation_value ;;
 			history-file) _foundation_history_file=$_foundation_value ;;
 			edit-mode) _foundation_edit_mode=$_foundation_value ;;
-			list-lines) _foundation_list_lines=$_foundation_value ;;
+			history-no-duplicates) _foundation_history_no_duplicates=$_foundation_value ;;
+			history-save-style) _foundation_history_save_style=$_foundation_value ;;
+			completion-ignore-case) _foundation_completion_ignore_case=$_foundation_value ;;
+			prediction-source) _foundation_prediction_source=$_foundation_value ;;
+			prediction-view) _foundation_prediction_view=$_foundation_value ;;
+			# The list's marker and colours, read by prediction-list.zsh (its defaults are PSReadLine's).
+			prediction-list-marker) _foundation_prediction_marker=$_foundation_value ;;
+			color-list-prediction) _foundation_prediction_color_row=$_foundation_value ;;
+			color-list-prediction-selected) _foundation_prediction_color_selected=$_foundation_value ;;
+			color-emphasis) _foundation_prediction_color_emphasis=$_foundation_value ;;
+			bindkey) _foundation_bindings="$_foundation_bindings$_foundation_value
+" ;;
 		esac
 	done <<EOF_FOUNDATION_SETTINGS
 $(foundation-shell-settings 2>/dev/null)
@@ -192,116 +215,70 @@ EOF_FOUNDATION_SETTINGS
 	fi
 
 	if [ -n "${ZSH_VERSION:-}" ]; then
-		# zsh defaults to a small history that is NOT shared between shells, which
-		# would make the history search below far weaker than PSReadLine's.
+		# MaximumHistoryCount and HistorySavePath. zsh keeps no history file without HISTFILE.
 		HISTFILE="${_foundation_history_file:-$HOME/.zsh_history}"
 		HISTSIZE=$_foundation_history_size
 		# shellcheck disable=SC2034 # zsh reads SAVEHIST.
 		SAVEHIST=$_foundation_history_size
-		setopt APPEND_HISTORY SHARE_HISTORY HIST_IGNORE_ALL_DUPS
-		# HIST_IGNORE_ALL_DUPS only dedupes within one shell; SHARE_HISTORY still pulls
-		# in the copies other shells wrote. FIND_NO_DUPS makes searches (and the
-		# zsh-autocomplete list, which dedupes only under this option) show each command
-		# once; SAVE_NO_DUPS and EXPIRE_DUPS_FIRST keep the file itself clean.
-		setopt HIST_FIND_NO_DUPS HIST_SAVE_NO_DUPS HIST_EXPIRE_DUPS_FIRST
-		setopt HIST_IGNORE_SPACE HIST_REDUCE_BLANKS
 		setopt INTERACTIVE_COMMENTS
+		# -HistoryNoDuplicates: repeats are skipped when recalling, the file keeps every line.
+		case $_foundation_history_no_duplicates in
+			on) setopt HIST_FIND_NO_DUPS ;;
+			off) unsetopt HIST_FIND_NO_DUPS ;;
+		esac
+		# shellcheck disable=SC2034 # zsh reads SAVEHIST.
+		# -HistorySaveStyle: each line written as it runs (no live sharing: an open tab's Up never
+		# shows another tab's lines, a new tab sees them all), or at exit, or never. PSReadLine
+		# never writes a line equal to the one just before it, whichever style.
+		case $_foundation_history_save_style in
+			incrementally) setopt INC_APPEND_HISTORY HIST_IGNORE_DUPS ;;
+			at-exit) setopt HIST_IGNORE_DUPS ;;
+			nothing) SAVEHIST=0 ;;
+		esac
 
 		# -EditMode Windows is emacs-style line editing; that is bindkey -e in zsh (edit-mode vi:
-		# bindkey -v).
+		# bindkey -v). Its own keys come with the bindkey lines below; its Tab inserts the first
+		# match and cycles, with no list and no bell.
 		if [ "$_foundation_edit_mode" = vi ]; then bindkey -v; else bindkey -e; fi
+		[ "$_foundation_edit_mode" = windows ] && unsetopt AUTO_LIST LIST_BEEP
 
-		# PredictionViewStyle ListView: the live list of history matches PSReadLine
-		# draws under the prompt as you type. zsh-autosuggestions only gives the inline
-		# ghost text (InlineView); the list needs zsh-autocomplete. Install it with
-		# => brew install zsh-autocomplete. Everything below adapts to its presence.
-		#
-		# Its README is strict about placement: source it before compinit and before
-		# any other plugin, never call compinit yourself when it is loaded, and make
-		# key bindings after sourcing it because it installs its own.
-		#
-		# Docker Desktop's CLI completions go on fpath first, so whichever starts the
-		# completion system (the plugin, or compinit below) finds them. Docker Desktop offers
-		# to append the same lines, with a compinit of their own, to ~/.zshrc, which is a link
-		# into this repository: they are not needed there.
+		# Docker Desktop's CLI completions go on fpath before the completion system starts. Docker
+		# Desktop offers to append the same lines, with a compinit of their own, to ~/.zshrc, which
+		# is a link into this repository: they are not needed there.
 		[ -d "$HOME/.docker/completions" ] && fpath=("$HOME/.docker/completions" "${fpath[@]}")
-		_zsh_autocomplete=""
-		for _plugin_directory in \
-			/opt/homebrew/share \
-			/usr/local/share \
-			/usr/share/zsh/plugins \
-			/usr/share; do
-			[ -r "$_plugin_directory/zsh-autocomplete/zsh-autocomplete.plugin.zsh" ] || continue
-			_zsh_autocomplete="$_plugin_directory/zsh-autocomplete/zsh-autocomplete.plugin.zsh"
-			break
-		done
-		unset _plugin_directory
+		# -C skips compinit's security audit of the completion dirs, which is the
+		# single biggest cost in a zsh startup.
+		autoload -Uz compinit && compinit -C
+		# PowerShell completes case-insensitively.
+		[ "$_foundation_completion_ignore_case" = on ] && zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'
 
-		if [ -n "$_zsh_autocomplete" ]; then
-			# PredictionSource History: the list shows history matches, not completions.
-			# Tab still completes as usual.
-			zstyle ':autocomplete:*' default-context history-incremental-search-backward
-			# No list on an empty prompt, only once something has been typed.
-			zstyle ':autocomplete:*' min-input 1
-			# At most list-lines entries (10), like PSReadLine's ListView (the plugin default
-			# fills half the screen), in the live list and in the up-arrow history menu alike.
-			zstyle ':autocomplete:*' list-lines "$_foundation_list_lines"
-			zstyle ':autocomplete:history-search-backward:*' list-lines "$_foundation_list_lines"
-			zstyle ':autocomplete:history-incremental-search-backward:*' list-lines "$_foundation_list_lines"
-			# shellcheck disable=SC1090 # the plugin's path is found at run time.
-			. "$_zsh_autocomplete"
-			# A hard time limit for the plugin's completion worker, which nothing else stops once
-			# it runs long (zsh syntax, hence its own file).
-			# shellcheck source=/dev/null # zsh syntax, not linted: shellcheck must not follow it.
-			. "$DOTFILES_ROOT/Unix/shell/autocomplete-guard.zsh"
-		else
-			# -C skips compinit's security audit of the completion dirs, which is the
-			# single biggest cost in a zsh startup.
-			autoload -Uz compinit && compinit -C
-			zstyle ':completion:*' menu select
+		# The key handlers: the Windows-mode keys and the key lines, resolved by the helper into
+		# SEQUENCE WIDGET pairs. MenuComplete is menu-select, which zsh/complist provides.
+		case $_foundation_bindings in *' menu-select
+'*) zmodload -i zsh/complist ;; esac
+		while read -r _foundation_key _foundation_value; do
+			[ -n "$_foundation_value" ] && bindkey "$_foundation_key" "$_foundation_value"
+		done <<EOF_FOUNDATION_BINDINGS
+$_foundation_bindings
+EOF_FOUNDATION_BINDINGS
+		unset _foundation_key _foundation_value
+
+		# PredictionSource History with PredictionViewStyle ListView: the list below the line, which
+		# takes Up and Down while it shows. InlineView is not ported; nothing else draws predictions.
+		if [ "$_foundation_prediction_source" = history ] && [ "$_foundation_prediction_view" = list ]; then
+			# shellcheck source=/dev/null # zsh syntax, not parsed as sh.
+			. "$DOTFILES_ROOT/Unix/shell/prediction-list.zsh"
 		fi
-		zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'
-
-		# HistorySearchBackward/Forward: filter history by what is already typed,
-		# rather than plain previous/next line. With zsh-autocomplete loaded the same
-		# keys step through its list instead, which is the ListView behaviour.
-		if [ -n "$_zsh_autocomplete" ]; then
-			bindkey '^[[A' up-line-or-search
-			bindkey '^[[B' down-line-or-select
-			bindkey '^[OA' up-line-or-search
-			bindkey '^[OB' down-line-or-select
-			# Enter on a highlighted entry runs it, as in PSReadLine. The plugin's default
-			# only copies the entry to the command line and needs a second Enter.
-			bindkey -M menuselect '^M' .accept-line
-			bindkey -M menuselect '\r' .accept-line
-		else
-			autoload -Uz up-line-or-beginning-search down-line-or-beginning-search
-			zle -N up-line-or-beginning-search
-			zle -N down-line-or-beginning-search
-			bindkey '^[[A' up-line-or-beginning-search
-			bindkey '^[[B' down-line-or-beginning-search
-			bindkey '^[OA' up-line-or-beginning-search
-			bindkey '^[OB' down-line-or-beginning-search
-		fi
-		unset _zsh_autocomplete
-
-		# Keys emacs mode leaves unbound, which Windows users reasonably expect.
-		bindkey '^[[H' beginning-of-line
-		bindkey '^[[F' end-of-line
-		bindkey '^[[3~' delete-char
-		bindkey '^[[1;5C' forward-word
-		bindkey '^[[1;5D' backward-word
 	elif [ -n "${BASH_VERSION:-}" ]; then
 		HISTFILE="${_foundation_history_file:-$HOME/.bash_history}"
 		HISTSIZE=$_foundation_history_size
 		HISTFILESIZE=$_foundation_history_size
-		HISTCONTROL=ignoreboth
-		shopt -s histappend checkwinsize 2>/dev/null
+		shopt -s checkwinsize 2>/dev/null
 		[ "$_foundation_edit_mode" = vi ] && set -o vi
-		bind '"\e[A": history-search-backward' 2>/dev/null
-		bind '"\e[B": history-search-forward' 2>/dev/null
 	fi
-	unset _foundation_history_size _foundation_history_file _foundation_edit_mode _foundation_list_lines
+	unset _foundation_history_size _foundation_history_file _foundation_edit_mode \
+		_foundation_history_no_duplicates _foundation_history_save_style _foundation_completion_ignore_case \
+		_foundation_prediction_source _foundation_prediction_view _foundation_bindings
 fi
 _foundation_stage_done
 
@@ -412,24 +389,15 @@ _foundation_stage_done
 unset _foundation_prompt_theme
 
 # ---------------------------------------------------------------------------
-# Optional zsh plugins - the PredictionSource History analog. Sourced only when
-# present, so a machine without them still starts cleanly. Homebrew and the usual
-# Linux package paths are both probed.
+# Optional zsh plugins. Sourced only when present, so a machine without them still starts
+# cleanly. Homebrew and the usual Linux package paths are both probed. The prediction plugins
+# (zsh-autosuggestions, zsh-autocomplete) are not loaded while Backlog/MacOS/51_LineEditingParity.md
+# is open.
 #
 # Order is load-bearing: zsh-syntax-highlighting wraps the ZLE widgets and must be
 # sourced after everything else that defines or rebinds them.
 # ---------------------------------------------------------------------------
 _foundation_stage Plugins && if [ -n "${ZSH_VERSION:-}" ]; then
-	for _plugin_directory in \
-		/opt/homebrew/share \
-		/usr/local/share \
-		/usr/share/zsh/plugins \
-		/usr/share; do
-		[ -r "$_plugin_directory/zsh-autosuggestions/zsh-autosuggestions.zsh" ] || continue
-		. "$_plugin_directory/zsh-autosuggestions/zsh-autosuggestions.zsh"
-		break
-	done
-
 	for _plugin_directory in \
 		/opt/homebrew/share \
 		/usr/local/share \
@@ -518,10 +486,14 @@ fi
 # Terminal-Icons analog: file-type icons in directory listings, from the same
 # Nerd Font the prompt and the fastfetch panel already require.
 _foundation_stage Icons && if command -v eza >/dev/null 2>&1; then
+	# The list-color lines of theme.conf (read by the LineEditing stage); without one eza keeps its
+	# own colours.
+	[ -n "${_foundation_eza_colors:-}" ] && export EZA_COLORS="$_foundation_eza_colors"
 	alias ls='eza --icons --group-directories-first'
 	alias ll='eza --icons --group-directories-first --long'
 	alias la='eza --icons --group-directories-first --long --all'
 fi
+unset _foundation_eza_colors
 _foundation_stage_done
 
 # A typed `fastfetch` or `onefetch` looks like the greeting, as the fastfetch and onefetch functions

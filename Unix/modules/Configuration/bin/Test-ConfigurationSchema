@@ -33,6 +33,9 @@
 #                         entries are KIND/NAME or KIND/SOURCE/NAME, use lines KIND NAME
 #   ai-harnesses.conf     every destination line is KIND PLACEMENT FILES [+HOOK...] PATH with a
 #                         known kind, placement and hook
+#   shell.conf            every line is a kind it knows with a value that kind takes; key lines
+#                         name a known key and a known function or zle widget (lib/lineediting.sh)
+#   theme.conf            every list-color line names an eza colour key and a colour
 #   git.conf              a note (not a problem) when neither it, its overlay nor the global git
 #                         config has the name or email; --quiet leaves it out
 # apps.conf (tokens and roles), docker.conf (stacks), pdfs.conf (groups), zones.conf (zone sets),
@@ -51,7 +54,7 @@ while [ -L "$_foundation" ]; do
 done
 . "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
 foundation_require_bash || exit 1
-foundation_load config apps browser project drivers/aerospace layout workspace artifacts
+foundation_load config apps browser project drivers/aerospace layout workspace artifacts lineediting
 
 foundation_normalize_args "$@"
 set -- "${FOUNDATION_ARGS[@]}"
@@ -364,6 +367,21 @@ if [ -f "$cfg/ai-artifacts.conf" ] || [ -f "$cfg/ai-harnesses.conf" ]; then
 			esac
 		done < <(conf_lines "$cfg/ai-artifacts.conf")
 	fi
+fi
+
+# Shell line editing: what foundation-shell-settings would skip without a word, as Windows'
+# Initialize-PSReadLine warns about a MaximumHistoryCount it cannot use.
+if [ -f "$cfg/shell.conf" ] || [ -f "$cfg/shell.local.conf" ]; then
+	while IFS= read -r message; do
+		problem "shell.conf: $message"
+	done < <(conf_lines "$cfg/shell.conf" 2>/dev/null | lineediting_problems)
+fi
+if [ -f "$cfg/theme.conf" ]; then
+	while read -r kind name color _; do
+		[ "$(foundation_lower "$kind")" = list-color ] || continue
+		lineediting_list_color_key "$name" >/dev/null || problem "theme.conf: list-color $name: unknown key"
+		lineediting_sgr "$color" >/dev/null || problem "theme.conf: list-color $name: [$color] is not a colour"
+	done < <(conf_lines "$cfg/theme.conf")
 fi
 
 # Git identity, as Windows warns about an empty GitConfig.UserName / UserEmail: a note, not a
