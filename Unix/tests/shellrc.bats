@@ -33,6 +33,20 @@ rc_path() {
 	[ "$(tr ':' '\n' <<<"$output" | grep -c '/mise/shims$')" -eq 1 ]
 }
 
+@test "Docker Desktop's per-user ~/.docker/bin goes last on PATH, once, and only when it exists" {
+	run rc_path
+	[ "$status" -eq 0 ]
+	[[ ":$output:" != *"/.docker/bin:"* ]]
+	mkdir -p "$HOME/.docker/bin"
+	run rc_path
+	[ "$status" -eq 0 ]
+	[[ $output == *":$HOME/.docker/bin" ]]
+	[ "$(tr ':' '\n' <<<"$output" | grep -c '/\.docker/bin$')" -eq 1 ]
+	# The tracked login files carry no PATH line of their own: an installer's copy belongs in
+	# ~/.shellrc.local.
+	! grep -qE '^[^#]*\.docker/bin' "$UNIX_DIR/shell/bash_profile" "$UNIX_DIR/shell/zshrc" || false
+}
+
 @test "the tracked zshrc runs no compinit; the shared rc puts Docker's completions on fpath before the completion system" {
 	! grep -qE '^[^#]*compinit' "$UNIX_DIR/shell/zshrc" || false
 	docker=$(grep -nE '^[^#]*\.docker/completions' "$rc" | head -1 | cut -d: -f1)

@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# Configure-DockerDesktop - sets where Docker Desktop installs its tools (docker.conf cli-install).
+#
+# Usage: Configure-DockerDesktop [--dry-run] [--backup-root DIR]
+#
+# Docker Desktop links docker, docker-compose and its other tools either into /usr/local/bin
+# (system, Settings > Advanced > System; Docker Desktop asks for the administrator password once)
+# or into ~/.docker/bin (user). In user mode it adds ~/.docker/bin to PATH by writing a block into
+# the shell profiles (~/.zprofile, ~/.bash_profile) at every start, and ~/.bash_profile is a link
+# into this repository; in system mode it writes none. The `cli-install system|user` line of
+# Unix/config/docker.conf names the mode; without one, or with another value, nothing is changed and
+# Docker Desktop keeps its own choice. The mode is the DockerBinInstallPath key of Docker Desktop's
+# settings-store.json (~/Library/Group Containers/group.com.docker/); a Docker Desktop that never ran
+# has none yet, which is a warning: start it once and run this again. When the key differs, a running
+# Docker Desktop is stopped first (its containers too, as Open-Docker --stop), the file is copied into
+# Backups/Unix/System/DockerDesktop/ (gitignored), the key is written, and Docker Desktop is started
+# again in the background; it then asks for the password itself to link the tools in system mode.
+# --dry-run says what would change without stopping or writing anything. --backup-root DIR puts the
+# backup under DIR/System/DockerDesktop/ instead of Backups/Unix.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config backup docker
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+dry=0
+while [ $# -gt 0 ]; do
+	case $1 in
+		--dry-run) dry=1 ;;
+		--backup-root)
+			[ -n "${2:-}" ] || foundation_die "--backup-root needs a DIR"
+			case $2 in /*) FOUNDATION_BACKUP_ROOT=$2 ;; *) FOUNDATION_BACKUP_ROOT=$PWD/$2 ;; esac
+			export FOUNDATION_BACKUP_ROOT
+			shift
+			;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument [$1] - usage: Configure-DockerDesktop [--dry-run] [--backup-root DIR]" ;;
+	esac
+	shift
+done
+
+log_title "Configure-DockerDesktop"
+
+wanted=$(docker_cli_install)
+case $wanted in
+	system | user) ;;
+	'')
+		log_warning "No cli-install line in docker.conf - Docker Desktop keeps its own setting"
+		exit 0
+		;;
+	*)
+		log_warning "cli-install [$wanted] in docker.conf is neither system nor user - nothing changed"
+		exit 0
+		;;
+esac
+
+# FOUNDATION_DOCKER_SETTINGS stands in for Docker Desktop's own file in the suites.
+settings=${FOUNDATION_DOCKER_SETTINGS:-$HOME/Library/Group Containers/group.com.docker/settings-store.json}
+if [ ! -f "$settings" ]; then
+	log_warning "Docker Desktop has no settings yet - start it once (Open-Docker), then run Configure-DockerDesktop again"
+	exit 0
+fi
+current=$(plutil -extract DockerBinInstallPath raw -o - "$settings" 2>/dev/null) || current=''
+
+if [ "$current" = "$wanted" ]; then
+	log_success "Docker Desktop already installs its tools in $wanted mode!"
+	exit 0
+fi
+
+if [ "$dry" -eq 1 ]; then
+	printf '  set DockerBinInstallPath [%s] to [%s] in %s' "${current:-unset}" "$wanted" "$settings"
+	docker_app_running && printf ', stopping and restarting Docker Desktop'
+	printf '\n'
+	exit 0
+fi
+
+# Docker Desktop keeps the file in memory while it runs and writes it back: change it only stopped.
+was_running=0
+if docker_app_running; then
+	was_running=1
+	docker_stop
+	docker_app_running && foundation_die "Docker Desktop is still running - not changing its settings"
+fi
+
+backup=$(backup_item System DockerDesktop "$settings") || foundation_die "Could not back up $settings - not changing it"
+log_warning "Backed up Docker Desktop's settings => $backup"
+
+if ! plutil -replace DockerBinInstallPath -string "$wanted" "$settings" ||
+	[ "$(plutil -extract DockerBinInstallPath raw -o - "$settings" 2>/dev/null)" != "$wanted" ]; then
+	log_error "Could not write DockerBinInstallPath into $settings - restore it from $backup"
+	exit 1
+fi
+log_success "Docker Desktop installs its tools in $wanted mode => $settings"
+
+if [ "$was_running" -eq 1 ]; then
+	docker_launch || exit 1
+	[ "$wanted" = system ] && log_step "Docker Desktop asks for the administrator password to link its tools into /usr/local/bin"
+elif [ "$wanted" = system ]; then
+	log_step "Docker Desktop asks for the administrator password at its next start, to link its tools into /usr/local/bin"
+fi
+exit 0

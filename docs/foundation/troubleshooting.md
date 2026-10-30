@@ -213,6 +213,37 @@ the completion runs long nothing stops them. The shared rc wraps the worker with
 helper. A shell started before the guard existed still has the unguarded worker - open a new
 terminal. To catch one still running, `sample PID 3` shows what it is doing.
 
+## Docker
+
+### Docker Desktop shows "An unexpected error occurred" when it is stopped
+
+**Problem:** `DockerWizard --stop`, `Open-Docker --stop` or Kill-All stops the containers, then
+Docker Desktop shows "the Docker Desktop VM stopped unexpectedly: the virtualization process exited
+without being asked to" with Reset to factory defaults and Quit, and the command waits on "Waiting
+for Docker Desktop to quit".
+
+**Solution:** Nothing is broken: click Quit. The stop quits Docker Desktop through
+`docker desktop stop`, its own shutdown; the dialog comes from an Apple Event quit, which Foundation
+falls back to only when `docker desktop stop --help` fails (a Docker Desktop older than 4.37, or a
+`docker` on PATH that is not Docker Desktop's: `command -v docker` should lead into
+`/Applications/Docker.app` or `~/.docker/bin`). Update Docker Desktop. Docker's own log says which
+shutdown ran: `grep -E 'shutdown requested|stopped unexpectedly'
+~/Library/Containers/com.docker.docker/Data/log/host/com.docker.backend.log`.
+
+### Docker Desktop's PATH block keeps coming back into bash_profile
+
+**Problem:** `Unix/shell/bash_profile` (and `~/.zprofile`) start with "The following lines were
+added by Docker Desktop to add commands to your PATH" again after every start of Docker Desktop, and
+`Run-Tests` lint fails on `bash_profile` (SC2148).
+
+**Solution:** Docker Desktop installs its tools in user mode (`~/.docker/bin`) and adds that folder
+to PATH through the shell profiles at every start; `~/.bash_profile` is a link into the repository.
+Put `cli-install system` in `Unix/config/docker.local.conf` and run `Configure-DockerDesktop` (or
+the DockerDesktop step): Docker Desktop then links its tools into `/usr/local/bin`, asking for the
+administrator password once, and writes no PATH block. Remove the old block from `~/.zprofile` by
+hand and restore `Unix/shell/bash_profile` from git. `~/.docker/bin` stays on PATH through
+`shellrc.sh` for a Mac that keeps user mode.
+
 ## AI
 
 The deployment itself (paths, steps, verification) is on [AI on a Mac](ai.md).

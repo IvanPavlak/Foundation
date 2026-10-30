@@ -22,6 +22,14 @@ docker_timeout() { # start|stop
 	printf '%s' "${value:-$fallback}"
 }
 
+# The `cli-install system|user` line of docker.conf (Configure-DockerDesktop), lower-cased; nothing
+# without one.
+docker_cli_install() {
+	local file value=''
+	file=$(docker__file) && value=$(conf_value "$file" cli-install 2>/dev/null)
+	foundation_lower "$value"
+}
+
 # Stack names in file order, each name once (case-insensitively, as first written).
 docker_stacks() {
 	local file
@@ -94,9 +102,20 @@ docker_start() {
 	return 1
 }
 
-# DockerWizard -Stop: stop running containers, then quit Docker Desktop.
+# Does this Docker have the Docker Desktop CLI (docker desktop start|stop|status, Docker Desktop
+# 4.37 and later)?
+docker__desktop_cli() {
+	command -v docker >/dev/null 2>&1 && docker desktop stop --help >/dev/null 2>&1 </dev/null
+}
+
+# DockerWizard -Stop: stop running containers, then quit Docker Desktop. The quit goes through
+# Docker Desktop's own shutdown, `docker desktop stop`, which stops the VM on request and waits for
+# it: an Apple Event quit (`quit app "Docker"`) let the VM exit before the backend asked it to, and
+# Docker Desktop reported that as a crash with its "unexpected error" dialog. The Apple Event quit
+# stays for a Docker Desktop without the CLI. The whole quit is bounded by `timeout stop`; after it
+# the Docker Desktop process is killed.
 docker_stop() {
-	local timeout waited=0 ids
+	local timeout deadline ids
 	if ! docker_app_running; then
 		log_debug "[docker_stop] Docker Desktop is not running"
 		return 0
@@ -110,19 +129,24 @@ docker_stop() {
 		fi
 	fi
 	log_step "Quitting Docker Desktop..."
-	osascript -e 'quit app "Docker"' </dev/null >/dev/null 2>&1
 	timeout=$(docker_timeout stop)
+	deadline=$((SECONDS + timeout))
 	spinner_start "Waiting for Docker Desktop to quit"
-	while [ "$waited" -lt "$timeout" ]; do
-		pgrep -xq "Docker Desktop" || {
-			spinner_stop
+	if docker__desktop_cli; then
+		docker desktop stop --timeout "$timeout" </dev/null >/dev/null 2>&1 ||
+			log_debug "[docker_stop] docker desktop stop did not finish within ${timeout}s"
+	else
+		osascript -e 'quit app "Docker"' </dev/null >/dev/null 2>&1
+	fi
+	while pgrep -xq "Docker Desktop"; do
+		if [ "$SECONDS" -ge "$deadline" ]; then
+			spinner_stop --discard
+			pkill -x "Docker Desktop" 2>/dev/null
 			return 0
-		}
+		fi
 		sleep 1
-		waited=$((waited + 1))
 	done
-	spinner_stop --discard
-	pkill -x "Docker Desktop" 2>/dev/null
+	spinner_stop
 	return 0
 }
 

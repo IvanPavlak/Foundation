@@ -65,7 +65,8 @@ SH
 	printf '#!/bin/sh\necho "pgrep $*" >>"$STUB_LOG"\ncase "$*" in *com.docker.backend*) exit 0 ;; esac\nexit 1\n' >"$STUB_BIN/pgrep"
 	run "${BASH:-bash}" "$cmd" --stop --compose-file-path "$BATS_TEST_TMPDIR/app/my.yml"
 	[ "$status" -eq 0 ]
-	stub_called '^osascript -e quit app "Docker"$'
+	stub_called '^docker desktop stop --timeout 5$'
+	! stub_called '^osascript' || false
 	! stub_called '^docker compose' || false
 	: >"$STUB_LOG"
 	run "${BASH:-bash}" "$cmd" --udpate

@@ -8,7 +8,8 @@
 # Desktop that already runs is a warning and nothing is started, as on Windows. The commands that
 # need the daemon (Start-Containers, Docker-Cleanup, Run-Project, as DockerWizard on Windows) wait
 # for it themselves, up to `timeout start` seconds of Unix/config/docker.conf. --stop
-# stops the running containers and quits Docker Desktop, waiting up to `timeout stop` seconds (60
+# stops the running containers and quits Docker Desktop through its own CLI (`docker desktop stop`;
+# an Apple Event quit on a Docker Desktop older than 4.37), waiting up to `timeout stop` seconds (60
 # without a line) before it kills it - what Kill-All's Docker step does. Any other argument is an
 # error and starts nothing.
 _foundation=${BASH_SOURCE[0]}
