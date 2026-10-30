@@ -67,6 +67,8 @@
 #   DotnetSdks         Install-DotnetSdks: the sdk-channel lines of dotnet.conf (off, sudo)
 #   CondaEnvironments  Install-CondaEnvironments
 #   NuGetConfig        Configure-NuGetConfig (off, interactive)
+#   NpmConfig          Configure-NpmConfig: the GitHub token of the npm.conf registries (off,
+#                      interactive)
 #   UpgradeAll         Upgrade-All (off)
 #   PersonalSteps      the [PersonalSteps] lines of bootstrap.conf, a fork's own commands (empty
 #                      in the base, so nothing to do)
@@ -137,6 +139,7 @@ CATALOG=(
 	"DotnetSdks off sudo"
 	"CondaEnvironments on"
 	"NuGetConfig off interactive"
+	"NpmConfig off interactive"
 	"UpgradeAll off"
 	"PersonalSteps on"
 	"AeroSpace on"
@@ -706,6 +709,7 @@ run_step() {
 		DotnetSdks) run_command --dry-run Install-DotnetSdks ;;
 		CondaEnvironments) run_command --dry-run Install-CondaEnvironments ;;
 		NuGetConfig) run_command --dry-run Configure-NuGetConfig ;;
+		NpmConfig) run_command --dry-run Configure-NpmConfig ;;
 		UpgradeAll) run_command '' Upgrade-All ;;
 		PersonalSteps) step_personal ;;
 		AeroSpace) step_aerospace ;;

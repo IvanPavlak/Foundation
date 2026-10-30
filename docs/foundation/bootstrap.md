@@ -52,6 +52,7 @@ In execution order. **Default** is the built-in state before any configuration; 
 | DotnetSdks | off | sudo | Install-DotnetSdks: the `sdk-channel` lines of `dotnet.conf` (a .NET SDK no cask ships, such as 6.0) | the .NET 6 SDK of `WinGetApps.local.csv` |
 | CondaEnvironments | on | | Install-CondaEnvironments | CondaEnvironments |
 | NuGetConfig | off | interactive | Configure-NuGetConfig | NuGetConfig |
+| NpmConfig | off | interactive | Configure-NpmConfig: the GitHub token of the `npm.conf` registries into `~/.npmrc` | NpmConfig |
 | UpgradeAll | off | | Upgrade-All (Homebrew and the App Store; `mas upgrade` asks for the password when an App Store app is outdated) | UpgradeAll |
 | PersonalSteps | on | | the `[PersonalSteps]` lines of `bootstrap.conf`, a fork's own commands, in order; the base ships none | PersonalSteps |
 | AeroSpace | on | | starts AeroSpace and checks its config | - |

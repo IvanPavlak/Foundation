@@ -2,8 +2,8 @@
 # Configure-NuGetConfig with a template and a config in the test folder (HOME and the backup
 # sink point there too) and the answers fed through FOUNDATION_TTY: matching package sources change
 # nothing, a mismatch or --override asks and writes the filled-in template with owner-only
-# permissions, the old file is backed up first, empty answers are asked again, --dry-run asks
-# and writes nothing.
+# permissions, the old file is backed up first with its tokens redacted, empty answers and a
+# token with whitespace are asked again, --dry-run asks and writes nothing.
 
 load ../../helpers
 
@@ -123,4 +123,31 @@ existing() { # SOURCES...
 	[ "$status" -eq 0 ]
 	grep -rqF 'https://other.invalid' "$BATS_TEST_TMPDIR/elsewhere/System/NuGetConfig"
 	[ ! -d "$FOUNDATION_BACKUP_ROOT/System/NuGetConfig" ]
+}
+
+@test "the backup keeps the sources but no token: ClearTextPassword and Password are redacted" {
+	mkdir -p "$(dirname "$target")"
+	printf '%s\n' '<configuration>' '  <packageSources>' '    <add key="Other" value="https://other.invalid" />' '  </packageSources>' \
+		'  <packageSourceCredentials>' '    <Other>' '      <add key="ClearTextPassword" value="old-token" />' '      <add value="old-password" key="Password" />' \
+		'    </Other>' '  </packageSourceCredentials>' '</configuration>' >"$target"
+	export TMPDIR=$BATS_TEST_TMPDIR/tmp
+	mkdir -p "$TMPDIR"
+	run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	backup=$(find "$FOUNDATION_BACKUP_ROOT/System/NuGetConfig" -type f -name NuGet.Config)
+	grep -qF 'https://other.invalid' "$backup"
+	grep -qF '<add key="ClearTextPassword" value="REDACTED" />' "$backup"
+	grep -qF '<add value="REDACTED" key="Password" />' "$backup"
+	! grep -rqE 'old-token|old-password|ghp_A' "$FOUNDATION_BACKUP_ROOT" || false
+	[ -z "$(ls -A "$TMPDIR")" ]
+}
+
+@test "a token with whitespace (a pasted command) is asked again, the username is not checked" {
+	printf 'My User\nConfigure-NuGetConfig --override\nsecret\n' >"$answers"
+	run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	[[ $output == *"no spaces"* ]]
+	grep -qF 'value="My User"' "$target"
+	grep -qF 'value="secret"' "$target"
+	! grep -qF 'Configure-NuGetConfig' "$target" || false
 }

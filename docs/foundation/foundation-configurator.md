@@ -193,7 +193,7 @@ Check: `Test-ConfigurationSchema --quiet` (the template resolves, every action r
 `step NAME on|off` and `repository-scope` lines before the first section; sections `[Packages]`, `[Spotlight]`, `[Firewall]`, `[SoftwareUpdate]` hold the inline steps' values and `[PersonalSteps]` the fork's own commands. `bootstrap.local.conf` is layered on top: its `step` lines win, its sections replace whole sections. Show `Bootstrap --list` (every step, its default and its current state) before the first question.
 
 1. **Every machine or one type?** The fork's choices go in `bootstrap.local.conf` (rule 2); a choice for one machine type only gets an `@TYPE` prefix (`@Laptop step Power on`). Default: every machine of the fork.
-2. **Which off-by-default steps to turn on**, one at a time, with what each does (the step table of [Bootstrap a Mac](bootstrap.md#steps)): RepositoryUpdate, Power, Spotlight, Firewall, SoftwareUpdate, Rosetta, FirefoxProfile, VSCodeProfiles, the three AI steps (AiArtifacts, AiMarketplaces, AiMcpServers), ObsidianCli, DotnetSdks, NuGetConfig, UpgradeAll, Logout. Say which need the administrator password (*sudo*) and which ask on the terminal. InitializeConfiguration, RenameMachine and Permissions are not asked: they run only with `--with-initial-setup`, whatever their `step` line says. Default: leave off.
+2. **Which off-by-default steps to turn on**, one at a time, with what each does (the step table of [Bootstrap a Mac](bootstrap.md#steps)): RepositoryUpdate, Power, Spotlight, Firewall, SoftwareUpdate, Rosetta, FirefoxProfile, VSCodeProfiles, the three AI steps (AiArtifacts, AiMarketplaces, AiMcpServers), ObsidianCli, DotnetSdks, NuGetConfig, NpmConfig, UpgradeAll, Logout. Say which need the administrator password (*sudo*) and which ask on the terminal. InitializeConfiguration, RenameMachine and Permissions are not asked: they run only with `--with-initial-setup`, whatever their `step` line says. Default: leave off.
 3. **Which on-by-default steps to turn off.** Default: none.
 4. **Repository scope** (when RepositoryUpdate is on): `All`, or `repositories.conf` group names, read from its `[Group]` sections first. Group names only: a repository's name fails the step, so a set of repositories becomes a group of its own. Default: `All`.
 5. **Firewall** (when on): `globalstate`, `stealthmode`, `allowsigned`, `allowsignedapp`, each on or off. Default: the base file's lines.
@@ -255,6 +255,15 @@ Check: `Set-DockPins --list` and `Set-LoginItems --list`.
 6. **Conda environments:** which files of that folder to create (`env NAME`, or no `env` line for all of them), and whether to update base first (`update-base`, which needs the defaults channel's Terms of Service accepted). Default: the current lines, `update-base off`.
 
 Check: `Install-DotnetEf --dry-run`, `Install-DotnetSdks --dry-run`, `Configure-NuGetConfig --dry-run`, `Install-CondaEnvironments --list`.
+
+### npm.conf
+
+`npm.conf` holds the lines of Configure-NpmConfig (step NpmConfig): `npmrc` and one `registry URL [SCOPE]` line per private registry.
+
+1. **Registries** (only when the NpmConfig step is on): which private registries need a token (the base ships GitHub Packages, `https://npm.pkg.github.com/`), and whether to route a scope there (`registry https://npm.pkg.github.com/ @my-org`), needed only when the projects do not ship their own `.npmrc` with that scope line. The token is typed at the step's own prompt, never stored here. Default: the base registry, no scope.
+2. **npmrc** (`npmrc`): where the token goes. Default: `~/.npmrc`.
+
+Check: `Configure-NpmConfig --dry-run`.
 
 ## Tasks
 

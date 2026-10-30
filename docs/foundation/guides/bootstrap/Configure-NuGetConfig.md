@@ -51,7 +51,8 @@ nuget-config ~/.nuget/NuGet/NuGet.Config
 
 The template's `<packageSources>` decide whether a rerun rewrites the file: when the existing
 config has the same sources (key and URL), nothing changes; `--override` rewrites it anyway. An
-existing file is backed up into `Backups/Unix/System/NuGetConfig/` first.
+existing file is backed up into `Backups/Unix/System/NuGetConfig/` first, with every
+`ClearTextPassword` and `Password` value replaced by `REDACTED`, so the copy holds no token.
 
 ## Step 2: Check the configuration
 
