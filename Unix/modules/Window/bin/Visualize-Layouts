@@ -106,20 +106,26 @@ if [ "$all" -eq 0 ] && [ ${#workspaces[@]} -eq 0 ]; then
 	mapfile -t workspaces <<<"$selection"
 fi
 
+# zones.conf and apps.conf, read once here: every desktop and window drawn or checked below asks
+# them again, mostly from subshells, which keep nothing of their own.
+zones_cache_load || true
+apps__load || true
+
 # Drawing of one workspace, desktop by desktop; with PROJECT and DESKTOPS (DESKTOP.MONITOR words)
 # only those desktops, as that project's variant leaves them.
 draw() { # WORKSPACE FILE [PROJECT DESKTOPS]
-	local workspace=$1 file=$2 project=${3:-} only=" ${4:-} " kind desktop monitor zoneset zone app title column
+	local workspace=$1 file=$2 project=${3:-} only=" ${4:-} " kind desktop monitor zoneset zone app title column entries
 	local -A sets=()
 	local order=()
 	local projects=()
 	[ -n "$project" ] && projects=("$project")
+	entries=$(layout_entries "$file" "$workspace" ${projects[@]+"${projects[@]}"})
 	while IFS=$'\t' read -r kind desktop monitor zoneset _ _; do
 		[ "$kind" = L ] || continue
 		[ -z "$project" ] || [[ $only == *" $desktop.$monitor "* ]] || continue
 		sets["$monitor.$desktop"]=$zoneset
 		order+=("$monitor.$desktop")
-	done < <(layout_entries "$file" "$workspace" ${projects[@]+"${projects[@]}"})
+	done <<<"$entries"
 	local key
 	for key in "${order[@]}"; do
 		monitor=${key%%.*}
@@ -134,7 +140,7 @@ draw() { # WORKSPACE FILE [PROJECT DESKTOPS]
 			else
 				log_warning "[$workspace] zone [$zone] is not in zone set [$zoneset]" >&2
 			fi
-		done < <(layout_entries "$file" "$workspace" ${projects[@]+"${projects[@]}"}) | layout_render "$zoneset" 64 || log_warning "[$workspace] unknown zone set [$zoneset]" >&2
+		done <<<"$entries" | layout_render "$zoneset" 64 || log_warning "[$workspace] unknown zone set [$zoneset]" >&2
 	done
 	[ -z "$project" ] || return 0
 	local scope touched

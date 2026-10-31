@@ -115,6 +115,16 @@ setup() {
 	[[ $output != *"unknown action"* ]]
 }
 
+@test "a trailing & is accepted on a command that may run in the background, reported on any other" {
+	cfg=$FOUNDATION_CONFIG_DIR
+	printf '\n[Backgrounded]\nOpen-Code &\nOpen-Application Code &\nFocus-VirtualDesktop 2 &\n' >>"$cfg/workspaces.conf"
+	run "${BASH:-bash}" "$cmd" --strict --quiet
+	[[ $output == *"workspaces.conf [Backgrounded]: [Focus-VirtualDesktop] cannot run in the background"* ]]
+	[[ $output != *"[Open-Code] cannot run"* ]]
+	[[ $output != *"[Open-Application] cannot run"* ]]
+	[[ $output != *"unknown action"* ]]
+}
+
 @test "a variant's zone is checked against the zone set it ends up with" {
 	cfg=$FOUNDATION_CONFIG_DIR
 	printf 'project Sample\nlayout 1 Zero\n1 Left Code\n' >>"$cfg/layouts/Work/Sample_Work.conf"

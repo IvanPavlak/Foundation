@@ -241,7 +241,7 @@ actions=$(printf '%s\n' "$actions" | sed -E 's/^%[^[:space:]]*[[:space:]]+//' | 
 if printf '%s\n' "$actions" | grep -qE '^Terminate-WindowsTerminalTabs.*--(only|include)-current'; then
 	foundation_die "[$name] closes the calling terminal tab (Terminate-WindowsTerminalTabs --only-current/--include-current), which would end the experiment"
 fi
-if [ ${#projects[@]} -eq 0 ] && printf '%s\n' "$actions" | grep -qxE 'Open-Project[[:space:]]*'; then
+if [ ${#projects[@]} -eq 0 ] && printf '%s\n' "$actions" | grep -qxE 'Open-Project([[:space:]]+&)?[[:space:]]*'; then
 	foundation_die "[$name] opens a project it takes from the command line - pass one (Measure-WorkspaceOpen $name PROJECT)"
 fi
 

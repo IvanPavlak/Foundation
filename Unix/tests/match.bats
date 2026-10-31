@@ -244,3 +244,16 @@ flag_command() {
 	[ "$status" -eq 3 ]
 	[ "$output" = done ]
 }
+
+@test "foundation_lower gives tr's result, and a plain name needs no tr" {
+	stub_tool tr 'exec /usr/bin/tr "$@"'
+	for s in WezTerm Middle-Left My_Project.v2 "Two Words" "ČĆŽ Abc" "*Gemini*" "a[b]" ""; do
+		[ "$(foundation_lower "$s")" = "$(printf '%s' "$s" | /usr/bin/tr '[:upper:]' '[:lower:]')" ]
+	done
+	[ "${BASH_VERSINFO[0]}" -ge 4 ] || skip "bash 3.2 lowercases through tr"
+	: >"$BATS_TEST_TMPDIR/tool.log"
+	[ "$(foundation_lower Middle-Left)" = middle-left ]
+	[ ! -s "$BATS_TEST_TMPDIR/tool.log" ]
+	[ "$(foundation_lower "*Gemini*")" = "*gemini*" ]
+	[ -s "$BATS_TEST_TMPDIR/tool.log" ]
+}

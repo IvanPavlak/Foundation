@@ -6,14 +6,20 @@ apps__file() {
 	conf_path apps.conf
 }
 
-# Prints "TOKEN<TAB>BUNDLE<TAB>BINARY" for every app token, once: when several app lines name the
-# same token (case-insensitive), the last one gives its bundle id and binary, so an overlay line
-# overrides the base line as in conf_value; the token keeps the place of its first line. BINARY
-# may contain spaces.
-apps_list() {
-	local file
-	file=$(apps__file) || return 0
-	conf_lines "$file" | awk '
+# The lines of apps.conf (conf_lines) and the app list built from them (apps_list), read once per
+# process instead of at every lookup: app_matches runs for every window and layout entry on each
+# poll of a layout wait, and one conf_lines costs several processes. Read again when
+# conf_cache_key changes, so a file written during the process is seen. Filled in the calling
+# shell: a lookup inside $(...) still answers right but keeps nothing, so a hot loop calls
+# apps__load before it. Fails when there is no apps.conf. Usage: apps__load
+APPS__CACHE_KEY=''
+APPS__CACHE_LINES=''
+APPS__CACHE_LIST=''
+apps__load() {
+	conf_cache_key apps.conf || return 1
+	[ "$CONF_CACHE_KEY" = "$APPS__CACHE_KEY" ] && return 0
+	APPS__CACHE_LINES=$(conf_lines "$FOUNDATION_CONFIG_DIR/apps.conf")
+	APPS__CACHE_LIST=$(printf '%s\n' "$APPS__CACHE_LINES" | awk '
 		$1 == "app" {
 			binary = ""
 			if (NF > 3) { binary = $0; sub(/^[[:space:]]*app[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+/, "", binary) }
@@ -21,7 +27,17 @@ apps_list() {
 			if (!(key in entry)) order[++n] = key
 			entry[key] = $2 "\t" $3 "\t" binary
 		}
-		END { for (i = 1; i <= n; i++) print entry[order[i]] }'
+		END { for (i = 1; i <= n; i++) print entry[order[i]] }')
+	APPS__CACHE_KEY=$CONF_CACHE_KEY
+}
+
+# Prints "TOKEN<TAB>BUNDLE<TAB>BINARY" for every app token, once: when several app lines name the
+# same token (case-insensitive), the last one gives its bundle id and binary, so an overlay line
+# overrides the base line as in conf_value; the token keeps the place of its first line. BINARY
+# may contain spaces.
+apps_list() {
+	apps__load || return 0
+	[ -z "$APPS__CACHE_LIST" ] || printf '%s\n' "$APPS__CACHE_LIST"
 }
 
 # The app entry NAME resolves to, as "TOKEN<TAB>BUNDLE<TAB>BINARY": the last entry whose token or
@@ -64,17 +80,24 @@ app_binary() {
 # case-insensitive: a later line (the .local overlay) overrides an earlier one, as in conf_value.
 # Fails when no line matches. Usage: apps__last_line KIND NAME
 apps__last_line() {
-	local kind=$1 name=$2 file line first second hit='' found=1
-	file=$(apps__file) || return 1
+	apps__find_last "$1" "$2" || return 1
+	printf '%s' "$APPS__HIT"
+}
+
+# apps__last_line without a process: sets APPS__HIT, so a caller in a loop stays in its own shell
+# (and keeps the cache apps__load fills). Usage: apps__find_last KIND NAME
+apps__find_last() {
+	local kind=$1 name=$2 line first second found=1
+	APPS__HIT=''
+	apps__load || return 1
 	while IFS= read -r line; do
 		read -r first second _ <<<"$line"
 		if [ "$first" = "$kind" ] && foundation_ieq "$second" "$name"; then
-			hit=$line
+			APPS__HIT=$line
 			found=0
 		fi
-	done < <(conf_lines "$file")
-	[ "$found" -eq 0 ] || return 1
-	printf '%s' "$hit"
+	done <<<"$APPS__CACHE_LINES"
+	return $found
 }
 
 # Members of a role ("Terminal" -> WezTerm), one per line, from its last role line; fails when
@@ -146,10 +169,15 @@ app_default_browser() {
 app_matches() {
 	local pattern=$1 token=$2 member members
 	[ -n "$pattern" ] || return 0
-	if members=$(app_role_members "$pattern"); then
-		while IFS= read -r member; do
+	# The role's members, as app_role_members prints them, read in this shell: no process per call.
+	if apps__find_last role "$pattern"; then
+		set -- $APPS__HIT
+		shift 2
+		members=("$@")
+		[ ${#members[@]} -gt 0 ] || members=('')
+		for member in "${members[@]}"; do
 			foundation_ieq "$member" "$token" && return 0
-		done <<<"$members"
+		done
 		return 1
 	fi
 	foundation_match_process "$pattern" "$token"

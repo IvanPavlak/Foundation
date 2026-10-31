@@ -16,7 +16,7 @@ together) to check them against each other.
 | File | Line | Default (base) | What it controls |
 | ---- | ---- | -------------- | ---------------- |
 | [`workspaces.conf`](../../configuration.md#workspacesconf) | `default-workspace NAME` | `Default` | Must name a section |
-| [`workspaces.conf`](../../configuration.md#workspacesconf) | `[Workspace]` action lines, `+A,B` and `%SET` scopes | the base workspaces | Each action is a command, an `Open-<App>` of `apps.conf` or `Return`; `Open-Project`, `Open-Browser`, `Set-WorkspaceWindowLayout` and scopes name what exists (a `%SET` scope a `type` line or a `layouts/<Set>/` folder) |
+| [`workspaces.conf`](../../configuration.md#workspacesconf) | `[Workspace]` action lines, `+A,B` and `%SET` scopes | the base workspaces | Each action is a command, an `Open-<App>` of `apps.conf` or `Return`; `Open-Project`, `Open-Browser`, `Set-WorkspaceWindowLayout` and scopes name what exists (a `%SET` scope a `type` line or a `layouts/<Set>/` folder); a trailing `&` only on a command that may run in the background |
 | [`workspace-templates.conf`](../../configuration.md#workspace-templatesconf) | `[Template]`, `var`, `:ID` | none | Checked through each workspace that uses it (known template, every placeholder has a value, `replace`/`drop`/`add` keys match, no cycle); a template no workspace uses is reported |
 | [`layouts/<Type>/<Workspace>_<Type>.conf`](../../configuration.md#files) | `[Workspace]`, `layout`, window lines, `project` | the `Test` set | One section named after the file; zone sets and zones exist; apps are tokens or roles; variant projects exist |
 | [`zones.conf`](../../configuration.md#zonesconf) | `ZONESET COLUMN...`, `alias` | `Zero` to `Nine` | The zone sets and zones layouts may use |

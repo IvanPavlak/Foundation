@@ -28,11 +28,14 @@
 # success and segments print nothing (the session log of lib/logfile.sh still gets them).
 
 # Usage: log_use_color <fd>   where <fd> is 1 (stdout) or 2 (stderr)
-# LOG_FORCE_COLOR=1 colors output held in a file that is shown on the terminal later.
+# LOG_FORCE_COLOR=1 colors output held in a file that is shown on the terminal later;
+# FOUNDATION_LOG_FORCE_COLOR=1 does the same for a whole command and the commands it runs, and as a
+# FOUNDATION_* variable it never reaches an app they start (foundation_launch drops it).
 log_use_color() {
 	[ -z "${NO_COLOR:-}" ] || return 1
 	[ "${TERM:-dumb}" != "dumb" ] || return 1
 	[ "${LOG_FORCE_COLOR:-}" != "1" ] || return 0
+	[ "${FOUNDATION_LOG_FORCE_COLOR:-}" != "1" ] || return 0
 
 	if [ "${1:-1}" = "2" ]; then
 		[ -t 2 ]

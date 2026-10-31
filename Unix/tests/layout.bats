@@ -21,6 +21,20 @@ setup() {
 	as_join_with() { echo "join $1 $2" >>"$LOG"; }
 	as_balance() { echo "balance $1" >>"$LOG"; }
 	as_resize_width() { echo "resize $1 $2" >>"$LOG"; }
+	# The batched calls, recorded as the single calls they stand for (no real AeroSpace is asked).
+	as_eval_check() { :; }
+	as_exit_native_fullscreen_each() { :; }
+	as_park_windows() {
+		local ws=$1
+		shift
+		for id in "$@"; do echo "move $id $ws" >>"$LOG"; done
+	}
+	as_gather_tiled() {
+		local ws=$1
+		shift
+		for id in "$@"; do echo "move $id $ws" >>"$LOG"; done
+		echo "flatten $ws" >>"$LOG"
+	}
 	# The tree already has the insertion order: the walk returns the ids as moved in.
 	as_workspace_order() { awk '$1 == "move" { print $2 }' "$LOG"; }
 	# No frames unless a test gives some: the wait then judges stability by title alone.
@@ -612,4 +626,15 @@ setup() {
 	[ "$(layout_absent_grace_seconds)" = 0 ]
 	rm "$FOUNDATION_CONFIG_DIR/workspaces.local.conf"
 	[ "$(layout_absent_grace_seconds)" = 10 ]
+}
+
+@test "zones.conf is read again when it changes during the process" {
+	copy_fixture_config
+	# The first lookup fills the per-process copy; the change below must still be seen.
+	zone_set_known One
+	! zone_set_known Extra || false
+	printf 'Extra Left:50 Right:50\n' >>"$FOUNDATION_CONFIG_DIR/zones.local.conf"
+	zone_set_known Extra
+	[ "$(zone_column Extra Right)" = "1 50 0" ]
+	[ "$(zone_column One Right)" = "1 50 0" ]
 }

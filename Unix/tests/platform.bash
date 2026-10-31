@@ -14,7 +14,9 @@
 # $BATS_TEST_TMPDIR/layout-needs-focus, `layout --window-id N` fails unless window N is on the
 # focused workspace ($BATS_TEST_TMPDIR/focused, 1 by default), as AeroSpace 0.21 does (ax_stub
 # extends it to the frame reads and changes); with $BATS_TEST_TMPDIR/aerospace-down,
-# `list-monitors` fails, so AeroSpace never answers and a command that needs it gives up. The
+# `list-monitors` fails, so AeroSpace never answers and a command that needs it gives up. `eval`
+# runs its ;-separated commands one by one (with $BATS_TEST_TMPDIR/no-eval it fails, as on an
+# AeroSpace without it). The
 # frames the window-list read reports come from $STUB_FRAMES (`ID X Y WIDTH HEIGHT` lines;
 # none by default, so only desktops are verified). The browser scripting driver's tabs are
 # $STUB_TABS, one `BUNDLE<TAB>WINDOW<TAB>URL<TAB>TITLE` line per tab, read and closed only while
@@ -84,6 +86,45 @@ case $1 in
 			[ "$ws" = "$(cat "$BATS_TEST_TMPDIR/focused" 2>/dev/null || echo 1)" ] || exit 1
 		fi ;;
 	macos-native-fullscreen) exit 1 ;;
+	eval)
+		# AeroSpace's eval: each ;-separated command runs as its own call (logged as one), `A && B`
+		# runs B only when A succeeded, `echo -- TEXT` prints TEXT; the status is the last one's.
+		# $BATS_TEST_TMPDIR/no-eval stands for an AeroSpace without eval.
+		[ -f "$BATS_TEST_TMPDIR/no-eval" ] && exit 2
+		shift
+		[ "$1" = -- ] && shift
+		printf '%s\n' "$1" | tr ';' '\n' >"$BATS_TEST_TMPDIR/eval.$$"
+		status=0
+		while IFS= read -r part; do
+			status=0
+			rest=$part
+			while [ -n "$rest" ]; do
+				case $rest in
+					*' && '*) cmd=${rest%%' && '*} rest=${rest#*' && '} ;;
+					*) cmd=$rest rest='' ;;
+				esac
+				set -- $cmd
+				[ $# -gt 0 ] || continue
+				case $1 in
+					echo)
+						shift
+						[ "$1" = -- ] && shift
+						echo "$*"
+						status=0
+						;;
+					true) status=0 ;;
+					false) status=1 ;;
+					*)
+						"$0" "$@"
+						status=$?
+						;;
+				esac
+				[ "$status" -eq 0 ] || break
+			done
+		done <"$BATS_TEST_TMPDIR/eval.$$"
+		rm -f "$BATS_TEST_TMPDIR/eval.$$"
+		exit "$status"
+		;;
 esac
 exit 0
 SH

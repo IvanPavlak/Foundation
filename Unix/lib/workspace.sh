@@ -504,3 +504,15 @@ workspace_for_layout() {
 	done
 	return 0
 }
+
+# The commands a workspace line may run in the background (a trailing `&`, see Open-Workspace):
+# those that only start apps, terminal tabs or containers. Everything else runs in place: window
+# placement, focus and tab closing need every window the open starts, and the browser openers each
+# take the window that appears after their own launch, which a second browser launch would race.
+workspace__background_ok=' open-application open-project open-projectterminals open-vscode open-vscodeworkspace open-obsidian open-claudedesktop open-docker open-acrobat start-containers '
+
+# Usage: workspace_may_background COMMAND
+workspace_may_background() {
+	case $workspace__background_ok in *" $(foundation_lower "$1") "*) return 0 ;; esac
+	return 1
+}

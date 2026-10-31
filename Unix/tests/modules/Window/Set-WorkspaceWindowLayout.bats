@@ -39,6 +39,30 @@ setup() {
 	[ "$found/$expected $outcome" = "2/2 Applied" ]
 }
 
+@test "a desktop's moves, tiling and parking go to AeroSpace as one batch" {
+	stub_window 400 com.tinyspeck.slackmacgap 1 Slack "General"
+	run "${BASH:-bash}" "$cmd" Demo --timeout-seconds 3
+	[ "$status" -eq 0 ]
+	stub_called '^aerospace eval -- move-node-to-workspace --window-id 400 -- P; echo -- as-eval-done'
+	stub_called '^aerospace eval -- move-node-to-workspace --window-id 200 -- 1; layout --window-id 200 tiling; move-node-to-workspace --window-id 300 -- 1; layout --window-id 300 tiling; flatten-workspace-tree --workspace 1; echo -- as-eval-done'
+	read -r _ _ found expected outcome _ <"$FOUNDATION_RUN_DIR/layout-timings"
+	[ "$found/$expected $outcome" = "2/2 Applied" ]
+}
+
+@test "without AeroSpace's eval the arrange sends each command alone, with the same result" {
+	touch "$BATS_TEST_TMPDIR/no-eval"
+	stub_window 400 com.tinyspeck.slackmacgap 1 Slack "General"
+	run "${BASH:-bash}" "$cmd" Demo --timeout-seconds 3
+	[ "$status" -eq 0 ]
+	stub_called '^aerospace move-node-to-workspace --window-id 400 -- P'
+	stub_called '^aerospace move-node-to-workspace --window-id 200 -- 1'
+	stub_called '^aerospace layout --window-id 300 tiling'
+	stub_called '^aerospace flatten-workspace-tree --workspace 1'
+	stub_called '^aerospace resize --window-id 200 width 1017'
+	read -r _ _ found expected outcome _ <"$FOUNDATION_RUN_DIR/layout-timings"
+	[ "$found/$expected $outcome" = "2/2 Applied" ]
+}
+
 @test "an Applied layout ends with its Visualize-Layouts drawing, as on Windows" {
 	run "${BASH:-bash}" "$cmd" Demo --timeout-seconds 3
 	[ "$status" -eq 0 ]

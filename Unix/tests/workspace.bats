@@ -173,3 +173,13 @@ CONF
 	! workspace_is_templated "$file" Default || false
 	[ "$(resolved Sample)" = "Open-Project Sample|Open-Browser Docs|Set-WorkspaceWindowLayout Sample|Focus-VirtualDesktop 1" ]
 }
+
+@test "only commands that just start apps, tabs or containers may run in the background" {
+	workspace_may_background Open-Application
+	workspace_may_background open-project
+	workspace_may_background Start-Containers
+	! workspace_may_background Open-Browser || false
+	! workspace_may_background Open-ProjectSwagger || false
+	! workspace_may_background Set-WorkspaceWindowLayout || false
+	! workspace_may_background Focus-VirtualDesktop || false
+}

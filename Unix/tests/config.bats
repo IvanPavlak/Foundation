@@ -215,6 +215,25 @@ EOF
 	[ "$(printf '%s\n' "$output" | grep -c '^Chrome')" -eq 1 ]
 }
 
+@test "apps: a lookup reads apps.conf again when a file or machine type it depends on changes" {
+	copy_fixture_config
+	# The first lookup fills the per-process cache; each change below must still be seen.
+	app_matches Browser Firefox
+	printf 'role Browser   Chrome\n' >"$FOUNDATION_CONFIG_DIR/apps.local.conf"
+	! app_matches Browser Firefox || false
+	app_matches Browser Chrome
+	[ "$(app_role_members Browser)" = Chrome ]
+	printf '@Work role Browser Safari\n' >>"$FOUNDATION_CONFIG_DIR/apps.local.conf"
+	export FOUNDATION_MACHINE_TYPE=Laptop
+	! app_matches Browser Safari || false
+	export FOUNDATION_MACHINE_TYPE=Work
+	app_matches Browser Safari
+	export FOUNDATION_MACHINE_TYPE=Laptop
+	! app_matches Browser Safari || false
+	export FOUNDATION_CONFIG_DIR=$FIXTURE_CONFIG
+	app_matches Browser Firefox
+}
+
 @test "browser groups: section, nested, last segment, named URL" {
 	export FOUNDATION_CONFIG_DIR=$FIXTURE_CONFIG
 	run browser_group_urls docs
