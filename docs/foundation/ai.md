@@ -124,9 +124,21 @@ repository a session works in. The levels are a closed set, from most to least t
 | `blocked` | nothing: the ownership guard refuses the prompt and every tool call | |
 
 Every level keeps the always-denied list: a push to the default branch (an explicit
-`master`/`main`/default refspec, or a plain push while it is checked out), a force push (`--force`,
-`--force-with-lease`, `-f`, `+refspec`), deleting a branch, changing remotes, upstream tracking or
-git configuration, and a branch cut from a remote branch without `--no-track`.
+`master`/`main`/default refspec, `refs/heads/` or not, or a push naming no branch or `HEAD` while it
+is checked out), a push naming no branch after a folder change (`cd`, `git -C`), whose branch the
+hook cannot see, a push of every branch (`--all`, `--mirror`, a glob refspec), a force push
+(`--force`, `--force-with-lease`, `-f`, `+refspec`), deleting a branch, changing remotes, upstream
+tracking or git configuration (`git -c` push, remote, branch and url settings included), a branch
+cut from a remote branch without `--no-track`, a merge, ref update or file commit through the
+GitHub API (`gh api` writes to `pulls/N/merge`, `merges`, `git/refs`, `contents/`, `branches/` and
+the like, or a GraphQL merge or ref mutation), `gh repo sync`, `edit`, `rename`, `delete` and
+`archive`, and `gh alias set` and `gh config set`. A `gh pr merge` must run in the folder of the
+repository it merges: one that names another repository (`-R`, `--repo`, a pull request URL,
+`GH_REPO`, a `cd`) is denied, so the level checked is always the merged repository's. Flags before
+the subcommand (`gh -R x pr merge`, `gh pr --repo x merge`) do not hide a call. The hook reads the
+command text: it stops the ways an agent reaches a default branch by accident or habit, not a
+script file it writes and runs, so GitHub branch protection, where the plan offers it, stays the
+backstop.
 
 - `policy LEVEL PATTERN...` gives the repositories matching any PATTERN that level (patterns as
   for `owns`). `autonomous PATTERN...` is a synonym of `policy autonomous PATTERN...`, and both may
