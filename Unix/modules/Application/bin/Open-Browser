@@ -43,8 +43,9 @@ foundation_load config apps drivers/aerospace drivers/browserscript browser stat
 foundation_normalize_args "$@"
 set -- "${FOUNDATION_ARGS[@]}"
 foundation_common_flags "$@"
-# How many times (0.25 s apart) a launch waits for its new window: 80 (20 s); the suites set fewer.
-polls=${FOUNDATION_BROWSER_WINDOW_POLLS:-80}
+# How many times (0.1 s apart) a launch waits for its new window: 200 (20 s); the suites set fewer.
+# Short apart, so a window is seen soon after it appears: each group waits for its own.
+polls=${FOUNDATION_BROWSER_WINDOW_POLLS:-200}
 
 groups=()
 browser=''
@@ -134,7 +135,7 @@ if [ "$no_menu" -eq 1 ] && [ ${#groups[@]} -eq 0 ]; then
 		# Cold-start gate: launches fired while the first window is still starting are lost.
 		if [ "$inst" -eq 0 ] && [ "$existing" -eq 0 ] && [ "$to_open" -gt 1 ]; then
 			for _ in $(seq 1 "$polls"); do
-				sleep 0.25
+				sleep 0.1
 				[ "$(as_windows | awk -F'\t' -v t="$token" '$2 == t' | grep -c .)" -gt 0 ] && break
 			done
 			sleep 0.75
@@ -292,7 +293,7 @@ for group in "${groups[@]}"; do
 	# would otherwise land as tabs of this window, and the new id is what a rerun checks.
 	new_id=''
 	for _ in $(seq 1 "$polls"); do
-		sleep 0.25
+		sleep 0.1
 		for id in $(browser_window_ids); do
 			case $before in *" $id "*) ;; *)
 				new_id=$id
