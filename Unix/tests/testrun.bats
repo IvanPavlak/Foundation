@@ -6,7 +6,7 @@
 # helpers, fixture workspaces, manifests, base config, comments ignored, the everything fallback
 # for an untraced file), patterns, the own-subject rule of --quick and the selection preview, the
 # run-condition sampler, the impact map, the lint trigger, the lint file list, the --shard split
-# and the committed suite weights, the miss report and
+# and the committed suite weights, the miss report, the SIGPIPE probe and
 # the results retention. The git-backed helpers are in testrun-git.bats, the contract in contract.bats.
 
 load helpers
@@ -470,4 +470,13 @@ picked() {
 	touch -t 202001010000 "$results"/TestRun_*.log
 	run testrun_prune_results "$results"
 	[ -z "$output" ]
+}
+
+@test "testrun_sigpipe_ignored tells an inherited SIGPIPE ignore from the default" {
+	command -v perl >/dev/null 2>&1 || skip "perl is required"
+	probe=". \"$UNIX_DIR/lib/foundation.sh\" && foundation_load testrun && testrun_sigpipe_ignored"
+	run perl -e '$SIG{PIPE} = "IGNORE"; exec { $ARGV[0] } @ARGV' "$BASH" -c "$probe"
+	[ "$status" -eq 0 ]
+	run perl -e '$SIG{PIPE} = "DEFAULT"; exec { $ARGV[0] } @ARGV' "$BASH" -c "$probe"
+	[ "$status" -eq 1 ]
 }

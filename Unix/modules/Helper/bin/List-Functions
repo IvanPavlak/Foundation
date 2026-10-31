@@ -187,8 +187,10 @@ manifest() { # MODULE-DIR KIND
 	awk -v k="$2" '$1 == k { print $2 }' "$1/module.conf"
 }
 
+# Is NAME a line of LIST? No pipe, so nothing can print a broken-pipe error.
 in_list() { # NAME LIST
-	printf '%s\n' "$2" | grep -qxF -- "$1"
+	case $'\n'"$2"$'\n' in *$'\n'"$1"$'\n'*) return 0 ;; esac
+	return 1
 }
 
 # The three-way check: every mismatch between a module's bin and functions.sh, its module.conf

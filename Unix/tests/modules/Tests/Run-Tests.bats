@@ -39,6 +39,18 @@ setup() {
 	grep -qE '^ok 1 .* in [0-9]+ms$' "$log"
 }
 
+@test "started with SIGPIPE ignored, it runs the suites with it at the default and says so in the run log" {
+	command -v perl >/dev/null 2>&1 || skip "perl is required"
+	run perl -e '$SIG{PIPE} = "IGNORE"; exec { $ARGV[0] } @ARGV' "${BASH:-bash}" "$cmd" match.bats --no-lint --filter "$one"
+	[ "$status" -eq 0 ]
+	log=$DOTFILES_ROOT/$(printf '%s\n' "$output" | sed -n 's/.*Log file location => //p')
+	grep -qxF 'SIGPIPE: started ignored, reset to the default for the suites' "$log"
+	# Without the ignore there is nothing to reset.
+	run "${BASH:-bash}" "$cmd" match.bats --no-lint --filter "$one"
+	log=$DOTFILES_ROOT/$(printf '%s\n' "$output" | sed -n 's/.*Log file location => //p')
+	! grep -q '^SIGPIPE: ' "$log" || false
+}
+
 @test "--quick leaves out the integration suites" {
 	run "${BASH:-bash}" "$cmd" GitPull --quick --no-lint
 	[ "$status" -eq 0 ]

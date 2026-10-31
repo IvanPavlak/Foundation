@@ -89,6 +89,18 @@ done
 foundation_require_bash || exit 1
 foundation_load testrun
 
+# The suites run as in a Mac terminal, with SIGPIPE at its default: started with it ignored (the
+# GitHub Actions runner), Run-Tests starts again through perl, which can reset it
+# (testrun_sigpipe_ignored). FOUNDATION_SIGPIPE_RESET stops a second attempt and names the reset
+# in the run log.
+if [ -z "${FOUNDATION_SIGPIPE_RESET:-}" ] && testrun_sigpipe_ignored; then
+	if command -v perl >/dev/null 2>&1; then
+		export FOUNDATION_SIGPIPE_RESET=1
+		exec perl -e '$SIG{PIPE} = "DEFAULT"; exec { $ARGV[0] } @ARGV or die "Run-Tests: cannot start $ARGV[0]: $!\n"' "$BASH" "$_foundation" "$@"
+	fi
+	log_warning "SIGPIPE is ignored and there is no perl to reset it: a suite that asserts empty output may fail at random"
+fi
+
 foundation_normalize_args "$@"
 set -- "${FOUNDATION_ARGS[@]}"
 foundation_common_flags "$@"
@@ -706,6 +718,7 @@ fi
 	printf 'Mode: %s\n' "$mode"
 	printf 'Machine: %s\n' "$(testrun_machine_line)"
 	printf 'Conditions: %s; at the end: load %s%s\n' "$conditions_start" "$load_end" "${foreign:+; foreign load during the run ${foreign}%}"
+	[ -z "${FOUNDATION_SIGPIPE_RESET:-}" ] || printf 'SIGPIPE: started ignored, reset to the default for the suites\n'
 	[ -n "$impact_note" ] && printf 'Impact map: %s\n' "$impact_note"
 	[ ${#suites[@]} -gt 0 ] && printf 'Workers: %s (%s - %s)\n' "$workers" "$phase" "$reason"
 	[ -n "$history_note" ] && printf 'Worker history: %s\n' "$history_note"

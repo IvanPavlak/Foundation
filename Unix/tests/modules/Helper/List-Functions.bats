@@ -63,7 +63,10 @@ setup() {
 	[[ $output == *"No discrepancies"* ]]
 	run "${BASH:-bash}" "$cmd" --list-discrepancies --quiet
 	[ "$status" -eq 0 ]
-	[ -z "$output" ]
+	[ -z "$output" ] || {
+		printf 'unexpected output: %s\n' "$output"
+		false
+	}
 }
 
 @test "a discrepancy is reported under its border unless list-functions.conf excludes the name" {
@@ -83,7 +86,10 @@ setup() {
 	printf 'exclude Countdown\n' >"$FOUNDATION_CONFIG_DIR/list-functions.conf"
 	run "${BASH:-bash}" "$cmd" --list-discrepancies --quiet
 	[ "$status" -eq 0 ]
-	[ -z "$output" ]
+	[ -z "$output" ] || {
+		printf 'unexpected output: %s\n' "$output"
+		false
+	}
 }
 
 @test "a page whose entries are not alphabetical is a discrepancy" {
