@@ -5,7 +5,8 @@
 # version check, the --changed selection over a miniature repository (commands, libraries,
 # helpers, fixture workspaces, manifests, base config, comments ignored, the everything fallback
 # for an untraced file), patterns, the own-subject rule of --quick and the selection preview, the
-# run-condition sampler, the impact map, the lint trigger, the lint file list, the miss report and
+# run-condition sampler, the impact map, the lint trigger, the lint file list, the --shard split
+# and the committed suite weights, the miss report and
 # the results retention. The git-backed helpers are in testrun-git.bats, the contract in contract.bats.
 
 load helpers
@@ -314,6 +315,58 @@ picked() {
 	[ "$output" = $'d.bats\nnew.bats\nb.bats\na.bats\nc.bats' ]
 	run testrun_queue_order "$BATS_TEST_TMPDIR/none" <<<$'b.bats\na.bats'
 	[ "$output" = $'a.bats\nb.bats' ]
+}
+
+@test "the queue: the committed weights stand in for a suite the timings do not know, a timing wins" {
+	printf 'a.bats\t100\n' >"$BATS_TEST_TMPDIR/timings"
+	printf 'a.bats\t9000\nb.bats\t5000\nc.bats\t50\n' >"$BATS_TEST_TMPDIR/weights"
+	run testrun_queue_order "$BATS_TEST_TMPDIR/timings" "$BATS_TEST_TMPDIR/weights" <<<$'a.bats\nc.bats\nnew.bats\nb.bats'
+	[ "$output" = $'new.bats\nb.bats\na.bats\nc.bats' ]
+	run testrun_queue_order "$BATS_TEST_TMPDIR/none" "$BATS_TEST_TMPDIR/weights" <<<$'c.bats\na.bats'
+	[ "$output" = $'a.bats\nc.bats' ]
+}
+
+@test "--shard: I/N with 1 <= I <= N, nothing else" {
+	testrun_shard_valid 1/1
+	testrun_shard_valid 2/3
+	testrun_shard_valid 12/12
+	for bad in '' 0/3 4/3 3 /3 3/ a/b 1/0 -1/2 1/2/3; do
+		run testrun_shard_valid "$bad"
+		[ "$status" -ne 0 ] || {
+			echo "accepted [$bad]"
+			return 1
+		}
+	done
+}
+
+@test "--shard: every suite in exactly one shard, heaviest onto the lightest, unknown suites at the median" {
+	printf 'a.bats\t9000\nb.bats\t5000\nc.bats\t4000\nd.bats\t3000\ne.bats\t100\n' >"$BATS_TEST_TMPDIR/weights"
+	suites=$'e.bats\nd.bats\nc.bats\nb.bats\na.bats\nnew.bats'
+	# new weighs the median, 4000. a -> 1 (9000); b -> 2 (5000); c -> 2 (9000); new -> 1 on the tie
+	# (13000); d -> 2 (12000); e -> 2 (12100). Each shard lists its suites heaviest first.
+	run testrun_shard_pick 1 2 "$BATS_TEST_TMPDIR/weights" <<<"$suites"
+	[ "$output" = $'a.bats\nnew.bats' ]
+	run testrun_shard_pick 2 2 "$BATS_TEST_TMPDIR/weights" <<<"$suites"
+	[ "$output" = $'b.bats\nc.bats\nd.bats\ne.bats' ]
+	# Any N: the union is the input, without a repeat.
+	for n in 1 3 7; do
+		all=$(for ((i = 1; i <= n; i++)); do testrun_shard_pick "$i" "$n" "$BATS_TEST_TMPDIR/weights" <<<"$suites"; done | LC_ALL=C sort)
+		[ "$all" = "$(LC_ALL=C sort <<<"$suites")" ]
+	done
+	# No weights at all: every suite weighs the same, so the split goes by name.
+	run testrun_shard_pick 1 2 "$BATS_TEST_TMPDIR/none" <<<$'b.bats\na.bats\nc.bats'
+	[ "$output" = $'a.bats\nc.bats' ]
+}
+
+@test "the committed suite weights name only suites that exist, each with a time" {
+	weights=$UNIX_DIR/tests/suite-weights.tsv
+	[ -s "$weights" ]
+	while IFS=$'\t' read -r suite ms; do
+		[ -f "$UNIX_DIR/../$suite" ] && [[ $ms =~ ^[0-9]+$ ]] || {
+			echo "suite-weights.tsv: [$suite] [$ms]"
+			return 1
+		}
+	done <"$weights"
 }
 
 @test "bats below the required version stops the run, a newer major warns" {

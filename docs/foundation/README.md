@@ -282,9 +282,12 @@ the pattern rules, the config readers against a generic fixture config
 commands-versus-docs completeness check (the Test-ManifestCompleteness analog). CI runs them on
 macOS (`.github/workflows/foundation.yml`), the only Unix Foundation runs on, through `Run-Tests
 --audit-since` (the full suite, plus a warning for every failing suite `--changed` would have
-missed), together with shellcheck over the list `Run-Tests --lint-files` prints and shfmt; the job
-reports as the `Unix Tests` check, can be re-run by hand (`workflow_dispatch`), and keeps the run log
-as the `unix-run-log` artifact. It runs on every pull request and on pushes to `master`. The job is
+missed), split into three shards that run side by side on their own runners (`Run-Tests --shard`,
+balanced by `Unix/tests/suite-weights.tsv`; the run is CPU-bound, so more runners is what makes it
+faster), while a Linux job runs shellcheck over the list `Run-Tests --lint-files` prints and shfmt;
+the `Unix Tests` check is green only when every shard and the lint passed, the workflow can be
+re-run by hand (`workflow_dispatch`), and each shard keeps its run log as the `unix-run-log-N`
+artifact. It runs on every pull request and on pushes to `master`. The job is
 skipped in a private repository, so a private fork never spends Actions minutes on it and
 `Run-Tests` on the Mac is the gate; a fork keeps the workflow byte-identical to Foundation's, so a
 merge from Foundation never conflicts on it. The lint settings live in `Unix/.shellcheckrc` and `Unix/.editorconfig`, which the recommended VS

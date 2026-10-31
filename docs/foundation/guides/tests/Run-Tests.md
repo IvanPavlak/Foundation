@@ -19,7 +19,9 @@ Run-Tests --changed layout
 Run-Tests Open-Project --filter 'opens' --no-lint
 Run-Tests --workers 4 --detailed
 Run-Tests --path Unix/tests/modules/Git
+Run-Tests --shard 2/3
 Run-Tests --update-contract-baseline
+Run-Tests --update-suite-weights
 Run-Tests --lint-files
 ```
 

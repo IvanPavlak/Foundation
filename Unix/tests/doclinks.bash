@@ -17,25 +17,21 @@ doclinks_prose() {
 # The docsify slug of a heading: link markup reduced to its text, lower case, punctuation dropped,
 # whitespace runs to hyphens. Usage: doclinks_slug TEXT
 doclinks_slug() {
-	printf '%s\n' "$1" | sed -E 's/\[([^]]*)\]\([^)]*\)/\1/g' | tr '[:upper:]' '[:lower:]' |
+	printf '%s\n' "$1" | doclinks_slugs
+}
+
+# doclinks_slug for every line of stdin at once. Usage: ... | doclinks_slugs
+doclinks_slugs() {
+	sed -E 's/\[([^]]*)\]\([^)]*\)/\1/g' | tr '[:upper:]' '[:lower:]' |
 		sed -E "s/<[^>]+>//g; s/[][\`'!\"#\$%&()*+,.\/:;<=>?@^{|}~]//g; s/^[[:space:]]+//; s/[[:space:]]+\$//; s/[[:space:]]+/-/g"
 }
 
 # The anchors of a Markdown file, one per line (code blocks skipped; a repeated slug gets -1, -2).
-# Usage: doclinks_anchors FILE
+# Every heading goes through one doclinks_slugs pipeline: a pipeline per heading cost a few
+# processes each, thousands per run. Usage: doclinks_anchors FILE
 doclinks_anchors() {
-	local line slug
-	declare -A seen=()
-	while IFS= read -r line; do
-		slug=$(doclinks_slug "${line#"${line%%[!#]*}"}")
-		if [ -n "${seen[$slug]+x}" ]; then
-			seen[$slug]=$((seen[$slug] + 1))
-			printf '%s-%s\n' "$slug" "${seen[$slug]}"
-		else
-			seen[$slug]=0
-			printf '%s\n' "$slug"
-		fi
-	done < <(doclinks_prose "$1" | grep -E '^#+[[:space:]]')
+	doclinks_prose "$1" | grep -E '^#+[[:space:]]' | sed -E 's/^#+//' | doclinks_slugs |
+		awk '{ if ($0 in seen) printf "%s-%d\n", $0, ++seen[$0]; else { seen[$0] = 0; print } }'
 }
 
 # Every broken link of the Markdown files under DIR: FILE<TAB>TARGET<TAB>REASON. Checked: relative
@@ -55,7 +51,7 @@ doclinks_broken() {
 			case $path in
 				'') resolved=$file ;;
 				/*) resolved=$root$path ;;
-				*) resolved=$(dirname "$file")/$path ;;
+				*) resolved=${file%/*}/$path ;;
 			esac
 			if [ ! -e "$resolved" ]; then
 				printf '%s\t%s\tmissing file\n' "$file" "$target"

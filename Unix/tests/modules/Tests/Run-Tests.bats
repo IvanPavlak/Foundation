@@ -1,9 +1,10 @@
 #!/usr/bin/env bats
 # Run-Tests: a pattern picks suites by path, --filter narrows the tests, --quick leaves out the
-# integration tier, the flag rules of --changed, --audit-since, --update-contract-baseline and
-# --lint-files (the shellcheck list CI reads), the verdict line and the run log (conditions,
-# workers, per-test times) name what ran. Run against one small suite with the lint off, so it
-# never recurses into the whole suite.
+# integration tier, --shard runs a slice, the flag rules of --changed, --audit-since,
+# --update-contract-baseline, --update-suite-weights and --lint-files (the shellcheck list CI
+# reads), the verdict line and the run log (conditions, workers, per-test times) name what ran.
+# Run against one test of one small suite (--filter "$one") with the lint off, so it never
+# recurses into the whole suite and each nested run stays short.
 
 # bats file_tags=integration
 load ../../helpers
@@ -12,23 +13,24 @@ setup() {
 	setup_foundation
 	export FOUNDATION_LOGGING=off
 	cmd=$UNIX_DIR/modules/Tests/bin/Run-Tests
+	one='^title: empty pattern matches anything$'
 }
 
 @test "a pattern runs only the matching suite and reports its count" {
-	run "${BASH:-bash}" "$cmd" match.bats --no-lint
+	run "${BASH:-bash}" "$cmd" match.bats --no-lint --filter "$one"
 	[ "$status" -eq 0 ]
 	[[ $output == *"Running 1 test file(s) across 1 worker(s)"* ]]
-	[[ $output == *"All tests passed! ("*" passed in "*"s across 1 worker)"* ]]
+	[[ $output == *"All tests passed! (1 passed in "*"s across 1 worker)"* ]]
 	[[ $output != *shellcheck* ]]
 	log=$(printf '%s\n' "$output" | sed -n 's/.*Log file location => //p')
 	grep -q '^== bats Unix/tests/match.bats (exit 0, ' "$DOTFILES_ROOT/$log"
 }
 
 @test "the run log opens with the run conditions and holds every test's time" {
-	run "${BASH:-bash}" "$cmd" match.bats --no-lint
+	run "${BASH:-bash}" "$cmd" match.bats --no-lint --filter "$one"
 	[ "$status" -eq 0 ]
 	log=$DOTFILES_ROOT/$(printf '%s\n' "$output" | sed -n 's/.*Log file location => //p')
-	grep -q '^Mode: pattern: match.bats$' "$log"
+	grep -qxF "Mode: pattern: match.bats, filter: $one" "$log"
 	grep -q '^Machine: ' "$log"
 	grep -q '^Conditions: .*load ' "$log"
 	grep -q '^Workers: 1 (Scoped - ' "$log"
@@ -79,6 +81,40 @@ setup() {
 	[[ $output == *"All tests passed! (2 passed"* ]]
 }
 
+@test "--shard runs its slice of the selection and says so; a slice with no suite runs nothing" {
+	run "${BASH:-bash}" "$cmd" match.bats --shard 1/2 --no-lint --filter "$one"
+	[ "$status" -eq 0 ]
+	[[ $output == *"Running 1 test file(s)"* ]]
+	log=$DOTFILES_ROOT/$(printf '%s\n' "$output" | sed -n 's/.*Log file location => //p')
+	grep -qxF "Mode: pattern: match.bats, shard 1/2: 1 of 1 suites, filter: $one" "$log"
+	grep -q '^Worker history: not recorded: scoped run$' "$log"
+	run "${BASH:-bash}" "$cmd" match.bats --shard 2/2 --no-lint
+	[ "$status" -eq 0 ]
+	[[ $output == *"Shard 2/2 holds no suite of the 1 selected - nothing to run."* ]]
+	[[ $output != *"Running "* ]]
+	run "${BASH:-bash}" "$cmd" match.bats --shard 3/2 --no-lint
+	[ "$status" -ne 0 ]
+	[[ $output == *"--shard takes I/N"* ]]
+}
+
+@test "--update-suite-weights writes the existing suites' last times by name, runs no tests and combines with nothing" {
+	results=$BATS_TEST_TMPDIR/results
+	mkdir -p "$results"
+	printf 'Unix/tests/match.bats\t1200\nUnix/tests/gone.bats\t99\nUnix/tests/match.bats\t5\nUnix/tests/config.bats\t3400\n' >"$results/suite-timings.tsv"
+	export FOUNDATION_TEST_RESULTS=$results FOUNDATION_SUITE_WEIGHTS=$BATS_TEST_TMPDIR/weights.tsv
+	run "${BASH:-bash}" "$cmd" --update-suite-weights
+	[ "$status" -eq 0 ]
+	[[ $output == *"Suite weights => "*"(2 of "*" suites)"* ]]
+	[ "$(cat "$FOUNDATION_SUITE_WEIGHTS")" = $'Unix/tests/config.bats\t3400\nUnix/tests/match.bats\t1200' ]
+	run "${BASH:-bash}" "$cmd" --update-suite-weights --shard 1/2
+	[ "$status" -ne 0 ]
+	[[ $output == *"cannot be combined with any other flag"* ]]
+	rm "$results/suite-timings.tsv"
+	run "${BASH:-bash}" "$cmd" --update-suite-weights
+	[ "$status" -ne 0 ]
+	[[ $output == *"No suite times yet"* ]]
+}
+
 @test "--workers takes a number" {
 	run "${BASH:-bash}" "$cmd" match.bats --no-lint --workers many
 	[ "$status" -ne 0 ]
@@ -96,7 +132,7 @@ setup() {
 	run "${BASH:-bash}" "$cmd" --path "$UNIX_DIR/lib" --no-lint
 	[ "$status" -ne 0 ]
 	[[ $output == *"is not a folder of Unix/tests"* ]]
-	run "${BASH:-bash}" "$cmd" -Path "$UNIX_DIR/tests" match.bats --no-lint
+	run "${BASH:-bash}" "$cmd" -Path "$UNIX_DIR/tests" match.bats --no-lint --filter "$one"
 	[ "$status" -eq 0 ]
 	[[ $output == *"Running 1 test file(s)"* ]]
 }
@@ -105,7 +141,7 @@ setup() {
 	run "${BASH:-bash}" "$cmd" --no-lint -PassThru
 	[ "$status" -ne 0 ]
 	[[ $output == *"Unknown argument => --pass-thru"* ]]
-	run "${BASH:-bash}" "$cmd" -testname match.bats --no-lint
+	run "${BASH:-bash}" "$cmd" -testname match.bats --no-lint --filter "$one"
 	[ "$status" -eq 0 ]
 	[[ $output == *"Running 1 test file(s)"* ]]
 }

@@ -1,4 +1,4 @@
-# Foundation: shellcheck, shfmt and the bats suites on macOS, the only Unix it runs on. The file is
+# Foundation: the bats suites on macOS, the only Unix it runs on, and shellcheck and shfmt. The file is
 # named after the project so it never collides with another upstream's workflows in a fork that
 # merges several (winux.yml is WinuX's).
 # Only the pure helpers and file checks run here; AeroSpace and WezTerm are exercised by hand.
@@ -24,51 +24,106 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: Unix Tests
+  # The suites, split into shards that run side by side, one macOS runner each: the run is
+  # CPU-bound (Run-Tests already uses every core of a 3-CPU runner), so more runners is what makes
+  # it faster. Run-Tests --shard splits by Unix/tests/suite-weights.tsv, so the shards end close
+  # together and every suite runs in exactly one. Adding a shard is one more number in the list.
+  suites:
+    name: Unix Suites (${{ matrix.shard }}/${{ strategy.job-total }})
     # Never in a private repository: macOS runners bill at ten times the Linux rate, so a private
     # fork runs the suites locally through Run-Tests. Foundation is public, where the job always runs.
     if: ${{ !github.event.repository.private }}
     runs-on: macos-latest
+    strategy:
+      # Every shard reports, so one failing shard does not hide another's failures.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      HOMEBREW_NO_INSTALL_CLEANUP: 1
+      HOMEBREW_NO_ENV_HINTS: 1
     steps:
       - uses: actions/checkout@v5
         with:
           # Full history (blobless) so Run-Tests --audit-since can find the merge base.
           fetch-depth: 0
           filter: blob:none
+      # Only what the suites run: the lint tools are the lint job's.
       - name: Install tools
-        run: brew install bash bats-core shellcheck shfmt chezmoi
-      # The file list comes from Run-Tests --lint-files, the one Run-Tests --lint checks; the
-      # other shellcheck settings are in Unix/.shellcheckrc (only the severity is a flag).
-      - name: shellcheck
-        run: |
-          files=()
-          while IFS= read -r f; do files+=("$f"); done < <("$(brew --prefix)/bin/bash" Unix/modules/Tests/bin/Run-Tests --lint-files)
-          [ ${#files[@]} -gt 0 ] || { echo "::error::Run-Tests --lint-files printed no file"; exit 1; }
-          shellcheck -S warning "${files[@]}"
-      # The style (tabs, case branches indented) is in Unix/.editorconfig, which shfmt reads only
-      # when no formatting flag is given.
-      - name: shfmt
-        run: shfmt -d $(shfmt -f Unix)
-      # The full suite through Run-Tests (its queue and run log), plus the selector audit: every
-      # failing suite Run-Tests --changed would have left out for this push or pull request
-      # becomes a warning annotation. The audit never fails the job.
+        run: brew install bash bats-core chezmoi
+      # A fresh runner starts indexing its volumes, which takes CPU from the suites; the run log's
+      # "foreign load" line shows what is left.
+      - name: Stop Spotlight indexing
+        run: sudo mdutil -a -i off || true
+      # This shard of the full suite through Run-Tests (its queue and run log), plus the selector
+      # audit of the suites it ran: every failing suite Run-Tests --changed would have left out for
+      # this push or pull request becomes a warning annotation. The audit never fails the job.
       - name: bats
         env:
           BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
+          SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
         run: |
           audit=()
           case $BASE in '' | 0000000000000000000000000000000000000000) ;; *) audit=(--audit-since "$BASE") ;; esac
-          "$(brew --prefix)/bin/bash" Unix/modules/Tests/bin/Run-Tests --no-lint --detailed "${audit[@]}"
+          "$(brew --prefix)/bin/bash" Unix/modules/Tests/bin/Run-Tests --no-lint --detailed --shard "$SHARD" "${audit[@]}"
       # The run log (Unix/tests/Results, gitignored): conditions, slowest tests and every suite's
       # TAP output. Missing only when an earlier step failed, so that warns instead of failing.
       - name: Upload run log
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: unix-run-log
+          name: unix-run-log-${{ matrix.shard }}
           path: Unix/tests/Results/TestRun_*.log
           if-no-files-found: warn
+
+  # shellcheck and shfmt on Linux, beside the suites instead of before them: both check text, and
+  # Homebrew installs the same versions as on a Mac, so the findings match Run-Tests --lint there.
+  lint:
+    name: Unix Lint
+    if: ${{ !github.event.repository.private }}   # never in a private repository (see the suites job)
+    runs-on: ubuntu-latest
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      HOMEBREW_NO_INSTALL_CLEANUP: 1
+      HOMEBREW_NO_ENV_HINTS: 1
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install tools
+        run: |
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          brew install shellcheck shfmt
+          echo "$(brew --prefix)/bin" >>"$GITHUB_PATH"
+      # The file list comes from Run-Tests --lint-files, the one Run-Tests --lint checks; the
+      # other shellcheck settings are in Unix/.shellcheckrc (only the severity is a flag).
+      - name: shellcheck
+        shell: bash
+        run: |
+          files=()
+          while IFS= read -r f; do files+=("$f"); done < <(bash Unix/modules/Tests/bin/Run-Tests --lint-files)
+          [ ${#files[@]} -gt 0 ] || { echo "::error::Run-Tests --lint-files printed no file"; exit 1; }
+          shellcheck --version
+          shellcheck -S warning "${files[@]}"
+      # The style (tabs, case branches indented) is in Unix/.editorconfig, which shfmt reads only
+      # when no formatting flag is given.
+      - name: shfmt
+        run: shfmt -d $(shfmt -f Unix)
+
+  # The required check: green only when every shard and the lint passed. Branch protection names
+  # this one job, so the shard count can change without touching it.
+  test:
+    name: Unix Tests
+    needs: [suites, lint]
+    if: ${{ !cancelled() && !github.event.repository.private }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every shard and the lint passed
+        env:
+          SUITES: ${{ needs.suites.result }}
+          LINT: ${{ needs.lint.result }}
+        run: |
+          echo "suites: $SUITES, lint: $LINT"
+          [ "$SUITES" = success ] && [ "$LINT" = success ]
 
   # The mirror contract: every mirror line of Unix/config/upstream.conf names a file the sibling upstream ships with
   # the same bytes. A drift is reported here, at the pull request, as a warning per file (both
