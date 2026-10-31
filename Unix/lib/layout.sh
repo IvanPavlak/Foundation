@@ -200,13 +200,13 @@ layout_variant_problems() {
 # token or role. Test-ConfigurationSchema reports these; Visualize-Layouts skips such a layout.
 # Usage: layout_entries FILE WORKSPACE | layout_entry_problems
 layout_entry_problems() {
-	local kind desktop monitor a b set_name file known=' '
+	local kind desktop monitor a b set_name known=' '
 	local -A sets=()
 	# Tokens and roles, read once: a bundle id is no token here (a layout entry never matches one).
-	file=$(apps__file) &&
+	apps__load &&
 		known=" $({
 			apps_list | cut -f1
-			conf_lines "$file" | awk '$1 == "role" { print $2 }'
+			printf '%s\n' "$APPS__CACHE_LINES" | awk '$1 == "role" { print $2 }'
 		} | tr '[:upper:]' '[:lower:]' | tr '\n' ' ') "
 	while IFS=$'\t' read -r kind desktop monitor a b _; do
 		if [ "$kind" = L ]; then
@@ -233,9 +233,9 @@ layout_entry_problems() {
 # Prints "COLUMN-INDEX PERCENT ROW" of ZONE in ZONESET (0-based column; ROW is 0 for a
 # full-height column or the top half, 1 for the bottom half), fails when unknown.
 zone_column() {
-	local zoneset=$1 zone=$2 file
-	file=$(conf_path zones.conf) || return 1
-	conf_lines "$file" | awk -v set="$(foundation_lower "$zoneset")" -v zone="$(foundation_lower "$zone")" '
+	local zoneset=$1 zone=$2
+	zones_cache_load || return 1
+	zones_cached_lines | awk -v set="$(foundation_lower "$zoneset")" -v zone="$(foundation_lower "$zone")" '
 		$1 == "alias" && tolower($2) == set && tolower($3) == zone { zone = tolower($4) }
 		{ lines[NR] = $0 }
 		END {
@@ -257,16 +257,14 @@ zone_column() {
 }
 
 zone_set_known() {
-	local file
-	file=$(conf_path zones.conf) || return 1
-	conf_lines "$file" | awk -v set="$(foundation_lower "$1")" 'tolower($1) == set { found = 1 } END { exit found ? 0 : 1 }'
+	zones_cache_load || return 1
+	zones_cached_lines | awk -v set="$(foundation_lower "$1")" 'tolower($1) == set { found = 1 } END { exit found ? 0 : 1 }'
 }
 
 # Columns of ZONESET as "ZONE:PERCENT" / "TOP+BOTTOM:PERCENT" fields, fails when unknown.
 zone_set_columns() {
-	local file
-	file=$(conf_path zones.conf) || return 1
-	conf_lines "$file" | awk -v set="$(foundation_lower "$1")" '
+	zones_cache_load || return 1
+	zones_cached_lines | awk -v set="$(foundation_lower "$1")" '
 		# No early exit: the writer would get SIGPIPE, which fails the pipe under pipefail.
 		!found && tolower($1) == set && $1 != "alias" { $1 = ""; sub(/^ /, ""); print; found = 1 }
 		END { exit found ? 0 : 1 }'
@@ -274,9 +272,8 @@ zone_set_columns() {
 
 # Zone set names in file order.
 zone_sets() {
-	local file
-	file=$(conf_path zones.conf) || return 1
-	conf_lines "$file" | awk '$1 != "alias" && $1 != "parking-workspace" && $2 ~ /:/ { print $1 }'
+	zones_cache_load || return 1
+	zones_cached_lines | awk '$1 != "alias" && $1 != "parking-workspace" && $2 ~ /:/ { print $1 }'
 }
 
 # Generate-DynamicVisualization analog: draws ZONESET as a box of proportional columns, a

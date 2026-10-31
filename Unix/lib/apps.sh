@@ -8,24 +8,17 @@ apps__file() {
 
 # The lines of apps.conf (conf_lines) and the app list built from them (apps_list), read once per
 # process instead of at every lookup: app_matches runs for every window and layout entry on each
-# poll of a layout wait, and one conf_lines costs several processes. The cache holds only while
-# everything conf_lines reads is unchanged - the config folder, the contents of apps.conf, its
-# overlay and machines.conf (read with builtins, no process) and the machine type variables - so
-# a file written during the process is read again. Filled in the calling shell: a lookup inside
-# $(...) still answers right but keeps nothing, so a hot loop calls apps__load before it.
-# Fails when there is no apps.conf. Usage: apps__load
+# poll of a layout wait, and one conf_lines costs several processes. Read again when
+# conf_cache_key changes, so a file written during the process is seen. Filled in the calling
+# shell: a lookup inside $(...) still answers right but keeps nothing, so a hot loop calls
+# apps__load before it. Fails when there is no apps.conf. Usage: apps__load
 APPS__CACHE_KEY=''
 APPS__CACHE_LINES=''
 APPS__CACHE_LIST=''
 apps__load() {
-	local file=$FOUNDATION_CONFIG_DIR/apps.conf base='' overlay='' machines='' key
-	[ -r "$file" ] || return 1
-	IFS= read -r -d '' base <"$file" || true
-	[ -r "${file%.conf}.local.conf" ] && { IFS= read -r -d '' overlay <"${file%.conf}.local.conf" || true; }
-	[ -r "$FOUNDATION_CONFIG_DIR/machines.conf" ] && { IFS= read -r -d '' machines <"$FOUNDATION_CONFIG_DIR/machines.conf" || true; }
-	key="$file|${CONF_MACHINE_TYPE:-}|${FOUNDATION_MACHINE_TYPE:-}|${MACHINE_TYPE:-}|$base|$overlay|$machines"
-	[ "$key" = "$APPS__CACHE_KEY" ] && return 0
-	APPS__CACHE_LINES=$(conf_lines "$file")
+	conf_cache_key apps.conf || return 1
+	[ "$CONF_CACHE_KEY" = "$APPS__CACHE_KEY" ] && return 0
+	APPS__CACHE_LINES=$(conf_lines "$FOUNDATION_CONFIG_DIR/apps.conf")
 	APPS__CACHE_LIST=$(printf '%s\n' "$APPS__CACHE_LINES" | awk '
 		$1 == "app" {
 			binary = ""
@@ -35,7 +28,7 @@ apps__load() {
 			entry[key] = $2 "\t" $3 "\t" binary
 		}
 		END { for (i = 1; i <= n; i++) print entry[order[i]] }')
-	APPS__CACHE_KEY=$key
+	APPS__CACHE_KEY=$CONF_CACHE_KEY
 }
 
 # Prints "TOKEN<TAB>BUNDLE<TAB>BINARY" for every app token, once: when several app lines name the

@@ -94,6 +94,39 @@ conf_lines() {
 	conf__lines_raw "$1" | conf_for_machine | conf__apply_removals
 }
 
+# Everything conf_lines reads for Unix/config/NAME, as one string in CONF_CACHE_KEY: the file's
+# path, the contents of the file, its overlay and machines.conf (read with builtins, no process)
+# and the machine type variables. Lines kept from an earlier conf_lines hold while it is
+# unchanged, so a file written during the process is read again. Fails when NAME does not exist.
+# Usage: conf_cache_key NAME
+conf_cache_key() {
+	local file=$FOUNDATION_CONFIG_DIR/$1 base='' overlay='' machines=''
+	[ -r "$file" ] || return 1
+	IFS= read -r -d '' base <"$file" || true
+	[ -r "${file%.conf}.local.conf" ] && { IFS= read -r -d '' overlay <"${file%.conf}.local.conf" || true; }
+	[ -r "$FOUNDATION_CONFIG_DIR/machines.conf" ] && { IFS= read -r -d '' machines <"$FOUNDATION_CONFIG_DIR/machines.conf" || true; }
+	CONF_CACHE_KEY="$file|${CONF_MACHINE_TYPE:-}|${FOUNDATION_MACHINE_TYPE:-}|${MACHINE_TYPE:-}|$base|$overlay|$machines"
+}
+
+# conf_lines of Unix/config/zones.conf, read once per process: a layout drawn or checked asks it
+# for every desktop and entry, and one conf_lines costs several processes. Sets ZONES_CACHED to
+# the lines, read again when conf_cache_key changes. Kept in the calling shell: a call inside
+# $(...) still answers right but keeps nothing, so a command that asks in a loop of subshells
+# loads it once first. Fails when there is no zones.conf. Usage: zones_cache_load
+ZONES__CACHE_KEY=''
+ZONES_CACHED=''
+zones_cache_load() {
+	conf_cache_key zones.conf || return 1
+	[ "$CONF_CACHE_KEY" = "$ZONES__CACHE_KEY" ] && return 0
+	ZONES_CACHED=$(conf_lines "$FOUNDATION_CONFIG_DIR/zones.conf")
+	ZONES__CACHE_KEY=$CONF_CACHE_KEY
+}
+
+# Prints ZONES_CACHED as conf_lines would (nothing for no lines). Usage: zones_cache_load && zones_cached_lines | ...
+zones_cached_lines() {
+	[ -z "$ZONES_CACHED" ] || printf '%s\n' "$ZONES_CACHED"
+}
+
 # The `-LINE` removals of conf_lines for lines on stdin; input without one passes untouched. A
 # `[Name]` line ends the part removals apply to (conf_effective's sections are never trimmed).
 conf__apply_removals() {

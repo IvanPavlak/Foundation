@@ -613,3 +613,14 @@ setup() {
 	rm "$FOUNDATION_CONFIG_DIR/workspaces.local.conf"
 	[ "$(layout_absent_grace_seconds)" = 10 ]
 }
+
+@test "zones.conf is read again when it changes during the process" {
+	copy_fixture_config
+	# The first lookup fills the per-process copy; the change below must still be seen.
+	zone_set_known One
+	! zone_set_known Extra || false
+	printf 'Extra Left:50 Right:50\n' >>"$FOUNDATION_CONFIG_DIR/zones.local.conf"
+	zone_set_known Extra
+	[ "$(zone_column Extra Right)" = "1 50 0" ]
+	[ "$(zone_column One Right)" = "1 50 0" ]
+}

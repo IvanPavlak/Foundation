@@ -441,7 +441,15 @@ foundation_common_flags() {
 # Text helpers
 # ---------------------------------------------------------------------------------------------
 
+# Lowercase as tr does in the current locale. Bash 4+ lowercases a plain name (ASCII letters,
+# digits, space, dot, underscore, hyphen) itself, no process: the zone, app and project lookups
+# lower one for every window and layout entry, and bash's locale lowercase gives tr's result on
+# those characters in every locale (Turkish I included); any other text still goes through tr.
 foundation_lower() {
+	if [ "${BASH_VERSINFO[0]:-0}" -ge 4 ] && [ -z "${1//[ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 ._-]/}" ]; then
+		printf '%s' "${1,,}"
+		return
+	fi
 	printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
 }
 
