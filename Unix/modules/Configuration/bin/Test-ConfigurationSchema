@@ -420,7 +420,19 @@ if [ -f "$cfg/ai-profiles.conf" ]; then
 				mcp) for word in "${words[@]}"; do in_list "$word" "$servers" || problem "ai-profiles.conf [$profile]: mcp names [$word], no section of ai-mcp-servers.conf"; done ;;
 				marketplaces) for word in "${words[@]}"; do in_list "$word" "$marketplaces" || problem "ai-profiles.conf [$profile]: marketplaces names [$word], no section of ai-marketplaces.conf"; done ;;
 				unattended) case $(foundation_lower "$rest") in on | off) ;; *) problem "ai-profiles.conf [$profile]: unattended is on or off => $rest" ;; esac ;;
-				owns | autonomous | env) ;;
+				owns | autonomous | env | merge-without-checks) ;;
+				policy)
+					case $(foundation_lower "${words[0]:-}") in
+						autonomous | branch | draft | readonly | blocked) [ ${#words[@]} -ge 2 ] || problem "ai-profiles.conf [$profile]: policy takes a level and one or more patterns => $rest" ;;
+						*) problem "ai-profiles.conf [$profile]: policy names an unknown level [${words[0]:-}] (autonomous, branch, draft, readonly, blocked)" ;;
+					esac
+					;;
+				default-policy)
+					case $(foundation_lower "${words[0]:-}") in
+						autonomous | branch | draft | readonly | blocked) [ ${#words[@]} -eq 1 ] || problem "ai-profiles.conf [$profile]: default-policy takes one level => $rest" ;;
+						*) problem "ai-profiles.conf [$profile]: default-policy is not a level [$rest] (autonomous, branch, draft, readonly, blocked)" ;;
+					esac
+					;;
 				*) problem "ai-profiles.conf [$profile]: unknown line => $key $rest" ;;
 			esac
 		done < <(conf_section "$cfg/ai-profiles.conf" "$profile")

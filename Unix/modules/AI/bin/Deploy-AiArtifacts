@@ -29,8 +29,9 @@
 # warns); +managed-settings writes a root-owned copy through sudo instead of a link (Claude Code's
 # managed settings, which no other setting overrides): the item's file rendered (the token
 # {ManagedDir} becomes the destination's folder; with an AI profile, forceLoginOrgUUID from its
-# Plan and the ownership guard appended to hooks.UserPromptSubmit and hooks.PreToolUse), and next
-# to it the item's hooks/ folder, and with a profile ai-ownership-guard.sh and ai-profile.conf;
+# Plan, the ownership guard appended to hooks.UserPromptSubmit and hooks.PreToolUse and the
+# repository policy hook to hooks.PreToolUse), and next to it the item's hooks/ folder, and with a
+# profile ai-ownership-guard.sh, ai-repository-policy.sh and ai-profile.conf;
 # each is rewritten only when it differs, root:wheel and mode 644 (a link left by an earlier run is
 # replaced).
 # AI profile (ai-profiles.conf, FOUNDATION_AI_PROFILE; none: everything as above): its `deploy`
@@ -82,8 +83,10 @@ ai_profile_load
 root=$(ai_root)
 settings="$HOME/.claude/settings.json"
 claude_cli=${FOUNDATION_CLAUDE_CLI:-claude}
-# The guard is one mirror file of WinuX and Foundation, at AI/Hooks of the repository.
+# The guard and the repository policy hook are mirror files of WinuX and Foundation, at AI/Hooks
+# of the repository.
 guard_source=$(dirname "$FOUNDATION_UNIX")/AI/Hooks/ai-ownership-guard.sh
+policy_source=$(dirname "$FOUNDATION_UNIX")/AI/Hooks/ai-repository-policy.sh
 
 failures=0
 linked=0
@@ -240,7 +243,8 @@ managed_tree() {
 }
 
 # The +managed-settings destination: the rendered managed settings at TARGET and what goes next
-# to it (the item's hooks/, and with a profile the ownership guard and ai-profile.conf).
+# to it (the item's hooks/, and with a profile the ownership guard, the repository policy hook and
+# ai-profile.conf).
 # Usage: managed_item KEY SOURCE TARGET
 managed_item() {
 	local key=$1 source_path=$2 target_path=$3 dir item_dir scratch
@@ -264,6 +268,15 @@ managed_item() {
 			log_error "The ownership guard is missing => $guard_source"
 			failures=$((failures + 1))
 		fi
+		if [ -f "$policy_source" ]; then
+			managed_file "$key.policy" "$policy_source" "$dir/ai-repository-policy.sh"
+		else
+			log_error "The repository policy hook is missing => $policy_source"
+			failures=$((failures + 1))
+		fi
+		while IFS= read -r message; do
+			[ -z "$message" ] || log_warning "$message"
+		done < <(ai_profile_policy_problems)
 		ai_profile_conf_text >"$scratch/ai-profile.conf"
 		managed_file "$key.profile" "$scratch/ai-profile.conf" "$dir/ai-profile.conf"
 	fi

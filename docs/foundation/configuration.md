@@ -750,7 +750,9 @@ shared github.com/myuser/dotfiles
 rules         Personal
 plan          Max 00000000-0000-0000-0000-000000000000
 unattended    on
-autonomous    github.com/myuser/myproject
+default-policy branch
+policy        autonomous github.com/myuser/myproject
+policy        readonly github.com/myuser/archive-*
 
 [Work]
 rules         Work
@@ -758,6 +760,7 @@ plan          Team 11111111-1111-1111-1111-111111111111
 mcp
 exclude       skills/my-personal-skill
 owns          github.com/my-org/*
+default-policy draft
 ```
 
 Before the first section: `host NAME PROFILE` (the profile of the Mac whose local hostname is NAME,
@@ -766,12 +769,16 @@ compared without case), `default PROFILE`, `shared PATTERN...` and `default-owne
 HARNESS...` (wins over the `deploy` line of `ai-artifacts.conf`), `include KIND/NAME...` (a kind
 named deploys only those items), `exclude KIND/NAME...`, `mcp NAME...` and `marketplaces NAME...`
 (no line: all; a bare line: none), `unattended on|off` (default off), `owns PATTERN...`,
-`autonomous PATTERN...` and `env NAME...`. A PATTERN is a shell glob on the `origin` remote
+`policy LEVEL PATTERN...` (repeatable, the last matching line wins), `autonomous PATTERN...` (a
+synonym of `policy autonomous`), `default-policy LEVEL` (default `branch`),
+`merge-without-checks PATTERN...` and `env NAME...`; the levels are `autonomous`, `branch`,
+`draft`, `readonly` and `blocked` ([Repository policies](ai.md#repository-policies)). A PATTERN is a shell glob on the `origin` remote
 normalised to `host/owner/name`. With no section, profiles are off and every AI command behaves as
 without the file. `FOUNDATION_AI_PROFILE` overrides the host and default lines for one shell. The
 mechanism is on [AI on a Mac](ai.md#profiles); Test-ConfigurationSchema reports a `host`, `default`
-or `default-owner` line naming no profile, an unknown line kind, a malformed `plan` UUID, and a
-`deploy`, `mcp` or `marketplaces` name that is no section of its file.
+or `default-owner` line naming no profile, an unknown line kind, a malformed `plan` UUID, a
+`deploy`, `mcp` or `marketplaces` name that is no section of its file, and a `policy` or
+`default-policy` line naming no level.
 
 ## State
 

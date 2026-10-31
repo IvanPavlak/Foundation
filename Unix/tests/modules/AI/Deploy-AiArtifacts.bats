@@ -393,8 +393,9 @@ harness() {
 	cmp -s "$dir/hooks/policy.sh" "$ai/Rules/own/Core/hooks/policy.sh"
 	grep -q "^sudo chown root:wheel $dir/managed-settings.json" "$BATS_TEST_TMPDIR/tool.log"
 	grep -q "^sudo chmod 644 $dir/managed-settings.json" "$BATS_TEST_TMPDIR/tool.log"
-	# Without a profile: no guard and no ai-profile.conf.
-	[ ! -e "$dir/ai-ownership-guard.sh" ] && [ ! -e "$dir/ai-profile.conf" ]
+	# Without a profile: no guard, no policy hook and no ai-profile.conf.
+	[ ! -e "$dir/ai-ownership-guard.sh" ] && [ ! -e "$dir/ai-repository-policy.sh" ] && [ ! -e "$dir/ai-profile.conf" ]
+	! grep -q ai-repository-policy "$dir/managed-settings.json" || false
 	# Rewritten only when the rendering differs.
 	rm "$BATS_TEST_TMPDIR/tool.log"
 	run "${BASH:-bash}" "$cmd"
@@ -513,7 +514,7 @@ manifest() {
 	[[ $output == *"[Nope], which is no section"* ]]
 }
 
-@test "+managed-settings with a profile pins its Plan, wires the guard and writes ai-profile.conf" {
+@test "+managed-settings with a profile pins its Plan, wires the guard and the policy hook and writes ai-profile.conf" {
 	printf '{"forceLoginMethod":"claudeai"}\n' >"$ai/Rules/own/Core/managed-settings.json"
 	stub_tool sudo 'case "$1" in chown) exit 0 ;; esac; exec "$@"'
 	dir=$BATS_TEST_TMPDIR/root/ClaudeCode
@@ -521,12 +522,18 @@ manifest() {
 	conf 'deploy two' 'use rules Core'
 	profiles 'default Personal' 'default-owner personal' 'shared github.com/me/shared' \
 		'[Personal]' 'plan Max 00000000-0000-0000-0000-000000000000' 'unattended on' 'autonomous github.com/me/mine' \
+		'policy readonly github.com/me/old' 'policy nolevel github.com/me/x' 'merge-without-checks github.com/me/mine' \
 		'[Work]' 'plan Team 11111111-1111-1111-1111-111111111111' 'owns github.com/org/*' 'autonomous github.com/org/x'
 	run "${BASH:-bash}" "$cmd"
 	[ "$status" -eq 0 ]
 	value=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["forceLoginOrgUUID"], d["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"], d["hooks"]["PreToolUse"][0]["matcher"])' "$dir/managed-settings.json")
 	[ "$value" = "00000000-0000-0000-0000-000000000000 bash \"$dir/ai-ownership-guard.sh\" UserPromptSubmit *" ]
 	cmp -s "$dir/ai-ownership-guard.sh" "$(dirname "$UNIX_DIR")/AI/Hooks/ai-ownership-guard.sh"
+	value=$(python3 -c 'import json,sys; e=json.load(open(sys.argv[1]))["hooks"]["PreToolUse"]; print(len(e), e[1]["matcher"], e[1]["hooks"][0]["command"])' "$dir/managed-settings.json")
+	[ "$value" = "2 * bash \"$dir/ai-repository-policy.sh\"" ]
+	cmp -s "$dir/ai-repository-policy.sh" "$(dirname "$UNIX_DIR")/AI/Hooks/ai-repository-policy.sh"
+	grep -q "^sudo chmod 644 $dir/ai-repository-policy.sh" "$BATS_TEST_TMPDIR/tool.log"
+	[[ $output == *"a policy line names an unknown level [nolevel] - its patterns are skipped"* ]]
 	[ "$(cat "$dir/ai-profile.conf")" = "# Written by Deploy-AiArtifacts from the AI profile configuration; do not edit.
 profile Personal
 default-owner Personal
@@ -534,7 +541,11 @@ unattended on
 plan Max 00000000-0000-0000-0000-000000000000
 shared github.com/me/shared
 owns Work github.com/org/*
-autonomous github.com/me/mine" ]
+autonomous github.com/me/mine
+default-policy branch
+policy autonomous github.com/me/mine
+policy readonly github.com/me/old
+merge-without-checks github.com/me/mine" ]
 	# A changed Plan is a changed rendering: --check reports it, the next run rewrites it.
 	profiles 'default Personal' '[Personal]' 'plan Max 22222222-2222-2222-2222-222222222222 33333333-3333-3333-3333-333333333333'
 	run "${BASH:-bash}" "$cmd" --check

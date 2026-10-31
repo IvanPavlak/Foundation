@@ -228,7 +228,14 @@ setup() {
 	[[ $output == *"unattended is on or off"* ]]
 	[[ $output == *"include [tdd] is not KIND/NAME"* ]]
 	[[ $output == *"unknown line => whatever 1"* ]]
-	printf 'default Personal\n[Personal]\nplan Max 00000000-0000-0000-0000-000000000000\ndeploy one\nmcp linear\nmcp\nunattended on\nowns github.com/me/*\n' >"$cfg/ai-profiles.conf"
+	printf 'default Personal\n[Personal]\npolicy autonomus github.com/me/*\npolicy branch\ndefault-policy nolevel\ndefault-policy branch draft\n' >"$cfg/ai-profiles.conf"
+	run "${BASH:-bash}" "$cmd" --strict --quiet
+	[ "$status" -eq 1 ]
+	[[ $output == *"policy names an unknown level [autonomus]"* ]]
+	[[ $output == *"policy takes a level and one or more patterns => branch"* ]]
+	[[ $output == *"default-policy is not a level [nolevel]"* ]]
+	[[ $output == *"default-policy takes one level => branch draft"* ]]
+	printf 'default Personal\n[Personal]\nplan Max 00000000-0000-0000-0000-000000000000\ndeploy one\nmcp linear\nmcp\nunattended on\nowns github.com/me/*\npolicy Autonomous github.com/me/a github.com/me/b\nautonomous github.com/me/c\ndefault-policy readonly\nmerge-without-checks github.com/me/a\n' >"$cfg/ai-profiles.conf"
 	run "${BASH:-bash}" "$cmd" --quiet
 	[[ $output != *ai-profiles.conf* ]]
 }

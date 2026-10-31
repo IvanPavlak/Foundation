@@ -19,7 +19,11 @@
 #     (user, user local, managed, and the current folder's project files);
 #   - the profile's OAuth MCP servers (ai-mcp-servers.conf), which need their /mcp sign-in once;
 #     Claude Code keeps that sign-in in the keychain, so it is listed, not checked;
-#   - whether unattended runs are on.
+#   - whether unattended runs are on;
+#   - the repository policy (docs/foundation/ai.md#repository-policies): the default level
+#     (default-policy, branch when unset), then the level of each `policy` and `autonomous` pattern
+#     in file order (the last matching line wins), and the repositories that may merge with no CI
+#     check (merge-without-checks). Informational: it never counts as a mismatch.
 # Exit code: 0 when everything matches, 1 on any mismatch or credential found, 2 when no profile
 # is configured (profiles off). Changes nothing.
 _foundation=${BASH_SOURCE[0]}
@@ -162,6 +166,17 @@ oauth=$(ai_profile_oauth_servers | paste -sd' ' -)
 [ -z "$oauth" ] || log_step "OAuth MCP      : $oauth (sign in once each with /mcp in Claude Code; not checked)"
 
 if ai_profile_unattended; then log_step "Unattended     : on"; else log_step "Unattended     : off"; fi
+
+# The repository policy: listed, never a mismatch.
+while IFS= read -r message; do
+	[ -z "$message" ] || log_warning "$message"
+done < <(ai_profile_policy_problems)
+log_step "Default policy : $(ai_profile_default_policy)"
+while IFS=$'\t' read -r level pattern; do
+	[ -n "$pattern" ] && log_step "$(printf 'Policy         : %-10s %s' "$level" "$pattern")"
+done < <(ai_profile_policies)
+no_checks=$(ai_profile_words merge-without-checks | paste -sd' ' -)
+[ -z "$no_checks" ] || log_step "No-CI merges   : $no_checks (autonomous repositories that may merge with no CI check reported)"
 
 if [ "$mismatches" -eq 0 ]; then
 	log_success "AI profile $AI_PROFILE matches: its Plan, its pin, no pay-per-use credential!"

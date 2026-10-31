@@ -39,6 +39,31 @@ signed_in() {
 	[[ $output == *"Personal (picked by default)"* ]]
 	[[ $output == *"Logged-in Plan : My Org ($uuid)"* ]]
 	[[ $output == *"Unattended     : on"* ]]
+	[[ $output == *"Default policy : branch"* ]]
+	[[ $output != *"Policy         :"* ]] && [[ $output != *"No-CI merges"* ]]
+}
+
+@test "the repository policy is listed in file order and never a mismatch" {
+	printf 'default Personal
+[Personal]
+plan Max %s
+unattended on
+policy branch github.com/me/* github.com/x/y
+autonomous github.com/me/a
+policy nolevel github.com/me/z
+default-policy nolevel
+merge-without-checks github.com/me/a
+' "$uuid" >"$FOUNDATION_CONFIG_DIR/ai-profiles.conf"
+	run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	[[ $output == *"Default policy : readonly"* ]]
+	[[ $output == *"default-policy is not a level [nolevel] - readonly is used"* ]]
+	[[ $output == *"unknown level [nolevel]"* ]]
+	[[ $output != *"github.com/me/z"* ]]
+	[ "$(printf '%s\n' "$output" | sed -n 's/.*Policy         : //p' | tr -s ' ')" = "branch github.com/me/*
+branch github.com/x/y
+autonomous github.com/me/a" ]
+	[[ $output == *"No-CI merges   : github.com/me/a"* ]]
 }
 
 @test "no profile configured exits 2" {

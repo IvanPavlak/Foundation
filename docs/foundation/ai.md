@@ -86,7 +86,11 @@ and outside the profiles.
 | `mcp NAME...` | the MCP servers it registers (no line: all; a bare `mcp` line: none); see [MCP servers](#mcp-servers) |
 | `marketplaces NAME...` | the marketplaces it installs (no line: all; a bare line: none) |
 | `unattended on\|off` | whether unattended runs are allowed (default off); written into `ai-profile.conf` for the tools that run them |
-| `owns PATTERN...`, `autonomous PATTERN...` | the repositories it owns, and those of them its rules let it merge in |
+| `owns PATTERN...` | the repositories it owns (the ownership guard refuses them to every other profile) |
+| `policy LEVEL PATTERN...` | the repositories at a trust level; repeatable, the last matching line wins; see [Repository policies](#repository-policies) |
+| `autonomous PATTERN...` | a synonym of `policy autonomous PATTERN...` |
+| `default-policy LEVEL` | the level of every other repository, and of a folder without `origin` (default `branch`) |
+| `merge-without-checks PATTERN...` | `autonomous` repositories that may merge a pull request with no CI check reported |
 | `env NAME...` | the environment variables it needs, checked by `Initialize-AiProfile` |
 
 Beside the profiles, `shared PATTERN...` names the repositories every profile may work on and
@@ -97,7 +101,7 @@ the `origin` remote normalised to `host/owner/name`: lowercase, no scheme, no us
 `Test-AiProfile` checks a machine: the profile and how it was picked, the expected and the
 logged-in Plan, whether the deployed managed settings pin that Plan, every pay-per-use credential
 (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `apiKeyHelper`) and the
-OAuth MCP servers that need their sign-in; it exits 0 on a match, 1 on a mismatch and 2 without
+OAuth MCP servers that need their sign-in, and lists the [repository policy](#repository-policies) (never a mismatch); it exits 0 on a match, 1 on a mismatch and 2 without
 profiles. `Initialize-AiProfile` walks the sign-ins once per machine (Claude Code, the GitHub CLI,
 the OAuth MCP servers, the profile's environment variables) and ends with `Test-AiProfile`; every
 sign-in happens in the tool itself, so no secret passes through Foundation. It is also the
@@ -105,6 +109,57 @@ Bootstrap step `AiProfileInit`, off by default and run right after `AiMcpServers
 is deployed before the login is checked: `step AiProfileInit on` in `bootstrap.local.conf` makes a
 fresh Mac end its run signed in. The step waits at the terminal, so a run with it off stays
 unattended and, with a profile active, only warns and names `Initialize-AiProfile`.
+
+## Repository policies
+
+A profile gives each repository it works on a trust level, and one hook enforces the level of the
+repository a session works in. The levels are a closed set, from most to least trust:
+
+| Level | Agents may | Agents may not |
+| --- | --- | --- |
+| `autonomous` | everything `branch` allows, plus `gh pr merge` when every CI check of the pull request passed | merge with a failing or pending check, or with no check reported (unless a `merge-without-checks` line names the repository) |
+| `branch` | commit, push a non-default branch, open and ready pull requests | merge |
+| `draft` | commit, push a non-default branch, open draft pull requests (`gh pr create --draft`) | `gh pr ready`, merge, a pull request without `--draft` |
+| `readonly` | read, search and explain: the reading tools | any Bash or PowerShell call, and the Edit, Write, MultiEdit and NotebookEdit tools |
+| `blocked` | nothing: the ownership guard refuses the prompt and every tool call | |
+
+Every level keeps the always-denied list: a push to the default branch (an explicit
+`master`/`main`/default refspec, or a plain push while it is checked out), a force push (`--force`,
+`--force-with-lease`, `-f`, `+refspec`), deleting a branch, changing remotes, upstream tracking or
+git configuration, and a branch cut from a remote branch without `--no-track`.
+
+- `policy LEVEL PATTERN...` gives the repositories matching any PATTERN that level (patterns as
+  for `owns`). `autonomous PATTERN...` is a synonym of `policy autonomous PATTERN...`, and both may
+  be used. A level outside the set is warned about (`Deploy-AiArtifacts`, `Test-AiProfile`,
+  `Test-ConfigurationSchema`) and its patterns skipped, so a typo cannot invent a looser level.
+- Where lines of several levels match one repository, **the last matching line wins**: write the
+  broad patterns first and the exceptions after them.
+- `default-policy LEVEL` is the level of a repository no line matches, and of a folder outside any
+  repository or without `origin`. Left out it is `branch`; a value that is not a level is warned
+  about and becomes `readonly`.
+- `merge-without-checks PATTERN...` lists `autonomous` repositories that may merge a pull request
+  when `gh pr checks` reports no check at all. Left out, "no checks reported" is not green: a
+  repository without CI never merges on its own. A failing or pending check refuses the merge
+  everywhere.
+
+The hook is `AI/Hooks/ai-repository-policy.sh`, one file for Foundation and WinuX (a `mirror` line
+in both manifests), deployed next to the managed settings copy and wired into `PreToolUse` with
+matcher `*`, so the file tools are stopped too. It runs under whichever `bash` Claude Code finds
+(`/bin/bash` 3.2 included) with the system's BSD tools. It matches a command as a whole, with prose
+taken out first: the body of a heredoc fed to `cat` or to a `-F -` option, and a quoted value with
+whitespace given to a message option (`-m`, `--message`, `-t`, `--title`, `-b`, `--body`,
+`--notes`, `--subject`, a PowerShell here-string included). A commit message that mentions
+"configuration" or "git push --force" passes; `bash -c "..."` and a heredoc fed to a shell are
+still matched, and a refspec or flag never holds whitespace, so nothing can be hidden that way. Any
+review a merge also needs (a judge score, say) is the agent's own check, not the hook's.
+
+**Unattended runs.** The launcher of an unattended run sets the `AI_UNATTENDED` environment
+variable (`1`, `on`, `true` or `yes`). The ownership guard then refuses the run when the profile
+has `unattended off` (or no `unattended` line), and in a repository at `draft` or `readonly`:
+unattended work needs `autonomous` or `branch`. An attended session is not affected.
+
+`Test-AiProfile` lists the default level, every `policy` and `autonomous` pattern with its level in
+file order, and the `merge-without-checks` patterns; the list never changes its exit code.
 
 ## Harnesses
 
@@ -197,11 +252,13 @@ The managed settings are a root-owned copy, never a link (a link into the reposi
 anything that can write the repository loosen the policy): `root:wheel`, mode 644, rewritten only
 when the rendered content differs. Rendering replaces the token `{ManagedDir}` with the folder of
 the destination (`/Library/Application Support/ClaudeCode`); with an AI profile it also sets
-`forceLoginOrgUUID` from the profile's Plan and appends the ownership guard to
+`forceLoginOrgUUID` from the profile's Plan, appends the ownership guard to
 `hooks.UserPromptSubmit` and `hooks.PreToolUse` (matcher `*`) as
-`bash "{ManagedDir}/ai-ownership-guard.sh" <Event>`. Next to it the deploy writes the rules item's
-`hooks/` folder (as `hooks/`) and, with a profile, the engine's `ai-ownership-guard.sh`
-(`AI/Hooks/ai-ownership-guard.sh`, a mirror file WinuX ships at the same path) and `ai-profile.conf`:
+`bash "{ManagedDir}/ai-ownership-guard.sh" <Event>`, and appends the repository policy hook to
+`hooks.PreToolUse` (matcher `*`) as `bash "{ManagedDir}/ai-repository-policy.sh"`. Next to it the
+deploy writes the rules item's `hooks/` folder (as `hooks/`) and, with a profile, the engine's
+`ai-ownership-guard.sh` and `ai-repository-policy.sh` (`AI/Hooks/`, mirror files WinuX ships at the
+same paths) and `ai-profile.conf`:
 
 ```
 # Written by Deploy-AiArtifacts from the AI profile configuration; do not edit.
@@ -212,11 +269,19 @@ plan Max 00000000-0000-0000-0000-000000000000
 shared github.com/myuser/dotfiles
 owns Work github.com/my-org/*
 autonomous github.com/myuser/myproject
+default-policy branch
+policy autonomous github.com/myuser/myproject
+policy readonly github.com/myuser/archive-*
+merge-without-checks github.com/myuser/myproject
 ```
 
 The guard refuses a prompt or a tool call in a repository another profile owns (its `origin`
 matched against `shared`, then `owns`, then `default-owner`); outside a repository it allows. The
-`autonomous` lines are the active profile's only.
+`autonomous`, `default-policy`, `policy` and `merge-without-checks` lines are the active profile's
+only: `default-policy` is always written (`branch` when unset, `readonly` when it names no level),
+then one `policy LEVEL PATTERN` line per pattern in the file order of the profile (an `autonomous`
+line as `policy autonomous`; a `policy` line naming no level is warned about and left out). The
+`autonomous` lines stay first for a rules item's own hook that still reads them.
 
 Only a `use rules NAME` line makes a `file` destination link anything, and the last one wins. The
 base ships `AI/Rules/example/CoreAiRules/` (a skeleton: headings and one sample rule) and
@@ -372,7 +437,8 @@ It adds each server to Claude Code with `claude mcp add --scope user` (removing 
    destination of the harnesses turned on.
 3. The rules: `readlink ~/.claude/CLAUDE.md` prints a path inside `AI/Rules/`;
    `ls -l "/Library/Application Support/ClaudeCode/"` shows `managed-settings.json` (and, with a
-   profile, `ai-ownership-guard.sh` and `ai-profile.conf`) as real files owned by `root`.
+   profile, `ai-ownership-guard.sh`, `ai-repository-policy.sh` and `ai-profile.conf`) as real
+   files owned by `root`; with a profile, `Test-AiProfile` lists the [repository policy](#repository-policies).
 4. The mods: `python3 -c 'import json,os; print(json.load(open(os.path.expanduser("~/.claude/settings.json")))["env"]["CLAUDE_CODE_PLUGIN_DIRS"])'`
    prints the links under `~/.claude/mods`, `:`-separated; `claude plugin validate ~/.claude/mods/<mod>` passes.
 5. The marketplaces: `claude plugin marketplace list` names each configured marketplace and
