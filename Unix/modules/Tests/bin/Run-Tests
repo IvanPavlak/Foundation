@@ -2,8 +2,9 @@
 # Run-Tests - runs the Unix test suites (bats) in parallel workers, plus the lint, like the CI workflow.
 #
 # Usage: Run-Tests [PATTERN...] [--path DIR] [--quick] [--changed] [--since REF] [--audit-since REF]
-#                  [--lint] [--no-lint] [--filter REGEX] [--workers N] [--detailed]
-#                  [--build-impact-map] [--update-contract-baseline] [--lint-files]
+#                  [--lint] [--no-lint] [--filter REGEX] [--workers N] [--detailed] [--shard I/N]
+#                  [--build-impact-map] [--update-contract-baseline] [--update-suite-weights]
+#                  [--lint-files]
 #
 # The lint stage is shellcheck -S warning plus shfmt (formatting), both over the files CI checks;
 # it runs alongside the suites instead of before them. Their other settings live in
@@ -35,6 +36,12 @@
 #                   --since REF picks another base (implies --changed).
 #   --audit-since REF  runs the full suite, then reports every failing suite --changed since REF
 #                   would have left out (CI: a warning annotation). Not a pass/fail criterion.
+#   --shard I/N     runs only the I-th of N slices of the selection (CI runs the full suite as N
+#                   parallel jobs, one shard each). The slices split by the committed weights of
+#                   Unix/tests/suite-weights.tsv, heaviest first onto the lightest slice, so every
+#                   shard of one tree runs about the same work and each suite runs in exactly one.
+#                   A shard is a scoped run (no gate stamp, no worker history) and lints only with
+#                   --lint; it combines with --audit-since, which then audits the shard's suites.
 #   --build-impact-map  records, for every suite that runs, each Foundation command it started
 #                   and each library it loaded (Unix/tests/Results/impact-map.tsv, merged per
 #                   suite); --changed then also picks the suites the map saw use a changed
@@ -48,6 +55,9 @@
 # and keeping the deprecation records that still apply. tests/contract.bats then fails
 # every removal without a shipped deprecation (-UpdateContractBaseline of Windows). The first
 # baseline is written at 1.0.0: no rules apply in 0.x, as in WinuX before its 1.0.0.
+# --update-suite-weights rewrites Unix/tests/suite-weights.tsv from the suite times of the last
+# runs (Unix/tests/Results/suite-timings.tsv), every suite that still exists, by name; it too runs
+# no tests and combines with nothing. Refresh it after a full run when suites were added or grew.
 #
 # The suites need bats at least the version in Unix/tests/required-bats-version (the
 # RequiredPesterVersion.txt of Windows): an older one stops the run, a newer major warns.
@@ -96,6 +106,8 @@ suite_root=''
 impact=0
 update_baseline=0
 lint_files=0
+update_weights=0
+shard=''
 while [ $# -gt 0 ]; do
 	case $1 in
 		--lint) lint=on ;;
@@ -130,6 +142,12 @@ while [ $# -gt 0 ]; do
 		--build-impact-map) impact=1 ;;
 		--update-contract-baseline) update_baseline=1 ;;
 		--lint-files) lint_files=1 ;;
+		--update-suite-weights) update_weights=1 ;;
+		--shard)
+			testrun_shard_valid "${2:-}" || foundation_die "--shard takes I/N, a slice of N (1 <= I <= N), not [${2:-}]"
+			shard=$2
+			shift
+			;;
 		--test-name | -v | --verbose) ;;
 		-*) foundation_die "Unknown argument => $1 (a pattern never starts with -)" ;;
 		*) foundation_split_list patterns "$1" ;;
@@ -141,7 +159,7 @@ case $workers in '' | *[!0-9]*) foundation_die "--workers takes a number, not [$
 if [ "$lint_files" -eq 1 ]; then
 	{ [ ${#patterns[@]} -gt 0 ] || [ -n "$suite_root" ] || [ "$changed" -eq 1 ] || [ "$quick" -eq 1 ] || [ -n "$filter" ] ||
 		[ -n "$audit_since" ] || [ "$impact" -eq 1 ] || [ "$lint" != auto ] || [ "$workers" -ne 0 ] || [ "$update_baseline" -eq 1 ] ||
-		[ "$detailed" -eq 1 ]; } &&
+		[ "$detailed" -eq 1 ] || [ -n "$shard" ] || [ "$update_weights" -eq 1 ]; } &&
 		foundation_die "--lint-files only prints the lint's file list; it cannot be combined with any other flag"
 	cd "$DOTFILES_ROOT" || exit 1
 	testrun_lint_files
@@ -157,6 +175,7 @@ mkdir -p "$results" || foundation_die "Cannot create $results"
 testrun_prune_results "$results" "${TMPDIR:-/tmp}" >/dev/null
 log=$results/TestRun_$(date +%Y%m%d_%H%M%S)_$$.log
 timings=$results/suite-timings.tsv
+weights=${FOUNDATION_SUITE_WEIGHTS:-$tests/suite-weights.tsv}
 history=$results/worker-history.tsv
 last_green=$results/last-green
 last_selection=$results/last-selection
@@ -173,7 +192,8 @@ cd "$DOTFILES_ROOT" || exit 1
 # --update-contract-baseline: the release step; nothing else runs.
 if [ "$update_baseline" -eq 1 ]; then
 	{ [ ${#patterns[@]} -gt 0 ] || [ -n "$suite_root" ] || [ "$changed" -eq 1 ] || [ "$quick" -eq 1 ] || [ -n "$filter" ] ||
-		[ -n "$audit_since" ] || [ "$impact" -eq 1 ] || [ "$lint" != auto ] || [ "$workers" -ne 0 ]; } &&
+		[ -n "$audit_since" ] || [ "$impact" -eq 1 ] || [ "$lint" != auto ] || [ "$workers" -ne 0 ] || [ -n "$shard" ] ||
+		[ "$update_weights" -eq 1 ]; } &&
 		foundation_die "--update-contract-baseline runs no tests; it cannot be combined with any other flag"
 	changelog=$(testrun_changelog_path "$DOTFILES_ROOT") ||
 		foundation_die "No Unix/CHANGELOG.md to stamp the baseline with (or set FOUNDATION_CHANGELOG)"
@@ -189,6 +209,22 @@ fi
 
 all_suites=()
 while IFS= read -r suite; do all_suites+=("$suite"); done < <(find "$tests" -name '*.bats' -type f -not -path "$tests/Results/*" | LC_ALL=C sort)
+
+# --update-suite-weights: the committed weights from the last suite times; nothing else runs.
+if [ "$update_weights" -eq 1 ]; then
+	{ [ ${#patterns[@]} -gt 0 ] || [ -n "$suite_root" ] || [ "$changed" -eq 1 ] || [ "$quick" -eq 1 ] || [ -n "$filter" ] ||
+		[ -n "$audit_since" ] || [ "$impact" -eq 1 ] || [ "$lint" != auto ] || [ "$workers" -ne 0 ] || [ -n "$shard" ] ||
+		[ "$detailed" -eq 1 ]; } &&
+		foundation_die "--update-suite-weights runs no tests; it cannot be combined with any other flag"
+	[ -s "$timings" ] || foundation_die "No suite times yet (${timings#"$DOTFILES_ROOT"/}) - run Run-Tests first"
+	printf '%s\n' "${all_suites[@]#"$DOTFILES_ROOT"/}" | awk -F'\t' -v f="$timings" '
+		BEGIN { while ((getline line < f) > 0) { split(line, t, "\t"); if (t[2] ~ /^[0-9]+$/ && !(t[1] in ms)) ms[t[1]] = t[2] } }
+		$0 in ms { print $0 "\t" ms[$0] }' >"$work/weights" || foundation_die "Cannot read ${timings#"$DOTFILES_ROOT"/}"
+	[ -s "$work/weights" ] || foundation_die "${timings#"$DOTFILES_ROOT"/} names no suite of Unix/tests - run Run-Tests first"
+	mv "$work/weights" "$weights" || foundation_die "Cannot write ${weights#"$DOTFILES_ROOT"/}"
+	log_success "Suite weights => ${weights#"$DOTFILES_ROOT"/} ($(grep -c . "$weights") of ${#all_suites[@]} suites)"
+	exit 0
+fi
 if [ -n "$suite_root" ]; then
 	real_tests=$(cd "$tests" && pwd -P)
 	case $suite_root/ in "$real_tests"/*) ;; *) foundation_die "--path [$suite_root] is not a folder of Unix/tests" ;; esac
@@ -266,7 +302,7 @@ elif [ ${#patterns[@]} -gt 0 ]; then
 else
 	suites=("${all_suites[@]}")
 fi
-[ "$lint" = auto ] && { if [ ${#patterns[@]} -eq 0 ] && [ -z "$suite_root" ]; then lint=on; else lint=off; fi; }
+[ "$lint" = auto ] && { if [ ${#patterns[@]} -eq 0 ] && [ -z "$suite_root" ] && [ -z "$shard" ]; then lint=on; else lint=off; fi; }
 
 if [ "$quick" -eq 1 ]; then
 	kept=()
@@ -285,6 +321,20 @@ if [ "$quick" -eq 1 ]; then
 	suites=(${kept[@]+"${kept[@]}"})
 	mode="$mode, quick: $excluded integration suite(s) left out"
 	[ "$own" -gt 0 ] && mode="$mode, $own kept because their own subject changed"
+fi
+# --shard: this slice of whatever was selected.
+if [ -n "$shard" ]; then
+	selected=${#suites[@]}
+	kept=()
+	while IFS= read -r suite; do kept+=("$DOTFILES_ROOT/$suite"); done < <(
+		printf '%s\n' ${suites[@]+"${suites[@]#"$DOTFILES_ROOT"/}"} | testrun_shard_pick "${shard%%/*}" "${shard#*/}" "$weights"
+	)
+	suites=(${kept[@]+"${kept[@]}"})
+	mode="$mode, shard $shard: ${#suites[@]} of $selected suites"
+	if [ ${#suites[@]} -eq 0 ] && [ "$lint" != on ]; then
+		log_success "Shard $shard holds no suite of the $selected selected - nothing to run."
+		exit 0
+	fi
 fi
 [ -n "$filter" ] && mode="$mode, filter: $filter"
 [ -n "$suite_root" ] && mode="$mode, path: ${suite_root#"$(cd "$DOTFILES_ROOT" && pwd -P)"/}"
@@ -311,7 +361,8 @@ fi
 # A run is scoped when it is not the whole suite; only a full run counts for the gate stamp
 # and the worker history.
 scoped=0
-{ [ ${#patterns[@]} -gt 0 ] || [ -n "$suite_root" ] || [ -n "$filter" ] || [ "$quick" -eq 1 ] || { [ "$changed" -eq 1 ] && [ "$changed_all" -eq 0 ]; }; } && scoped=1
+{ [ ${#patterns[@]} -gt 0 ] || [ -n "$suite_root" ] || [ -n "$filter" ] || [ "$quick" -eq 1 ] || [ -n "$shard" ] ||
+	{ [ "$changed" -eq 1 ] && [ "$changed_all" -eq 0 ]; }; } && scoped=1
 
 # --audit-since: what --changed would have picked, worked out before the run.
 if [ -n "$audit_since" ]; then
@@ -482,7 +533,7 @@ if [ ${#suites[@]} -gt 0 ]; then
 	# without a timing ahead of them. Paths are relative to the repository root, as CI names them
 	# in its failure lines. A suite's weight for the worker count is its time, or the median time
 	# of the known suites when it has none.
-	while IFS= read -r suite; do queue+=("$suite"); done < <(printf '%s\n' "${suites[@]#"$DOTFILES_ROOT"/}" | testrun_queue_order "$timings")
+	while IFS= read -r suite; do queue+=("$suite"); done < <(printf '%s\n' "${suites[@]#"$DOTFILES_ROOT"/}" | testrun_queue_order "$timings" "$weights")
 	queue_size=${#queue[@]}
 	total_ms=$(printf '%s\n' "${queue[@]}" | awk -v f="$timings" '
 		BEGIN { while ((getline line < f) > 0) { split(line, t, "\t"); ms[t[1]] = t[2]; v[++n] = t[2] + 0 }
@@ -637,9 +688,10 @@ if [ "$changed" -eq 1 ]; then
 fi
 
 # Misses: failing suites a selection left out. Locally, the last --changed run's pick for this
-# same working tree; with --audit-since, the pick worked out before this run.
+# same working tree; with --audit-since, the pick worked out before this run (a shard audits the
+# suites it ran).
 misses=()
-if [ "$scoped" -eq 0 ] && [ -s "$work/failed-suites" ]; then
+if { [ "$scoped" -eq 0 ] || { [ -n "$shard" ] && [ -n "$audit_since" ]; }; } && [ -s "$work/failed-suites" ]; then
 	if [ -n "$audit_since" ]; then
 		while IFS= read -r miss; do misses+=("$miss"); done < <(testrun_misses "$work/audit" "$work/failed-suites")
 	elif [ "$changed" -eq 0 ] && [ -r "$last_selection" ] && [ "$(head -1 "$last_selection")" = "$fingerprint" ]; then

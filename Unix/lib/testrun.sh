@@ -14,6 +14,8 @@
 # Committed beside the suites:
 #   required-bats-version  the lowest bats the suites are verified with (RequiredPesterVersion.txt)
 #   contract-baseline.tsv  the contract at the last release (ContractBaseline.json), once there is one
+#   suite-weights.tsv      SUITE<TAB>MS, each suite's time in a CI run: the --shard split, and the queue
+#                          order for a suite suite-timings.tsv does not know (Run-Tests --update-suite-weights)
 
 # ---------------------------------------------------------------------------------------------
 # Tiers
@@ -211,11 +213,48 @@ testrun__impacted() {
 # The suites on stdin (repository-relative, one per line) in queue order: the slowest of the
 # previous run first (TIMINGS is suite-timings.tsv, SUITE<TAB>MS), a suite without a timing ahead
 # of them all (it is new, and may be the slowest), equal times by name. So the long suites never
-# start last and leave one worker running alone. Usage: testrun_queue_order TIMINGS
+# start last and leave one worker running alone. WEIGHTS (the committed suite-weights.tsv, same
+# shape) stands in for a suite TIMINGS does not know, so a first run (CI) also starts with the
+# long suites. Usage: testrun_queue_order TIMINGS [WEIGHTS]
 testrun_queue_order() {
-	awk -F'\t' -v f="$1" '
-		BEGIN { while ((getline line < f) > 0) { split(line, t, "\t"); if (t[2] ~ /^[0-9]+$/) ms[t[1]] = t[2] } }
+	awk -F'\t' -v f="$1" -v w="${2:-}" '
+		function read(file,   line, t) {
+			if (file == "") return
+			while ((getline line < file) > 0) { split(line, t, "\t"); if (t[2] ~ /^[0-9]+$/) ms[t[1]] = t[2] }
+			close(file)
+		}
+		BEGIN { read(w); read(f) }
 		$0 != "" { print (($0 in ms) ? ms[$0] : 999999999) "\t" $0 }' | LC_ALL=C sort -t$'\t' -k1,1nr -k2,2 | cut -f2-
+}
+
+# Is SPEC a shard of the form I/N (1 <= I <= N)? Usage: testrun_shard_valid SPEC
+testrun_shard_valid() {
+	case $1 in */*) ;; *) return 1 ;; esac
+	local i=${1%%/*} n=${1#*/}
+	case $i$n in '' | *[!0-9]*) return 1 ;; esac
+	[ -n "$i" ] && [ -n "$n" ] && [ "$i" -ge 1 ] && [ "$n" -ge 1 ] && [ "$i" -le "$n" ]
+}
+
+# The suites on stdin (repository-relative, one per line) that shard I of N runs, heaviest first.
+# Every shard of the same input and WEIGHTS (SUITE<TAB>MS) splits the same way, and each suite
+# lands in exactly one: heaviest first, each to the shard with the least weight so far (the
+# lowest number on a tie), equal weights by name. A suite WEIGHTS does not know weighs the median
+# of the ones it does (1000 ms when it knows none). Usage: testrun_shard_pick I N WEIGHTS
+testrun_shard_pick() {
+	awk -F'\t' -v f="$3" '
+		BEGIN {
+			while ((getline line < f) > 0) { split(line, t, "\t"); if (t[2] ~ /^[0-9]+$/) { ms[t[1]] = t[2] + 0; v[++k] = t[2] + 0 } }
+			for (i = 2; i <= k; i++) { x = v[i]; for (j = i - 1; j >= 1 && v[j] > x; j--) v[j + 1] = v[j]; v[j + 1] = x }
+			median = k ? v[int((k + 1) / 2)] : 1000
+		}
+		$0 != "" && !seen[$0]++ { print (($0 in ms) ? ms[$0] : median) "\t" $0 }' |
+		LC_ALL=C sort -t$'\t' -k1,1nr -k2,2 |
+		awk -F'\t' -v want="$1" -v n="$2" '{
+			best = 1
+			for (s = 2; s <= n; s++) if (load[s] + 0 < load[best] + 0) best = s
+			load[best] += $1
+			if (best == want) print $2
+		}'
 }
 
 # The bats version on PATH (1.14.0), nothing when there is none.
