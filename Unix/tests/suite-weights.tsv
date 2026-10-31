@@ -1,3 +1,4 @@
+Unix/tests/ai-repository-policy.bats	9000
 Unix/tests/aiprofile.bats	4600
 Unix/tests/autocomplete-guard.bats	6200
 Unix/tests/backup.bats	2500

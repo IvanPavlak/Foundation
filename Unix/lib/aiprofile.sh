@@ -156,12 +156,85 @@ ai_profile_unattended() {
 	return 1
 }
 
-# The ai-profile.conf the deploy writes next to the managed settings copy (the ownership guard
-# and the rules item's hooks read it): the active profile, the default owner, unattended, the Plan,
-# the shared patterns, every profile's `owns` patterns and the active profile's `autonomous` ones.
+# The repository policy levels (docs/foundation/ai.md#repository-policies), a closed set from most
+# to least trust.
+AI_POLICY_LEVELS='autonomous branch draft readonly blocked'
+
+# Is LEVEL one of AI_POLICY_LEVELS (exact spelling, as the hooks compare it)? Usage: ai_policy_level LEVEL
+ai_policy_level() {
+	case " $AI_POLICY_LEVELS " in *" $1 "*) [ -n "$1" ] ;; *) return 1 ;; esac
+}
+
+# The repository policy of PROFILE (default the active one): LEVEL<TAB>PATTERN per pattern of its
+# `policy LEVEL PATTERN...` and `autonomous PATTERN...` lines (the latter as level autonomous), in
+# file order, since the hooks take the last matching line. A policy line naming no level is left
+# out (ai_profile_policy_problems says so). Usage: ai_profile_policies [PROFILE]
+ai_profile_policies() {
+	local file line key rest level words pattern profile=${1:-${AI_PROFILE:-}}
+	[ -n "$profile" ] || return 0
+	file=$(aiprof__conf) || return 0
+	while IFS= read -r line; do
+		read -r key rest <<<"$line"
+		if foundation_ieq "$key" autonomous; then
+			level=autonomous
+		elif foundation_ieq "$key" policy; then
+			read -r level rest <<<"$rest"
+			level=$(foundation_lower "$level")
+			ai_policy_level "$level" || continue
+		else
+			continue
+		fi
+		read -r -a words <<<"$rest"
+		for pattern in ${words[@]+"${words[@]}"}; do
+			printf '%s\t%s\n' "$level" "$pattern"
+		done
+	done < <(conf_section "$file" "$profile")
+	return 0
+}
+
+# The level of a repository no policy line of PROFILE (default the active one) matches: its last
+# `default-policy` line, branch without one, readonly when that names no level.
+# Usage: ai_profile_default_policy [PROFILE]
+ai_profile_default_policy() {
+	local value
+	value=$(ai_profile_value default-policy "${1:-}") || {
+		printf 'branch'
+		return 0
+	}
+	read -r value _ <<<"$value"
+	value=$(foundation_lower "$value")
+	ai_policy_level "$value" || value='readonly'
+	printf '%s' "$value"
+}
+
+# What ai_profile_policies and ai_profile_default_policy could not use, one warning per line: a
+# policy line naming no level (skipped), a default-policy that is no level (readonly is used).
+# Usage: ai_profile_policy_problems [PROFILE]
+ai_profile_policy_problems() {
+	local rest level value levels profile=${1:-${AI_PROFILE:-}}
+	[ -n "$profile" ] || return 0
+	levels=$(printf '%s' "$AI_POLICY_LEVELS" | sed 's/ /, /g')
+	while IFS= read -r rest; do
+		read -r level rest <<<"$rest"
+		ai_policy_level "$(foundation_lower "$level")" ||
+			printf 'AI profile [%s]: a policy line names an unknown level [%s] - its patterns are skipped (levels: %s)\n' "$profile" "$level" "$levels"
+	done < <(ai__profile_rest policy "$profile")
+	if value=$(ai_profile_value default-policy "$profile"); then
+		read -r value _ <<<"$value"
+		ai_policy_level "$(foundation_lower "$value")" ||
+			printf 'AI profile [%s]: default-policy is not a level [%s] - readonly is used (levels: %s)\n' "$profile" "$value" "$levels"
+	fi
+	return 0
+}
+
+# The ai-profile.conf the deploy writes next to the managed settings copy (the ownership guard,
+# the repository policy hook and the rules item's hooks read it): the active profile, the default
+# owner, unattended, the Plan, the shared patterns, every profile's `owns` patterns, then the
+# active profile's `autonomous` patterns, its default-policy, its policy lines in file order (an
+# autonomous line as `policy autonomous`) and its merge-without-checks patterns.
 # Usage: ai_profile_conf_text
 ai_profile_conf_text() {
-	local owner plan pattern profile
+	local owner plan pattern profile level
 	[ -n "${AI_PROFILE:-}" ] || return 1
 	printf '# Written by Deploy-AiArtifacts from the AI profile configuration; do not edit.\n'
 	printf 'profile %s\n' "$AI_PROFILE"
@@ -184,6 +257,13 @@ ai_profile_conf_text() {
 	while IFS= read -r pattern; do
 		[ -n "$pattern" ] && printf 'autonomous %s\n' "$pattern"
 	done < <(ai_profile_words autonomous)
+	printf 'default-policy %s\n' "$(ai_profile_default_policy)"
+	while IFS=$'\t' read -r level pattern; do
+		[ -n "$pattern" ] && printf 'policy %s %s\n' "$level" "$pattern"
+	done < <(ai_profile_policies)
+	while IFS= read -r pattern; do
+		[ -n "$pattern" ] && printf 'merge-without-checks %s\n' "$pattern"
+	done < <(ai_profile_words merge-without-checks)
 	return 0
 }
 
@@ -209,9 +289,10 @@ PY
 
 # The managed settings copy rendered from a rules item's managed-settings.json, on stdout: the
 # token {ManagedDir} becomes DIR (forward slashes); with a profile active, forceLoginOrgUUID is set
-# from its Plan (one UUID as a string, several as an array) and the ownership guard is appended to
+# from its Plan (one UUID as a string, several as an array), the ownership guard is appended to
 # hooks.UserPromptSubmit and hooks.PreToolUse (matcher *) as bash "DIR/ai-ownership-guard.sh"
-# EVENT. Without a profile only the token changes. Fails (python3 missing, a file that does not
+# EVENT, and the repository policy hook to hooks.PreToolUse (matcher *) as
+# bash "DIR/ai-repository-policy.sh". Without a profile only the token changes. Fails (python3 missing, a file that does not
 # parse, a plan line without a valid UUID) with the reason on stderr; the deploy then leaves the
 # deployed copy as it is. Usage: ai_render_managed_settings SOURCE DIR
 ai_render_managed_settings() {
@@ -261,9 +342,11 @@ if profiled:
     if not isinstance(hooks, dict):
         hooks = {}
     guard = f'bash "{directory}/ai-ownership-guard.sh"'
+    policy = f'bash "{directory}/ai-repository-policy.sh"'
     for event, entry in (
         ("UserPromptSubmit", {"hooks": [{"type": "command", "command": f"{guard} UserPromptSubmit"}]}),
         ("PreToolUse", {"matcher": "*", "hooks": [{"type": "command", "command": f"{guard} PreToolUse"}]}),
+        ("PreToolUse", {"matcher": "*", "hooks": [{"type": "command", "command": policy}]}),
     ):
         entries = hooks.get(event)
         if not isinstance(entries, list):

@@ -87,21 +87,59 @@ shared github.com/me/s1
 shared github.com/me/s2
 owns A github.com/me/*
 owns B github.com/org/*
-autonomous github.com/me/a" ]
+autonomous github.com/me/a
+default-policy branch
+policy autonomous github.com/me/a" ]
 }
 
-@test "ai_render_managed_settings: the token always, the Plan and the guard only with a profile" {
+@test "ai_profile_conf_text: policy lines in file order, autonomous as a level, default-policy, merge-without-checks" {
+	profiles 'default A' '[A]' 'policy Branch github.com/me/* github.com/x/y' 'autonomous github.com/me/a' \
+		'policy autonomus github.com/me/typo' 'policy readonly github.com/me/old' 'default-policy draft' \
+		'merge-without-checks github.com/me/a github.com/me/b'
+	ai_profile_load
+	[ "$(ai_profile_conf_text | sed -n '/^autonomous /,$p')" = "autonomous github.com/me/a
+default-policy draft
+policy branch github.com/me/*
+policy branch github.com/x/y
+policy autonomous github.com/me/a
+policy readonly github.com/me/old
+merge-without-checks github.com/me/a
+merge-without-checks github.com/me/b" ]
+	[ "$(ai_profile_policy_problems)" = "AI profile [A]: a policy line names an unknown level [autonomus] - its patterns are skipped (levels: autonomous, branch, draft, readonly, blocked)" ]
+}
+
+@test "ai_profile_default_policy: branch when unset, readonly when it names no level" {
+	profiles 'default A' '[A]'
+	ai_profile_load
+	[ "$(ai_profile_default_policy)" = branch ]
+	[ -z "$(ai_profile_policy_problems)" ]
+	profiles 'default A' '[A]' 'default-policy Autonomus'
+	ai_profile_load
+	[ "$(ai_profile_default_policy)" = readonly ]
+	[[ $(ai_profile_conf_text) == *$'\ndefault-policy readonly'* ]]
+	[[ $(ai_profile_policy_problems) == *"default-policy is not a level [Autonomus] - readonly is used"* ]]
+	profiles 'default A' '[A]' 'default-policy BLOCKED'
+	ai_profile_load
+	[ "$(ai_profile_default_policy)" = blocked ]
+}
+
+@test "ai_render_managed_settings: the token always, the Plan, the guard and the policy hook only with a profile" {
 	command -v python3 >/dev/null 2>&1 || skip "python3 is required"
 	printf '{"a":"bash \\"{ManagedDir}/hooks/x.sh\\"","hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[]}]}}\n' >"$BATS_TEST_TMPDIR/ms.json"
 	run ai_render_managed_settings "$BATS_TEST_TMPDIR/ms.json" "/Library/Application Support/ClaudeCode"
 	[ "$status" -eq 0 ]
 	[[ $output == *'"a": "bash \"/Library/Application Support/ClaudeCode/hooks/x.sh\""'* ]]
-	[[ $output != *forceLoginOrgUUID* ]] && [[ $output != *ai-ownership-guard* ]]
+	[[ $output != *forceLoginOrgUUID* ]] && [[ $output != *ai-ownership-guard* ]] && [[ $output != *ai-repository-policy* ]]
 	profiles 'default P' '[P]' 'plan Max 0000000A-0000-0000-0000-000000000000'
 	ai_profile_load
 	ai_render_managed_settings "$BATS_TEST_TMPDIR/ms.json" /m >"$BATS_TEST_TMPDIR/out.json"
 	value=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); h=d["hooks"]; print(d["forceLoginOrgUUID"], len(h["PreToolUse"]), h["PreToolUse"][1]["matcher"], h["UserPromptSubmit"][0]["hooks"][0]["command"])' "$BATS_TEST_TMPDIR/out.json")
-	[ "$value" = '0000000a-0000-0000-0000-000000000000 2 * bash "/m/ai-ownership-guard.sh" UserPromptSubmit' ]
+	[ "$value" = '0000000a-0000-0000-0000-000000000000 3 * bash "/m/ai-ownership-guard.sh" UserPromptSubmit' ]
+	value=$(python3 -c 'import json,sys; e=json.load(open(sys.argv[1]))["hooks"]["PreToolUse"][2]; print(e["matcher"], e["hooks"][0]["command"])' "$BATS_TEST_TMPDIR/out.json")
+	[ "$value" = '* bash "/m/ai-repository-policy.sh"' ]
+	# Rendering its own output again adds nothing.
+	ai_render_managed_settings "$BATS_TEST_TMPDIR/out.json" /m >"$BATS_TEST_TMPDIR/again.json"
+	cmp "$BATS_TEST_TMPDIR/out.json" "$BATS_TEST_TMPDIR/again.json"
 	printf 'not json' >"$BATS_TEST_TMPDIR/bad.json"
 	run ai_render_managed_settings "$BATS_TEST_TMPDIR/bad.json" /m
 	[ "$status" -ne 0 ]
