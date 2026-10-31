@@ -25,10 +25,17 @@
 # A bearer-token-env line names the environment variable holding a token: Claude Code gets an
 # `Authorization: Bearer ${VAR}` header it expands when it starts, Codex bearer_token_env_var, so no
 # secret is ever written. A server that signs in with OAuth needs that sign-in once per machine
-# (/mcp in Claude Code, `codex mcp login <name>`). Servers are added and updated, never removed.
+# (/mcp in Claude Code, `codex mcp login <name>`).
 #
-# --check (--dry-run, the Windows -WhatIf) reports what a run would add or update and changes
-# nothing.
+# Without an AI profile (ai-profiles.conf) servers are added and updated, never removed. With one,
+# its `mcp NAME...` lines pick the servers (no mcp line: all of them; a bare `mcp` line: none), and
+# the servers this command registered are recorded per app in
+# $FOUNDATION_STATE_DIR/ai-mcp-servers.state: a recorded server the profile does not list is
+# removed (`claude mcp remove --scope user`, its Codex table). A configured server an app already
+# carries exactly as configured counts as registered here; any other server is never removed.
+#
+# --check (--dry-run, the Windows -WhatIf) reports what a run would add, update or remove and
+# changes nothing.
 _foundation=${BASH_SOURCE[0]}
 while [ -L "$_foundation" ]; do
 	_link=$(readlink "$_foundation")
@@ -36,7 +43,7 @@ while [ -L "$_foundation" ]; do
 done
 . "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
 foundation_require_bash || exit 1
-foundation_load config
+foundation_load config aiprofile
 
 # The Claude Code CLI; FOUNDATION_CLAUDE_CLI names another executable (the test suites set a name that
 # never exists, or their stand-in), since foundation.sh puts Homebrew back on any trimmed PATH.
@@ -55,7 +62,18 @@ for argument in "$@"; do
 	esac
 done
 
+ai_profile_load
+[ $? -ne 2 ] || foundation_die "AI profile: $AI_PROFILE_ERROR"
+# The AI profile's servers, comma-separated (`*`: every configured one).
+profile_mode=''
+profile_servers='*'
+if [ -n "$AI_PROFILE" ]; then
+	profile_mode=on
+	if ai_profile_has mcp; then profile_servers=$(ai_profile_words mcp | paste -sd, -); fi
+fi
+
 log_title "Deploy-AiMcpServers"
+[ -z "$AI_PROFILE" ] || log_step "AI profile : $AI_PROFILE (by $AI_PROFILE_HOW), servers: ${profile_servers:-none}"
 file=$(conf_path ai-mcp-servers.conf) || {
 	log_warning "No MCP servers configured (ai-mcp-servers.conf) - nothing to deploy!"
 	exit 0
@@ -128,7 +146,7 @@ while IFS=$'\t' read -r level text; do
 		failures) failures=$text ;;
 	esac
 done < <(
-	FOUNDATION_MCP_SPEC=$spec python3 - "$check" "$claude_path" "$claude_state" "$codex_config" "$apps" "$machine" <<'PY'
+	FOUNDATION_MCP_SPEC=$spec python3 - "$check" "$claude_path" "$claude_state" "$codex_config" "$apps" "$machine" "$profile_mode" "$profile_servers" "$FOUNDATION_STATE_DIR/ai-mcp-servers.state" <<'PY'
 import json, os, re, subprocess, sys
 
 check = sys.argv[1] == "1"
@@ -175,7 +193,6 @@ for raw in os.environ.get("FOUNDATION_MCP_SPEC", "").splitlines():
         sections.setdefault(section, []).append(line)
 
 servers = {}
-uses_oauth = False
 for name in sorted(sections, key=str.lower):
     problems = []
     url = command = transport = bearer = ""
@@ -245,14 +262,14 @@ for name in sorted(sections, key=str.lower):
         add = ["mcp", "add", "--scope", "user", "--transport", transport, name, url]
         for key, value in claude_headers.items():
             add += ["--header", f"{key}: {value}"]
-        if "Authorization" not in claude_headers:
-            uses_oauth = True
+        oauth = "Authorization" not in claude_headers
         block = [f"[mcp_servers.{name}]", f"url = {toml(url)}"]
         if bearer:
             block.append(f"bearer_token_env_var = {toml(bearer)}")
         if headers:
             block.append("http_headers = { " + ", ".join(f"{toml(k)} = {toml(v)}" for k, v in sorted(headers.items())) + " }")
     else:
+        oauth = False
         entry = {"type": "stdio", "command": command, "args": arguments, "env": env}
         add = ["mcp", "add", "--scope", "user", name]
         for key, value in sorted(env.items()):
@@ -263,12 +280,49 @@ for name in sorted(sections, key=str.lower):
             block.append("args = [" + ", ".join(toml(a) for a in arguments) + "]")
         if env:
             block.append("env = { " + ", ".join(f"{toml(k)} = {toml(v)}" for k, v in sorted(env.items())) + " }")
-    servers[name] = {"transport": transport, "canonical": canonical(entry), "add": add, "block": block}
+    servers[name] = {"transport": transport, "canonical": canonical(entry), "add": add, "block": block, "oauth": oauth}
 
-if not servers:
+profiled = sys.argv[7] == "on"
+listed = sys.argv[8]
+state_path = sys.argv[9]
+
+# The servers this machine deploys: the AI profile's `mcp` list (in its order), else all of them.
+if profiled and listed != "*":
+    by_lower = {name.lower(): name for name in servers}
+    wanted = {}
+    for requested in [n for n in listed.split(",") if n]:
+        if requested.lower() in by_lower:
+            wanted[by_lower[requested.lower()]] = servers[by_lower[requested.lower()]]
+        else:
+            say("warning", f"The AI profile lists MCP server [{requested}], which ai-mcp-servers.conf does not configure for this machine type - skipped!")
+else:
+    wanted = dict(servers)
+uses_oauth = any(server["oauth"] for server in wanted.values())
+
+# What an earlier run registered, per app (read and written only with a profile active). A state
+# that cannot be read removes nothing this run.
+state = {}
+removal = profiled
+if profiled:
+    try:
+        with open(state_path, encoding="utf-8") as handle:
+            for raw in handle:
+                parts = raw.rstrip("\r\n").split("\t")
+                if len(parts) == 2 and parts[0] and parts[1]:
+                    state.setdefault(parts[0], set()).add(parts[1])
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        say("warning", f"{state_path} cannot be read ({error}) - no MCP server is removed this run")
+        removal = False
+new_state = {app: set(names) for app, names in state.items()}
+
+if not wanted and not profiled:
     say("warning", "No MCP server to deploy on this machine type!")
+elif not wanted:
+    say("step", "The AI profile lists no MCP server for this machine")
 
-if "claude-code" in apps and servers and claude:
+if "claude-code" in apps and claude and (wanted or removal):
     current = {}
     try:
         with open(claude_state, encoding="utf-8") as handle:
@@ -282,16 +336,18 @@ if "claude-code" in apps and servers and claude:
         say("error", f"{claude_state} does not parse - Claude Code MCP servers not deployed!")
         failures += 1
         current = None
-    for name, server in (servers.items() if current is not None else []):
+    quiet = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+    registered = set()
+    for name, server in (wanted.items() if current is not None else []):
         present = name in current
         if present and isinstance(current[name], dict) and canonical(current[name]) == server["canonical"]:
             say("step", f"Claude Code MCP server [{name}] already configured")
+            registered.add(name)
             continue
         if check:
             say("step", f"{'DIFFERS' if present else 'MISSING'} Claude Code MCP server [{name}]")
             failures += 1
             continue
-        quiet = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
         try:
             if present and subprocess.run([claude, "mcp", "remove", "--scope", "user", name], **quiet).returncode != 0:
                 say("error", f"claude mcp remove --scope user [{name}] failed - run it by hand to see why!")
@@ -299,16 +355,62 @@ if "claude-code" in apps and servers and claude:
                 continue
             if subprocess.run([claude] + server["add"], **quiet).returncode == 0:
                 say("success", f"{'Updated' if present else 'Added'} Claude Code MCP server [{name}]")
+                registered.add(name)
             else:
                 say("error", f"claude mcp add [{name}] failed - run it by hand to see why!")
                 failures += 1
         except OSError as error:
             say("error", f"claude could not be run for [{name}]: {error}")
             failures += 1
+    if removal and current is not None:
+        # Ours: what the state records, plus a configured server carried exactly as configured.
+        owned = set(state.get("claude-code", set()))
+        owned |= {name for name, server in servers.items() if isinstance(current.get(name), dict) and canonical(current[name]) == server["canonical"]}
+        kept = set(registered)
+        for name in sorted(owned - set(wanted)):
+            if name not in current:
+                continue
+            if check:
+                say("step", f"REMOVE Claude Code MCP server [{name}] (the AI profile does not list it)")
+                failures += 1
+                kept.add(name)
+                continue
+            try:
+                if subprocess.run([claude, "mcp", "remove", "--scope", "user", name], **quiet).returncode == 0:
+                    say("success", f"Removed Claude Code MCP server [{name}] (the AI profile does not list it)")
+                else:
+                    say("error", f"claude mcp remove --scope user [{name}] failed - run it by hand to see why!")
+                    failures += 1
+                    kept.add(name)
+            except OSError as error:
+                say("error", f"claude could not be run for [{name}]: {error}")
+                failures += 1
+                kept.add(name)
+        new_state["claude-code"] = kept
 
-if "codex" in apps and servers:
+
+def codex_table(lines, name):
+    # The lines without the [mcp_servers.<name>] table and its subtables, that table's data lines,
+    # and where it started (-1: absent). Comments in its stretch stay: they usually introduce the
+    # next table.
+    escaped = re.escape(name)
+    header = re.compile(r'^\s*\[\s*mcp_servers\s*\.\s*(?:' + escaped + '|"' + escaped + r'")\s*(?:\.[^\]]*)?\]\s*(?:#.*)?$')
+    kept, existing, start, inside = [], [], -1, False
+    for line in lines:
+        if re.match(r"^\s*\[", line):
+            inside = bool(header.match(line))
+            if inside and start < 0:
+                start = len(kept)
+        if not inside or re.match(r"^\s*#", line):
+            kept.append(line)
+        elif line.strip():
+            existing.append(line.strip())
+    return kept, existing, start
+
+
+if "codex" in apps and (wanted or removal):
     names = []
-    for name, server in servers.items():
+    for name, server in wanted.items():
         if server["transport"] == "sse":
             say("warning", f"MCP server [{name}] is an sse server, which Codex does not read (stdio and streamable HTTP only) - not added to Codex!")
         else:
@@ -317,24 +419,15 @@ if "codex" in apps and servers:
         text = open(codex_path, encoding="utf-8").read() if os.path.exists(codex_path) else ""
         newline = "\r\n" if "\r\n" in text else "\n"
         lines = text.splitlines()
+        original = list(lines)
         changed = []
+        registered = set()
         for name in names:
             block = servers[name]["block"]
-            escaped = re.escape(name)
-            header = re.compile(r'^\s*\[\s*mcp_servers\s*\.\s*(?:' + escaped + '|"' + escaped + r'")\s*(?:\.[^\]]*)?\]\s*(?:#.*)?$')
-            kept, existing, start, inside = [], [], -1, False
-            for line in lines:
-                if re.match(r"^\s*\[", line):
-                    inside = bool(header.match(line))
-                    if inside and start < 0:
-                        start = len(kept)
-                # Comments in the table's stretch stay: they usually introduce the next table.
-                if not inside or re.match(r"^\s*#", line):
-                    kept.append(line)
-                elif line.strip():
-                    existing.append(line.strip())
+            kept, existing, start = codex_table(lines, name)
             if start >= 0 and existing == block:
                 say("step", f"Codex MCP server [{name}] already configured")
+                registered.add(name)
                 continue
             if check:
                 say("step", f"{'DIFFERS' if start >= 0 else 'MISSING'} Codex MCP server [{name}]")
@@ -348,7 +441,30 @@ if "codex" in apps and servers:
                     kept.append("")
                 kept += block
                 changed.append(f"Added Codex MCP server [{name}]")
+            registered.add(name)
             lines = kept
+        if removal:
+            owned = set(state.get("codex", set()))
+            for name, server in servers.items():
+                _, existing, start = codex_table(original, name)
+                if server["transport"] != "sse" and start >= 0 and existing == server["block"]:
+                    owned.add(name)
+            kept_state = set(registered)
+            for name in sorted(owned - set(names)):
+                kept, existing, start = codex_table(lines, name)
+                if start < 0:
+                    continue
+                if check:
+                    say("step", f"REMOVE Codex MCP server [{name}] (the AI profile does not list it)")
+                    failures += 1
+                    kept_state.add(name)
+                    continue
+                # The blank line that separated the table goes with it.
+                if 0 < start <= len(kept) and not kept[start - 1].strip():
+                    del kept[start - 1]
+                lines = kept
+                changed.append(f"Removed Codex MCP server [{name}] (the AI profile does not list it)")
+            new_state["codex"] = kept_state
         if changed:
             os.makedirs(os.path.dirname(codex_path), exist_ok=True)
             with open(codex_path, "w", encoding="utf-8", newline="") as handle:
@@ -357,6 +473,17 @@ if "codex" in apps and servers:
                 say("success", message)
     except OSError as error:
         say("error", f"Codex configuration {codex_path} not updated: {error}")
+        failures += 1
+
+if removal and not check and new_state != state:
+    try:
+        os.makedirs(os.path.dirname(state_path), exist_ok=True)
+        with open(state_path, "w", encoding="utf-8") as handle:
+            for app in sorted(new_state):
+                for name in sorted(new_state[app]):
+                    handle.write(f"{app}\t{name}\n")
+    except OSError as error:
+        say("error", f"The MCP state {state_path} could not be written: {error}")
         failures += 1
 
 if uses_oauth and not check:

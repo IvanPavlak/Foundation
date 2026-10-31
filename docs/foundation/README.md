@@ -78,7 +78,7 @@ when you answered yes, chezmoi installs Homebrew and Homebrew bash and hands ove
 `Bootstrap --with-initial-setup`: `brew bundle`, the machine-type check, the
 permission panes, the system settings, theme, Dock and login items, AeroSpace, and the AI
 artifacts, plugin marketplaces and MCP servers once a fork turns those steps on (`step AiArtifacts on`,
-`step AiMarketplaces on` and `step AiMcpServers on` in `bootstrap.local.conf`; the base ships them off). Every module executable needs bash 4.4+ and says so (with the
+`step AiMarketplaces on` and `step AiMcpServers on` in `bootstrap.local.conf`; the base ships them off), then the AI profile's sign-ins with `step AiProfileInit on`. Every module executable needs bash 4.4+ and says so (with the
 install hint) when started by an older one.
 
 Afterwards `Bootstrap` is the command to rerun, with every step switchable per machine, the

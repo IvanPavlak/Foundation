@@ -68,7 +68,8 @@ The names follow WinuX for behaviour parity (`Open-Workspace`, `Kill-All`, `w`, 
 adds the Windows aliases.
 
 Runtime names: `FOUNDATION_*` variables, `foundation_*` functions, the state folder
-`$XDG_STATE_HOME/foundation/`; `DOTFILES_ROOT` is the clone's root.
+`$XDG_STATE_HOME/foundation/`, the data folder `$XDG_DATA_HOME/foundation/` (the AI manifest
+clones); `DOTFILES_ROOT` is the clone's root.
 
 ## Configuration
 

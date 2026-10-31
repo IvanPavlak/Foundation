@@ -4,7 +4,7 @@
 # Load after helpers; call bootstrap_sandbox in setup, then run "$cmd". Shared by the
 # Bootstrap*.bats suites, split so they run on separate workers.
 
-COMMANDS="Initialize-Configuration Rename-Machine Display-SystemLanguageSettings Update-Repositories Set-SystemDefaults Set-SpecialFolders Set-PowerSettings Set-SystemTheme Set-Locale Set-DisplayLanguage Set-KeyboardLayouts Set-DockPins Set-LoginItems Deploy-FirefoxProfile Deploy-AiArtifacts Deploy-AiMarketplaces Deploy-AiMcpServers Enable-ObsidianCli Install-DotnetEf Install-CondaEnvironments Configure-NuGetConfig Configure-NpmConfig Configure-DockerDesktop Upgrade-All"
+COMMANDS="Initialize-Configuration Rename-Machine Display-SystemLanguageSettings Update-Repositories Set-SystemDefaults Set-SpecialFolders Set-PowerSettings Set-SystemTheme Set-Locale Set-DisplayLanguage Set-KeyboardLayouts Set-DockPins Set-LoginItems Deploy-FirefoxProfile Deploy-AiArtifacts Deploy-AiMarketplaces Deploy-AiMcpServers Initialize-AiProfile Enable-ObsidianCli Install-DotnetEf Install-CondaEnvironments Configure-NuGetConfig Configure-NpmConfig Configure-DockerDesktop Upgrade-All"
 TOOLS="brew mas git sudo defaults mdutil socketfilterfw softwareupdate open aerospace osascript arch chezmoi curl uname"
 
 # The sandbox: stand-ins logging to $BATS_TEST_TMPDIR/tool.log, a fixture config copy, a

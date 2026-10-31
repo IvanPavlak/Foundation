@@ -256,14 +256,37 @@ link it, or links another one of the same name.
 
 **Solution:** `List-AiArtifacts --list-discrepancies` names what is missing. The usual causes:
 
-1. Its source folder is not read: only `own`, `foundation`, `example` and the `[sections]` of
-   `ai-artifacts.conf` are (WinuX's `winux` folder never is on a Mac). Move the item into `own`.
-2. Another source carries the same name: `own` wins, then the first source by name, with a
-   `Duplicate ...` warning. Rename one, or `exclude KIND/SOURCE/NAME` the one you do not want.
-3. An `exclude` line names it.
-4. No harness of the `deploy` line takes that kind, or the item has none of the files the
+1. Its source folder is not read: only `own`, `foundation`, `example` and the vendored
+   `[sections]` of `ai-artifacts.conf` are (WinuX's `winux` folder never is on a Mac). Move the item
+   into `own`.
+2. Another source carries the same name: the first in precedence wins (own, checkout sources,
+   foundation, example, vendored sources, manifest rows), with a `Duplicate ...` warning. Rename
+   one, or `exclude KIND/SOURCE/NAME` the one you do not want.
+3. An `exclude` line names it, or the AI profile's `include` lines name other items of its kind.
+4. A manifest row: `... is not fetched yet` means its clone is not in the cache (run
+   `Update-AiArtifacts NAME`; the first deploy fetches every missing pin itself, one
+   `[NAME] fetching OWNER/REPO@REF` line each, which takes a while but is never repeated); a row whose scope does not name the machine's profile is skipped on
+   purpose; a `repo:NAME` row goes into that repository's `.claude/skills/`, not the harnesses.
+5. No harness of the `deploy` line takes that kind, or the item has none of the files the
    destination names (`codex.toml` for Codex agents, for instance): add the variant to the item.
-5. A rules item: only the `use rules NAME` line's item is linked, and the last such line wins.
+6. A rules item: only the `use rules NAME` line's item is linked (the AI profile's `rules` line
+   when there is one), and the last such line wins.
+
+### Test-AiProfile Reports A Mismatch
+
+**Problem:** `Test-AiProfile` exits 1.
+
+**Solution:** each error line names its cause:
+
+1. `signed in to another organization`: Claude Code's login belongs to another Plan. Run
+   `Initialize-AiProfile` (or `/login` in Claude Code) and pick the organization the profile's
+   `plan` line names; every open session keeps its old login until it restarts.
+2. `The managed settings ... pin [...]` or `are not deployed`: run `Deploy-AiArtifacts`; the copy is
+   rewritten whenever its rendering differs.
+3. `... is set in ...`: a pay-per-use credential would bypass the Plan. Remove the line from that
+   file (or `launchctl unsetenv NAME`) and open a new shell.
+4. `AI profile: ... is no section`: `FOUNDATION_AI_PROFILE` or a `host` line names a profile that
+   `ai-profiles.conf` does not define; `Test-ConfigurationSchema` reports it too.
 
 ### A Mod Does Not Appear In Claude Code
 

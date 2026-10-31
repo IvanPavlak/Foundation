@@ -52,10 +52,10 @@ link_all() {
 @test "lists every item grouped by kind and source with its description and path" {
 	run "${BASH:-bash}" "$cmd"
 	[ "$status" -eq 0 ]
-	[[ $output == *"[skills - own]"*"alpha-skill"*"Does the alpha thing."*"Path => AI/Skills/own/alpha-skill"* ]]
-	[[ $output == *"[skills - vendor]"*"gamma-skill"* ]]
-	[[ $output == *"[mods - own]"*"neon"*"Draws a band."* ]]
-	[[ $output == *"[rules - own]"*"Core"*"The core rules."* ]]
+	[[ $output == *"[skills - own (own)]"*"alpha-skill"*"Does the alpha thing."*"Path => AI/Skills/own/alpha-skill"* ]]
+	[[ $output == *"[skills - vendor (vendored)]"*"gamma-skill"* ]]
+	[[ $output == *"[mods - own (own)]"*"neon"*"Draws a band."* ]]
+	[[ $output == *"[rules - own (own)]"*"Core"*"The core rules."* ]]
 	[[ $output != *"not-a-skill"* ]]
 	[[ $output == *"5 item(s)"* ]]
 }
@@ -191,4 +191,29 @@ link_all() {
 	run "${BASH:-bash}" "$cmd" --list-discrepancies
 	[ "$status" -eq 1 ]
 	[[ $output == *"Duplicate item name: skills/alpha-skill is in [vendor] and [own]"* ]]
+}
+
+@test "checkout and manifest sources are listed with their kind; a manifest row outside the profile's scope is not" {
+	sha=0123456789abcdef0123456789abcdef01234567
+	export FOUNDATION_AI_MANIFEST_CACHE=$BATS_TEST_TMPDIR/cache
+	mkdir -p "$BATS_TEST_TMPDIR/checkout/skills/delta-skill" "$FOUNDATION_AI_MANIFEST_CACHE/up/r/$sha/s/epsilon" "$FOUNDATION_AI_MANIFEST_CACHE/up/r/$sha/s/zeta"
+	printf -- '---\nname: delta-skill\ndescription: Delta.\n---\n' >"$BATS_TEST_TMPDIR/checkout/skills/delta-skill/SKILL.md"
+	printf -- '---\nname: epsilon\ndescription: Epsilon.\n---\n' >"$FOUNDATION_AI_MANIFEST_CACHE/up/r/$sha/s/epsilon/SKILL.md"
+	printf -- '---\nname: zeta\ndescription: Zeta.\n---\n' >"$FOUNDATION_AI_MANIFEST_CACHE/up/r/$sha/s/zeta/SKILL.md"
+	printf 'name\tkind\tscope\tsource\tref\tpath\tinstall\nepsilon\tskills\t*\thttps://github.com/up/r\t%s\ts/epsilon\tclone\nzeta\tskills\tWork\thttps://github.com/up/r\t%s\ts/zeta\tclone\n' "$sha" "$sha" >"$BATS_TEST_TMPDIR/m.tsv"
+	printf '[pm]\ncheckout %s\nmanifest %s\n' "$BATS_TEST_TMPDIR/checkout" "$BATS_TEST_TMPDIR/m.tsv" >>"$FOUNDATION_CONFIG_DIR/ai-artifacts.conf"
+	printf 'default Personal\n[Personal]\n[Work]\n' >"$FOUNDATION_CONFIG_DIR/ai-profiles.conf"
+	run "${BASH:-bash}" "$cmd" --kind skills
+	[ "$status" -eq 0 ]
+	[[ $output == *"[skills - pm (checkout)]"*"delta-skill"* ]]
+	[[ $output == *"[skills - up (manifest)]"*"epsilon"* ]]
+	[[ $output != *zeta* ]]
+	FOUNDATION_AI_PROFILE=Work run "${BASH:-bash}" "$cmd" --kind skills --quiet
+	[[ $output == *zeta* ]]
+}
+
+@test "an AI profile's include and exclude lines shape the list" {
+	printf 'default P\n[P]\ninclude skills/alpha-skill skills/gamma-skill\nexclude skills/gamma-skill\n' >"$FOUNDATION_CONFIG_DIR/ai-profiles.conf"
+	run "${BASH:-bash}" "$cmd" --kind skills --quiet
+	[ "$output" = alpha-skill ]
 }

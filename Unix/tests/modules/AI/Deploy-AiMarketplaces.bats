@@ -197,3 +197,23 @@ json() {
 	[[ $output == *"claude plugin marketplace add [MyOrg/MyMarketplace] failed"* ]]
 	grep -qxF "plugin install my-plugin@my-marketplace" "$BATS_TEST_TMPDIR/claude.log"
 }
+
+@test "an AI profile's marketplaces line picks the sections; plugin sections are always written" {
+	printf '[other]\nrepository MyOrg/Other\n[plugin:folder-mod]\noption size 3\n' >>"$FOUNDATION_CONFIG_DIR/ai-marketplaces.conf"
+	printf 'default P\n[P]\nmarketplaces other\n' >"$FOUNDATION_CONFIG_DIR/ai-profiles.conf"
+	run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	[[ $output == *"Marketplace [my-marketplace] is not one of the AI profile's - skipped"* ]]
+	[ "$(json 'sorted(d["extraKnownMarketplaces"])')" = '["other"]' ]
+	[ "$(json 'd["pluginConfigs"]["folder-mod"]["options"]')" = '{"size": 3}' ]
+}
+
+@test "a bare marketplaces line installs none; no marketplaces line installs all" {
+	printf 'default P\n[P]\nmarketplaces\n' >"$FOUNDATION_CONFIG_DIR/ai-profiles.conf"
+	run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	[ ! -e "$settings" ] || [ "$(json 'd.get("extraKnownMarketplaces", {})')" = '{}' ]
+	printf 'default P\n[P]\n' >"$FOUNDATION_CONFIG_DIR/ai-profiles.conf"
+	run "${BASH:-bash}" "$cmd"
+	[ "$(json 'sorted(d["extraKnownMarketplaces"])')" = '["my-marketplace"]' ]
+}

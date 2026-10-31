@@ -19,6 +19,7 @@ Adds the MCP servers of `ai-mcp-servers.conf` to Claude Code (through its CLI, a
 | [`ai-mcp-servers.conf`](../../configuration.md#files) | `arg VALUE` | none | One argument of the command, in order |
 | [`ai-mcp-servers.conf`](../../configuration.md#files) | `env NAME VALUE` | none | One variable a stdio server reads |
 | [`ai-mcp-servers.conf`](../../configuration.md#files) | `machine TYPE...` | every machine type | The machine types the server is for (an `@TYPE` prefix on a line works too) |
+| [`ai-profiles.conf`](../../configuration.md#ai-profilesconf) | `mcp NAME...` of the machine's `[Profile]` | no line: every server | With a profile: the servers it registers (a bare `mcp` line: none); a server registered earlier that the list drops is removed |
 
 The apps' own files are not configuration: `~/.claude.json` (`$CLAUDE_CONFIG_DIR/.claude.json` when set) is only read, since the `claude` CLI writes it; in `~/.codex/config.toml` (`$CODEX_HOME/config.toml` when set) only the `[mcp_servers.<name>]` tables of the configured servers are written and every other line is kept.
 

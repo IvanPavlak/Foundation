@@ -82,11 +82,12 @@ takes `@TYPE`. What the base files ship:
 | `docker.conf`, `conda-environments.conf` | the PostgreSQL stack, timeouts, cleanup actions; the macOS folder | its stacks; its `env` lines |
 | `special-folders.conf` | the line kinds and a commented example, no folder | its `folder` lines (Dotfiles: Downloads and Screenshots on the Desktop) |
 | `language.conf` | the line kinds and a commented example, no entries | its display languages, locales, keyboard layouts and sets, and its defaults |
-| `ai-artifacts.conf` | `use rules CoreAiRules` (the example rules) and a commented source example; no `deploy` line, no source | its `deploy` lines, sources, `exclude` and `use` lines (Dotfiles: Claude Code, Codex and Gemini CLI, the mattpocock skills, its own rules) |
+| `ai-artifacts.conf` | `use rules CoreAiRules` (the example rules) and commented source examples; no `deploy` line, no source | its `deploy` lines, sources, `exclude` and `use` lines (Dotfiles: Claude Code, Codex and Gemini CLI, a local skills repository as a checkout and a manifest source, its own rules) |
+| `ai-profiles.conf` | the line kinds and a commented example; no profile, so profiles are off | its `host`, `default`, `shared` and `default-owner` lines and one `[Profile]` section each (Dotfiles: `Personal` by default, `Work` for one named host) |
 | `ai-harnesses.conf` | the inactive catalogue: `claude-code`, `codex`, `gemini-cli`, `copilot` | a section of its own for another app, or one replacing a base harness |
 | `ai-marketplaces.conf`, `wake-on-lan.conf`, `pdfs.conf`, `dnd.conf` | a commented example, no entries | its marketplaces and `[plugin:NAME]` sections, machines, PDF groups and campaigns |
 | `package-pins.conf` | the line kind and a commented example, no pin | its `brew FORMULA` lines |
-| `ai-mcp-servers.conf` | the line kinds and a commented example; no `deploy` line, no server | its `deploy` line and servers (Dotfiles: Linear and Supermemory into Claude Code and Codex) |
+| `ai-mcp-servers.conf` | the line kinds and a commented example; no `deploy` line, no server | its `deploy` line and servers (Dotfiles: Linear, Supermemory, Appllama, Mobbin, Awwwards and Playwright into Claude Code and Codex, which its AI profiles pick from) |
 | `greeting.conf` | the clear and fastfetch settings, onefetch off with no arguments, separator or colors (WinuX's base), no `image-logo` (every machine type shows the text logo of its fastfetch config) | its `@TYPE image-logo` lines; `onefetch on` with its arguments, separator and colors |
 | `spinners.conf` | the 19 styles of WinuX's base verbatim, plus Bounce | styles it changes |
 | `shell.conf` | the line kinds and a commented example, no setting: zsh keeps its own keys and history options | its line-editing values (Dotfiles: WinuX's effective PSReadLine block - `history-size 32767`, `edit-mode windows`, prefix search on the arrows, no duplicates, incremental saving, case-insensitive Tab, the prediction list in its own colours) |
@@ -113,9 +114,10 @@ layout file in the set (and the set folder when it is missing, as on Windows).
 | `vscode-profiles.conf` | `VSCodeProfiles` | Deploy-VSCodeProfiles (Bootstrap's VSCodeProfiles step), Export-VSCodeProfile |
 | `browser-groups.conf` | `BrowserGroups` | Open-Browser, Invoke-Browser |
 | `ai-artifacts.conf` | `AiArtifacts` | Deploy-AiArtifacts (Bootstrap's AiArtifacts step), Update-AiArtifacts, List-AiArtifacts, Test-ConfigurationSchema |
-| `ai-harnesses.conf` | WinuX's `AiHarnesses` | Deploy-AiArtifacts, List-AiArtifacts, Test-ConfigurationSchema |
+| `ai-harnesses.conf` | WinuX's `AiHarnesses` | Deploy-AiArtifacts, List-AiArtifacts, Test-AiProfile, Test-ConfigurationSchema |
+| `ai-profiles.conf` | `AiProfiles` | Deploy-AiArtifacts, Deploy-AiMcpServers, Deploy-AiMarketplaces, List-AiArtifacts, Update-AiArtifacts, Test-AiProfile, Initialize-AiProfile, Test-ConfigurationSchema |
 | `ai-marketplaces.conf` | `AiMarketplaces.Marketplaces`, `AiMarketplaces.PluginConfigs` (a `[plugin:NAME]` section for a plugin no marketplace lists) | Deploy-AiMarketplaces (Bootstrap's AiMarketplaces step) |
-| `ai-mcp-servers.conf` | `AiMcpServers.Deploy` (`deploy`), `AiMcpServers.Servers` (one section per server; `machine` for `Machine`) | Deploy-AiMcpServers (Bootstrap's AiMcpServers step) |
+| `ai-mcp-servers.conf` | `AiMcpServers.Deploy` (`deploy`), `AiMcpServers.Servers` (one section per server; `machine` for `Machine`) | Deploy-AiMcpServers (Bootstrap's AiMcpServers step), Test-AiProfile, Initialize-AiProfile |
 | `backups.conf` | `Backups.Retention` | Clear-OldBackups, every backup |
 | `apps.conf` | `Universal.Browsers` (and the former MacOSApplicationMap of the removed PowerShell port) | every launcher, the drivers, Kill-All |
 | `logging.conf` | `Logging.DefaultLevel` (`level`), `Logging.Colors` (`color STYLE COLOR`), `Logging.FileLogging` (`directory`, `error-file`, the retention), `Logging.Maintenance` (`maintenance`, `maintenance-interval-hours`) | every command (console level and colours, session and error logs), Clear-OldLogs, Get-LogPath, Protect-Log, Invoke-LogMaintenance |
@@ -703,6 +705,11 @@ repository  OWNER/skills
 ref         main
 skills      skills/engineering skills/productivity
 skip        .git tests
+
+[myskills]
+checkout    $DEV/MySkills
+skills      skills
+manifest    $DEV/MySkills/third-party/manifest.tsv
 ```
 
 ```
@@ -718,6 +725,11 @@ repository), `deploy HARNESS...` (the last for the machine type wins; none deplo
 destination of that kind links; the last per kind wins). Each `[section]` is a vendored source:
 `repository OWNER/NAME`, `ref REF` (default `main`), one `KIND PATH...` line per kind it feeds (none:
 `skills skills`), `exclude ITEM...`, `skip NAME...` (default `.git .github tests design docs`).
+A section with a `checkout PATH` line is a checkout source instead: the items under its kind
+folders (`KIND FOLDER...` relative to PATH, `skills skills` without one) are linked from that
+repository in place. A `manifest FILE` line makes it a manifest source: the rows of that file (the
+format is on [AI on a Mac](ai.md#manifest-sources)) are linked from their pinned clones in the
+cache. One section can be both; a section with neither (or with a `repository` line) is vendored.
 
 Each section of `ai-harnesses.conf` is an app, one `KIND PLACEMENT FILES [+HOOK...] PATH` line per
 destination: `each`, `copy` or `file`; the files to take from an item, the first it has (`.` for
@@ -726,8 +738,43 @@ mechanism, the base catalogue and the sources each folder was checked against ar
 [AI on a Mac](ai.md). Test-ConfigurationSchema reports a `deploy` name that is no section, a
 malformed destination line, an unknown hook and a malformed `exclude` or `use` line.
 
+### ai-profiles.conf
+
+```
+host My-Work-Mac Work
+default Personal
+default-owner Personal
+shared github.com/myuser/dotfiles
+
+[Personal]
+rules         Personal
+plan          Max 00000000-0000-0000-0000-000000000000
+unattended    on
+autonomous    github.com/myuser/myproject
+
+[Work]
+rules         Work
+plan          Team 11111111-1111-1111-1111-111111111111
+mcp
+exclude       skills/my-personal-skill
+owns          github.com/my-org/*
+```
+
+Before the first section: `host NAME PROFILE` (the profile of the Mac whose local hostname is NAME,
+compared without case), `default PROFILE`, `shared PATTERN...` and `default-owner PROFILE`. Each
+`[Profile]` section: `rules NAME` (wins over `use rules`), `plan NAME UUID...`, `deploy
+HARNESS...` (wins over the `deploy` line of `ai-artifacts.conf`), `include KIND/NAME...` (a kind
+named deploys only those items), `exclude KIND/NAME...`, `mcp NAME...` and `marketplaces NAME...`
+(no line: all; a bare line: none), `unattended on|off` (default off), `owns PATTERN...`,
+`autonomous PATTERN...` and `env NAME...`. A PATTERN is a shell glob on the `origin` remote
+normalised to `host/owner/name`. With no section, profiles are off and every AI command behaves as
+without the file. `FOUNDATION_AI_PROFILE` overrides the host and default lines for one shell. The
+mechanism is on [AI on a Mac](ai.md#profiles); Test-ConfigurationSchema reports a `host`, `default`
+or `default-owner` line naming no profile, an unknown line kind, a malformed `plan` UUID, and a
+`deploy`, `mcp` or `marketplaces` name that is no section of its file.
+
 ## State
 
 `$XDG_STATE_HOME/foundation` (default `~/.local/state/foundation`) holds `open-workspaces`, the ownership
 record Close-Workspace uses, `WorkspaceBenchmark.csv` (one row per workspace open with its early-move mode, its mode - Plain or Alongside - and the layout's attempts, older files gaining the newer columns on the next write, read by Get-WorkspaceBenchmark, written only with `benchmark on`; `benchmark`, `benchmark-display`, `benchmark-history`, `layout-early-move` and `layout-stable-ms` are set at the top of `workspaces.conf`), `WorkspaceOpenMeasurements.csv` (the runs of Measure-WorkspaceOpen with their layout attempts, its sessions listed by `Measure-WorkspaceOpen --list-sessions`), `browser-groups` (the window each group opened, so a rerun skips
-it), `terminal-windows` (the WezTerm window each `Open-Terminal --window-id NAME` opened) and `current-layout`. Nothing there is configuration.
+it), `terminal-windows` (the WezTerm window each `Open-Terminal --window-id NAME` opened), `current-layout` and `ai-mcp-servers.state` (the MCP servers Deploy-AiMcpServers registered per app under an AI profile, so it removes only those). Nothing there is configuration. The pinned clones of the AI manifest sources live in `$XDG_DATA_HOME/foundation/ai-manifests` (default `~/.local/share/foundation/ai-manifests`), outside every repository.

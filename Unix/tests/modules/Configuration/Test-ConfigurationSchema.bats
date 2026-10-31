@@ -209,3 +209,26 @@ setup() {
 	[[ $output == *"theme.conf: list-color date: [orange] is not a colour"* ]]
 	[[ $output != *"list-color user"* ]]
 }
+
+@test "ai-profiles.conf: names that are no profile, harness, server or marketplace, a bad UUID and an unknown line are problems" {
+	cfg=$FOUNDATION_CONFIG_DIR
+	printf '[one]\nskills each . ~/one\n' >"$cfg/ai-harnesses.conf"
+	printf '[linear]\nurl https://mcp.linear.app/mcp\n' >"$cfg/ai-mcp-servers.conf"
+	printf 'host My-Mac Nope\ndefault Personal\ndefault-owner Ghost\nbogus x\n[Personal]\nplan Max not-a-uuid\ndeploy two\nmcp linear nope\nmarketplaces none\nunattended maybe\ninclude tdd\nwhatever 1\n' >"$cfg/ai-profiles.conf"
+	run "${BASH:-bash}" "$cmd" --strict --quiet
+	[ "$status" -eq 1 ]
+	[[ $output == *"host [My-Mac Nope] names no profile section"* ]]
+	[[ $output == *"default-owner [Ghost] names no profile section"* ]]
+	[[ $output == *"unknown line before the first section => bogus x"* ]]
+	[[ $output == *"plan UUID [not-a-uuid] is not a UUID"* ]]
+	[[ $output == *"deploy names [two]"* ]]
+	[[ $output == *"mcp names [nope]"* ]]
+	[[ $output != *"mcp names [linear]"* ]]
+	[[ $output == *"marketplaces names [none]"* ]]
+	[[ $output == *"unattended is on or off"* ]]
+	[[ $output == *"include [tdd] is not KIND/NAME"* ]]
+	[[ $output == *"unknown line => whatever 1"* ]]
+	printf 'default Personal\n[Personal]\nplan Max 00000000-0000-0000-0000-000000000000\ndeploy one\nmcp linear\nmcp\nunattended on\nowns github.com/me/*\n' >"$cfg/ai-profiles.conf"
+	run "${BASH:-bash}" "$cmd" --quiet
+	[[ $output != *ai-profiles.conf* ]]
+}

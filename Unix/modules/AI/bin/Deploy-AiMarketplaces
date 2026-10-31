@@ -38,6 +38,10 @@
 # pluginConfigs.<plugin>@<section>. A development clone belongs in `claude --plugin-dir` for one
 # session instead.
 #
+# With an AI profile (ai-profiles.conf), its `marketplaces NAME...` lines pick the marketplace
+# sections (no marketplaces line: all of them; a bare one: none); the [plugin:NAME] sections are
+# always written.
+#
 # --check (--dry-run, the Windows -WhatIf) reports the current state and changes nothing.
 _foundation=${BASH_SOURCE[0]}
 while [ -L "$_foundation" ]; do
@@ -46,7 +50,7 @@ while [ -L "$_foundation" ]; do
 done
 . "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
 foundation_require_bash || exit 1
-foundation_load config
+foundation_load config aiprofile
 
 # The Claude Code CLI; FOUNDATION_CLAUDE_CLI names another executable (the test suites set a name that
 # never exists, or their stand-in), since foundation.sh puts Homebrew back on any trimmed PATH.
@@ -82,7 +86,16 @@ for argument in "$@"; do
 	esac
 done
 
+ai_profile_load
+[ $? -ne 2 ] || foundation_die "AI profile: $AI_PROFILE_ERROR"
+# The AI profile's marketplaces, one per line between newlines; empty: every section.
+picked=''
+if [ -n "$AI_PROFILE" ] && ai_profile_has marketplaces; then
+	picked=$'\n'$(ai_profile_words marketplaces | tr '[:upper:]' '[:lower:]')$'\n'
+fi
+
 log_title "Deploy-AiMarketplaces"
+[ -z "$AI_PROFILE" ] || log_step "AI profile: $AI_PROFILE (by $AI_PROFILE_HOW)"
 file=$(conf_path ai-marketplaces.conf) || {
 	log_warning "No marketplaces configured (ai-marketplaces.conf) - nothing to deploy!"
 	exit 0
@@ -128,6 +141,10 @@ while IFS= read -r section; do
 					;;
 			esac
 		done <<<"$lines"
+		continue
+	fi
+	if [ -n "$picked" ] && [[ $picked != *$'\n'"${section,,}"$'\n'* ]]; then
+		log_step "Marketplace [$section] is not one of the AI profile's - skipped"
 		continue
 	fi
 	repository=$(printf '%s\n' "$lines" | awk '$1 == "repository" { print $2; exit }')

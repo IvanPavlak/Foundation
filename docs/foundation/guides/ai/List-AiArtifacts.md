@@ -16,6 +16,9 @@ reads them, or with `--list-discrepancies` what is not deployed.
 | [`ai-artifacts.conf`](../../configuration.md#ai-artifactsconf-and-ai-harnessesconf) | `[Source]`, `exclude KIND/NAME...` | none | Which source folders are read besides `own`, `foundation` and `example`, and which items are left out |
 | [`ai-artifacts.conf`](../../configuration.md#ai-artifactsconf-and-ai-harnessesconf) | `deploy HARNESS...`, `use KIND NAME` | none; `use rules CoreAiRules` | What `--list-discrepancies` expects deployed |
 | [`ai-harnesses.conf`](../../configuration.md#ai-artifactsconf-and-ai-harnessesconf) | `[Harness]` and its destination lines | the inactive catalogue | Where `--list-discrepancies` looks |
+| [`ai-artifacts.conf`](../../configuration.md#ai-artifactsconf-and-ai-harnessesconf) | `[Source]` with `checkout PATH` or `manifest FILE` | none | The checkout and manifest sources listed, with their kind |
+| [`ai-profiles.conf`](../../configuration.md#ai-profilesconf) | `[Profile]` and its `deploy`, `rules`, `include`, `exclude` lines | none: profiles off | With a profile: the items it deploys and the manifest rows of its scope |
+| [`repositories.conf`](../../configuration.md#repositoriesconf) | `NAME PATH-OR-URL DIR` | the repository itself | Where `--list-discrepancies` looks for the link of a `repo:NAME` manifest row |
 
 ## Decisions
 

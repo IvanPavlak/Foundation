@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+# Test-AiProfile - checks that this Mac's AI profile is the one it should run, that Claude Code is
+# signed in to that profile's Plan and pinned to it, and that no pay-per-use credential is set.
+#
+# Usage: Test-AiProfile
+#
+# Unix counterpart of Test-AiProfile (WinuX AI module). Prints, from Unix/config/ai-profiles.conf:
+#   - the profile and how it was picked: FOUNDATION_AI_PROFILE (override), a `host NAME PROFILE`
+#     line (hostname), else the `default` line;
+#   - the expected Plan (`plan NAME UUID...`) and the logged-in one, the oauthAccount block of
+#     ${CLAUDE_CONFIG_DIR:-~}/.claude.json (organizationUuid, organizationName), read only;
+#   - whether the deployed managed settings (the +managed-settings destination of the harnesses
+#     this machine deploys into, ai-harnesses.conf) pin that Plan in forceLoginOrgUUID;
+#   - every pay-per-use credential found, never its value: ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN
+#     and CLAUDE_CODE_OAUTH_TOKEN in this process, in the user's launchd environment (launchctl
+#     getenv), in the machine-wide shell files (/etc/zshenv, /etc/zprofile, /etc/zshrc, /etc/profile,
+#     /etc/bashrc) and in the shell profiles (~/.zshenv, ~/.zprofile, ~/.zshrc, ~/.zlogin,
+#     ~/.bash_profile, ~/.bashrc, ~/.profile), and apiKeyHelper in any Claude Code settings file
+#     (user, user local, managed, and the current folder's project files);
+#   - the profile's OAuth MCP servers (ai-mcp-servers.conf), which need their /mcp sign-in once;
+#     Claude Code keeps that sign-in in the keychain, so it is listed, not checked;
+#   - whether unattended runs are on.
+# Exit code: 0 when everything matches, 1 on any mismatch or credential found, 2 when no profile
+# is configured (profiles off). Changes nothing.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config aiprofile artifacts aimcp
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+for argument in "$@"; do
+	case $argument in
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument: $argument (Test-AiProfile takes none)" ;;
+	esac
+done
+
+log_title "Test-AiProfile"
+ai_profile_load
+case $? in
+	1)
+		log_warning "No AI profile is configured (ai-profiles.conf has no [Profile] section) - nothing to test"
+		exit 2
+		;;
+	2)
+		log_error "AI profile: $AI_PROFILE_ERROR"
+		exit 1
+		;;
+esac
+
+mismatches=0
+mismatch() {
+	log_error "$1"
+	mismatches=$((mismatches + 1))
+}
+
+log_step "Profile        : $AI_PROFILE (picked by $AI_PROFILE_HOW)"
+
+# The Plan: its name, then its org UUIDs.
+plan=()
+while IFS= read -r line; do [ -n "$line" ] && plan+=("$line"); done < <(ai_profile_plan)
+expected=" ${plan[*]:1} "
+if [ ${#plan[@]} -lt 2 ]; then
+	mismatch "The profile has no \`plan NAME UUID...\` line - nothing pins its Plan"
+else
+	log_step "Expected Plan  : ${plan[0]} (${plan[*]:1})"
+fi
+
+if org=$(ai_logged_in_org); then
+	IFS=$'\t' read -r org_uuid org_name <<<"$org"
+	log_step "Logged-in Plan : ${org_name:-unnamed organization} ($org_uuid)"
+	if [ ${#plan[@]} -ge 2 ]; then
+		if [[ $(foundation_lower "$expected") == *" $(foundation_lower "$org_uuid") "* ]]; then
+			log_success "Claude Code is signed in to the ${plan[0]} Plan"
+		else
+			mismatch "Claude Code is signed in to another organization than the ${plan[0]} Plan - /login with the right account (Initialize-AiProfile walks it)"
+		fi
+	fi
+else
+	mismatch "Claude Code is not signed in (no oauthAccount in ${CLAUDE_CONFIG_DIR:-~}/.claude.json) - run Initialize-AiProfile"
+fi
+
+# The managed settings: the first +managed-settings destination of the harnesses deployed into.
+managed=''
+while IFS= read -r harness; do
+	[ -n "$harness" ] || continue
+	while IFS=$'\t' read -r _ _ _ hooks path; do
+		[[ ,$hooks, == *,managed-settings,* ]] && [ -z "$managed" ] && managed=$path
+	done < <(ai_harness_destinations "$harness" 2>/dev/null)
+done < <(ai_deployed_harnesses)
+if [ -z "$managed" ]; then
+	mismatch "No harness of this machine deploys managed settings (+managed-settings in ai-harnesses.conf) - nothing pins the Plan"
+elif [ ! -f "$managed" ]; then
+	mismatch "The managed settings are not deployed ($managed) - run Deploy-AiArtifacts"
+else
+	pinned=$(
+		python3 - "$managed" <<'PY' 2>/dev/null
+import json, sys
+try:
+    value = json.load(open(sys.argv[1], encoding="utf-8")).get("forceLoginOrgUUID")
+except (OSError, ValueError, AttributeError):
+    sys.exit(1)
+values = [value] if isinstance(value, str) else (value if isinstance(value, list) else [])
+print(" ".join(str(v) for v in values))
+PY
+	) || pinned=''
+	if [ -z "$pinned" ]; then
+		mismatch "The managed settings ($managed) set no forceLoginOrgUUID - run Deploy-AiArtifacts"
+	elif [ ${#plan[@]} -ge 2 ] && [ "$(printf '%s\n' $pinned | tr '[:upper:]' '[:lower:]' | sort -u)" = "$(printf '%s\n' "${plan[@]:1}" | tr '[:upper:]' '[:lower:]' | sort -u)" ]; then
+		log_success "The managed settings pin the ${plan[0]} Plan"
+	else
+		mismatch "The managed settings pin [$pinned], not the profile's Plan - run Deploy-AiArtifacts"
+	fi
+fi
+
+# Pay-per-use credentials, by place; never a value.
+credentials=(ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN)
+for name in "${credentials[@]}"; do
+	[ -z "${!name+set}" ] || mismatch "$name is set in this shell's environment"
+	if command -v launchctl >/dev/null 2>&1 && [ -n "$(launchctl getenv "$name" 2>/dev/null)" ]; then
+		mismatch "$name is set in the user's launchd environment (launchctl unsetenv $name)"
+	fi
+done
+etc=${FOUNDATION_ETC_DIR:-/etc}
+for file in "$etc/zshenv" "$etc/zprofile" "$etc/zshrc" "$etc/profile" "$etc/bashrc" \
+	"$HOME/.zshenv" "$HOME/.zprofile" "$HOME/.zshrc" "$HOME/.zlogin" "$HOME/.bash_profile" "$HOME/.bashrc" "$HOME/.profile"; do
+	[ -r "$file" ] || continue
+	for name in "${credentials[@]}"; do
+		# An assignment or export of the name on a line that is not a comment.
+		if grep -vE '^[[:space:]]*#' "$file" 2>/dev/null | grep -qE "(^|[^A-Za-z0-9_])${name}[[:space:]]*=|export[[:space:]]+([^#]*[[:space:]])?${name}([[:space:]]|$)"; then
+			mismatch "$name is set in $file"
+		fi
+	done
+done
+claude_dir=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
+settings_files=("$claude_dir/settings.json" "$claude_dir/settings.local.json" "$PWD/.claude/settings.json" "$PWD/.claude/settings.local.json")
+[ -z "$managed" ] || settings_files+=("$managed")
+for file in "${settings_files[@]}"; do
+	[ -r "$file" ] || continue
+	if python3 - "$file" <<'PY' 2>/dev/null
+import json, sys
+try:
+    document = json.load(open(sys.argv[1], encoding="utf-8"))
+except (OSError, ValueError):
+    sys.exit(1)
+sys.exit(0 if isinstance(document, dict) and document.get("apiKeyHelper") else 1)
+PY
+	then
+		mismatch "apiKeyHelper is set in $file"
+	fi
+done
+
+# The OAuth MCP servers: listed, since their sign-in lives in the keychain.
+oauth=$(ai_profile_oauth_servers | paste -sd' ' -)
+[ -z "$oauth" ] || log_step "OAuth MCP      : $oauth (sign in once each with /mcp in Claude Code; not checked)"
+
+if ai_profile_unattended; then log_step "Unattended     : on"; else log_step "Unattended     : off"; fi
+
+if [ "$mismatches" -eq 0 ]; then
+	log_success "AI profile $AI_PROFILE matches: its Plan, its pin, no pay-per-use credential!"
+	exit 0
+fi
+log_error "AI profile $AI_PROFILE: $mismatches problem(s) found!"
+exit 1

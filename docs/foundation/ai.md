@@ -28,14 +28,83 @@ destination of an app names the files it takes, in order; the portable file is t
 The sources read, in this order, the first winning an item name two of them carry (with a warning):
 
 1. `own` - your own items, never touched by a refresh. It ships empty.
-2. Then, in name order: `foundation` (the product skills Foundation ships:
-   [foundation-configurator](foundation-configurator.md) and `document`, which turns a command's header into
-   its module page entry and guide), `example` (the example rules) and every vendored source, a
-   `[section]` of `ai-artifacts.conf` filled by [Update-AiArtifacts](modules/AI.md#update-aiartifacts).
+2. The checkout sources, in name order: a local repository linked in place (see
+   [Checkout sources](#checkout-sources)).
+3. `foundation` - the product skills Foundation ships: [foundation-configurator](foundation-configurator.md)
+   and `document`, which turns a command's header into its module page entry and guide.
+4. `example` - the example rules.
+5. The vendored sources, in name order: a `[section]` of `ai-artifacts.conf` copied under
+   `AI/<Kind>/<section>/` by [Update-AiArtifacts](modules/AI.md#update-aiartifacts).
+6. The manifest sources: the rows of a manifest, linked from pinned clones in a cache (see
+   [Manifest sources](#manifest-sources)); a row's source name is the owner of its upstream
+   repository.
 
 Any other source folder is not read: a repository that carries both halves keeps WinuX's product
 skills in `AI/Skills/winux/`, which only Windows deploys. Leave an item out with an `exclude` line:
 `exclude skills/tdd` drops it from every source, `exclude skills/foundation/document` from one.
+
+## Profiles
+
+An AI profile is what one machine runs: its rules, the Plan Claude Code must be signed in to, its
+harnesses and artifacts, its MCP servers and marketplaces, and the repositories it owns. Each
+machine runs exactly one. The profiles are the `[sections]` of `Unix/config/ai-profiles.conf`; the
+base ships none, so profiles are off and every AI command behaves as without the file. A fork
+writes its own in `ai-profiles.local.conf`:
+
+```
+host My-Work-Mac Work
+default Personal
+default-owner Personal
+shared github.com/myuser/dotfiles
+
+[Personal]
+rules         Personal
+plan          Max 00000000-0000-0000-0000-000000000000
+unattended    on
+autonomous    github.com/myuser/myproject
+
+[Work]
+rules         Work
+plan          Team 11111111-1111-1111-1111-111111111111
+mcp
+exclude       skills/my-personal-skill
+owns          github.com/my-org/*
+```
+
+Every AI command picks the profile once: `FOUNDATION_AI_PROFILE` (an override for one shell), then
+the last `host NAME PROFILE` line naming this Mac's local hostname, then the last `default` line.
+A machine type cannot pick it: the type is a layout choice. The `@TYPE` forms keep working inside
+and outside the profiles.
+
+| Line | Effect |
+| ---- | ------ |
+| `rules NAME` | the rules item the `file` destinations take; wins over `use rules` |
+| `plan NAME UUID...` | the Plan: a display name and the organization UUID(s); the managed settings copy sets `forceLoginOrgUUID` to them (one as a string, several as an array). A `plan` line without a valid UUID fails closed: the copy is not rendered and the deployed one keeps its pin |
+| `deploy HARNESS...` | the harnesses; wins over the `deploy` line of `ai-artifacts.conf` |
+| `include KIND/NAME...` | a kind named here deploys only these items (`KIND/SOURCE/NAME` for one source's); a kind not named deploys all of its items |
+| `exclude KIND/NAME...` | added to the `exclude` lines of `ai-artifacts.conf` |
+| `mcp NAME...` | the MCP servers it registers (no line: all; a bare `mcp` line: none); see [MCP servers](#mcp-servers) |
+| `marketplaces NAME...` | the marketplaces it installs (no line: all; a bare line: none) |
+| `unattended on\|off` | whether unattended runs are allowed (default off); written into `ai-profile.conf` for the tools that run them |
+| `owns PATTERN...`, `autonomous PATTERN...` | the repositories it owns, and those of them its rules let it merge in |
+| `env NAME...` | the environment variables it needs, checked by `Initialize-AiProfile` |
+
+Beside the profiles, `shared PATTERN...` names the repositories every profile may work on and
+`default-owner PROFILE` the owner of a repository no pattern matches. A PATTERN is a shell glob on
+the `origin` remote normalised to `host/owner/name`: lowercase, no scheme, no user, no `.git`
+(`github.com/my-org/*`).
+
+`Test-AiProfile` checks a machine: the profile and how it was picked, the expected and the
+logged-in Plan, whether the deployed managed settings pin that Plan, every pay-per-use credential
+(`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `apiKeyHelper`) and the
+OAuth MCP servers that need their sign-in; it exits 0 on a match, 1 on a mismatch and 2 without
+profiles. `Initialize-AiProfile` walks the sign-ins once per machine (Claude Code, the GitHub CLI,
+the OAuth MCP servers, the profile's environment variables) and ends with `Test-AiProfile`; every
+sign-in happens in the tool itself, so no secret passes through Foundation. It is also the
+Bootstrap step `AiProfileInit`, off by default and run right after `AiMcpServers`, so the Plan pin
+is deployed before the login is checked: `step AiProfileInit on` in `bootstrap.local.conf` makes a
+fresh Mac end its run signed in. The step waits at the terminal, so a run with it off stays
+unattended and, with a profile active, only warns and names `Initialize-AiProfile`.
 
 ## Harnesses
 
@@ -55,7 +124,7 @@ Each line of a section is one destination, `KIND PLACEMENT FILES [+HOOK...] PATH
 | `KIND` | `skills`, `mods`, `rules`, `prompts` or `agents` |
 | `PLACEMENT` | `each`: PATH is a folder, one link per item; `copy`: the same, copied (for an app that does not follow links); `file`: PATH is one file, linked to the item a `use KIND NAME` line names |
 | `FILES` | comma-separated, the first one the item has: `.` is the item folder itself (linked as `<item>`), a file name is that file (linked as `<item>` plus the file's extension: `claude.md` as `<item>.md`, `copilot.agent.md` as `<item>.agent.md`); an item with none of them is left out of this destination |
-| `+HOOK` | `+claude-plugin-dirs`: sets `env.CLAUDE_CODE_PLUGIN_DIRS` of `~/.claude/settings.json` to the links, **joined with `:`** (Windows joins with `;`), then every entry added by hand, and runs `claude plugin validate` on each (a missing or rejecting CLI only warns); `+managed-settings`: makes the link through sudo |
+| `+HOOK` | `+claude-plugin-dirs`: sets `env.CLAUDE_CODE_PLUGIN_DIRS` of `~/.claude/settings.json` to the links, **joined with `:`** (Windows joins with `;`), then every entry added by hand, and runs `claude plugin validate` on each (a missing or rejecting CLI only warns); `+managed-settings`: writes a root-owned rendered copy through sudo, never a link (see [Rules](#rules)) |
 | `PATH` | the rest of the line, spaces allowed; `~` and `$VARIABLES` expand |
 
 A destination two harnesses name (Codex, Gemini CLI and Copilot all read `~/.agents/skills`) is
@@ -121,13 +190,39 @@ A rules item is a folder `AI/Rules/<source>/<Name>/` with `RULES.md` (the instru
 each app's global instruction file) and any per-app variants. Claude Code's managed settings, which
 outrank every project and user setting, are the `managed-settings.json` variant: only the
 `claude-code` harness takes it, through sudo (`+managed-settings`), so the AiArtifacts step shares
-Bootstrap's one administrator prompt; without sudo that link is reported as skipped and the run
-fails. A rules item without that file leaves the destination alone.
+Bootstrap's one administrator prompt; without sudo it is reported as skipped and the run fails. A
+rules item without that file leaves the destination alone.
+
+The managed settings are a root-owned copy, never a link (a link into the repository would let
+anything that can write the repository loosen the policy): `root:wheel`, mode 644, rewritten only
+when the rendered content differs. Rendering replaces the token `{ManagedDir}` with the folder of
+the destination (`/Library/Application Support/ClaudeCode`); with an AI profile it also sets
+`forceLoginOrgUUID` from the profile's Plan and appends the ownership guard to
+`hooks.UserPromptSubmit` and `hooks.PreToolUse` (matcher `*`) as
+`bash "{ManagedDir}/ai-ownership-guard.sh" <Event>`. Next to it the deploy writes the rules item's
+`hooks/` folder (as `hooks/`) and, with a profile, the engine's `ai-ownership-guard.sh`
+(`AI/Hooks/ai-ownership-guard.sh`, a mirror file WinuX ships at the same path) and `ai-profile.conf`:
+
+```
+# Written by Deploy-AiArtifacts from the AI profile configuration; do not edit.
+profile Personal
+default-owner Personal
+unattended on
+plan Max 00000000-0000-0000-0000-000000000000
+shared github.com/myuser/dotfiles
+owns Work github.com/my-org/*
+autonomous github.com/myuser/myproject
+```
+
+The guard refuses a prompt or a tool call in a repository another profile owns (its `origin`
+matched against `shared`, then `owns`, then `default-owner`); outside a repository it allows. The
+`autonomous` lines are the active profile's only.
 
 Only a `use rules NAME` line makes a `file` destination link anything, and the last one wins. The
 base ships `AI/Rules/example/CoreAiRules/` (a skeleton: headings and one sample rule) and
 `use rules CoreAiRules`; a fork writes its own `AI/Rules/own/CoreAiRules/`, which wins the name
-clash, and silences the clash warning with `exclude rules/example/CoreAiRules`.
+clash, and silences the clash warning with `exclude rules/example/CoreAiRules`. With an AI profile,
+its `rules NAME` line wins over the `use rules` line, so each profile can carry its own item.
 
 ## Deploying
 
@@ -169,6 +264,59 @@ folders into `AI/<Kind>/<section>/`, writing an `UPSTREAM.md` per kind folder (t
 `Update-AiArtifacts` writes) and the upstream license. The line kinds are on
 [Configuration](configuration.md#ai-artifactsconf-and-ai-harnessesconf).
 
+## Checkout sources
+
+A section with a `checkout PATH` line links the items of a local repository straight from its
+working tree, never copied and without an `UPSTREAM.md`, so a pull of that repository updates them
+at once:
+
+```
+[myskills]
+checkout    $DEV/MySkills
+skills      skills
+```
+
+The kind lines name the folders relative to PATH (`skills skills` without one); a skills folder
+that holds no `SKILL.md` is looked into once, as a category level. A path that is not on this
+machine is a warning and its items are skipped.
+
+## Manifest sources
+
+A section with a `manifest FILE` line reads a manifest: a UTF-8, tab-separated file with one
+header row, `#` comment lines and blank lines ignored, and one row per item with these columns:
+
+| Column | Meaning |
+| ------ | ------- |
+| `name` | the item's folder name in its source, and its installed name unless `rename=` gives another |
+| `kind` | `skills`, `mods`, `rules`, `prompts` or `agents` |
+| `scope` | `*` (every profile, and machines without profiles), profile names separated by commas, or `repo:<name>` for a repository-scoped item |
+| `source` | `https://github.com/<owner>/<repo>` |
+| `ref` | a full commit SHA, never a branch |
+| `path` | the item's folder inside the source |
+| `install` | `clone`, optionally followed by `rename=<new-name>` and/or `strip-invocation-guard` (removes `disable-model-invocation` from `SKILL.md`, so agents can call the skill) |
+
+`Deploy-AiArtifacts` (so Bootstrap's AiArtifacts step on a fresh machine) and `Update-AiArtifacts NAME` clone each in-scope `source` at its `ref` once into
+`~/.local/share/foundation/ai-manifests/<owner>/<repo>/<ref>/` (`$XDG_DATA_HOME` when set),
+outside every repository, through git (only the pinned commit, a shallow fetch by id; the full clone
+only when the server refuses that), so a private upstream uses git's own stored credentials; git's
+prompt is off (`GIT_TERMINAL_PROMPT=0`), so one it cannot sign in to fails at once instead of
+waiting, and each fetch is logged as it starts (`[NAME] fetching OWNER/REPO@REF`); a clone
+already there is never fetched again, so a redeploy needs no network. `Deploy-AiArtifacts --check`
+fetches nothing, and a row whose fetch fails is a warning: its item is left out until a later run
+fetches it. A `strip-invocation-guard`
+or a `rename=` row is linked from a derived copy, `<ref>.derived/<installed-name>/`, made next to
+the clone: `disable-model-invocation` taken out of its `SKILL.md` frontmatter, and for a rename
+`name:` set to the new name, since Claude Code names a skill by its frontmatter, not its folder. Only the rows
+whose scope includes the active profile are deployed. A `repo:<name>` row is a skill linked into
+that repository's `.claude/skills/` (the repository found by name in `repositories.conf`), and its
+link name is added to the repository's `.git/info/exclude`, so nothing is committed.
+`Update-AiArtifacts --check` reports every row whose upstream default branch has moved past its
+pin and changes nothing; a row is updated by changing its `ref` in the manifest.
+
+A section can be a checkout and a manifest source at once, the usual shape for a repository that
+develops its own skills and pins third-party ones. A manifest row's source name is the owner of its
+upstream repository, so `exclude skills/OWNER/NAME` leaves out exactly that row.
+
 ## Marketplaces
 
 Marketplaces are not an artifact kind: their plugins install through Claude Code's own CLI.
@@ -208,7 +356,7 @@ url               https://api.example.com/mcp
 bearer-token-env  MY_API_KEY
 ```
 
-It adds each server to Claude Code with `claude mcp add --scope user` (removing and adding again one `~/.claude.json` carries with another definition, leaving alone one it carries as configured) and writes each server's `[mcp_servers.<name>]` table into the Codex `config.toml`, every other line kept. A `bearer-token-env` line names the variable holding a key, so no secret is written; a server that signs in with OAuth needs `/mcp` in Claude Code and `codex mcp login <name>` once per machine. Servers are added and updated, never removed. The line kinds are on the [Deploy-AiMcpServers guide](guides/ai/Deploy-AiMcpServers.md).
+It adds each server to Claude Code with `claude mcp add --scope user` (removing and adding again one `~/.claude.json` carries with another definition, leaving alone one it carries as configured) and writes each server's `[mcp_servers.<name>]` table into the Codex `config.toml`, every other line kept. A `bearer-token-env` line names the variable holding a key, so no secret is written; a server that signs in with OAuth needs `/mcp` in Claude Code and `codex mcp login <name>` once per machine. Without an AI profile servers are added and updated, never removed. With one, its `mcp` lines pick the servers, `Deploy-AiMcpServers` records those it registered per app in `$XDG_STATE_HOME/foundation/ai-mcp-servers.state` and removes a recorded server the profile no longer lists; a configured server an app already carries exactly as configured counts as registered, and a server added any other way is never removed. The line kinds are on the [Deploy-AiMcpServers guide](guides/ai/Deploy-AiMcpServers.md).
 
 ## Verification (per machine, after enabling)
 
@@ -222,15 +370,16 @@ It adds each server to Claude Code with `claude mcp add --scope user` (removing 
 
 2. `List-AiArtifacts --list-discrepancies` reports nothing: every item is deployed into every
    destination of the harnesses turned on.
-3. The rules: `readlink ~/.claude/CLAUDE.md` and
-   `readlink "/Library/Application Support/ClaudeCode/managed-settings.json"` print paths inside
-   `AI/Rules/`.
+3. The rules: `readlink ~/.claude/CLAUDE.md` prints a path inside `AI/Rules/`;
+   `ls -l "/Library/Application Support/ClaudeCode/"` shows `managed-settings.json` (and, with a
+   profile, `ai-ownership-guard.sh` and `ai-profile.conf`) as real files owned by `root`.
 4. The mods: `python3 -c 'import json,os; print(json.load(open(os.path.expanduser("~/.claude/settings.json")))["env"]["CLAUDE_CODE_PLUGIN_DIRS"])'`
    prints the links under `~/.claude/mods`, `:`-separated; `claude plugin validate ~/.claude/mods/<mod>` passes.
 5. The marketplaces: `claude plugin marketplace list` names each configured marketplace and
    `claude plugin list` each of its plugins.
 6. The MCP servers: `claude mcp list` names each configured server (one waiting for its OAuth sign-in says so) and `grep '^\[mcp_servers\.' ~/.codex/config.toml` each Codex table.
-7. In a throwaway folder outside the repository, start a new session of each app (and restart the
+7. With AI profiles: `Test-AiProfile` exits 0 and names the expected profile and Plan.
+8. In a throwaway folder outside the repository, start a new session of each app (and restart the
    Claude desktop app for its Code tab) and confirm the skills (`/`), the mods, the plugins and the
    MCP servers' tools appear.
 

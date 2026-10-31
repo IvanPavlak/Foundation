@@ -5,9 +5,12 @@
 # Usage: List-AiArtifacts [--kind KIND...] [--source [NAME|NUMBER...]] [--name [PATTERN|NUMBER...]] [--list-discrepancies] [--quiet]
 #
 # The roster comes from disk, as Deploy-AiArtifacts reads it: every <root>/<Kind>/<source>/<item>
-# (`root` of ai-artifacts.conf, default AI) of the sources read (own first, then foundation,
-# example and the vendored sources in name order; the first wins an item name two carry), minus
-# the `exclude` lines, with the description of its frontmatter (a mod's plugin.json). --kind picks
+# (`root` of ai-artifacts.conf, default AI) of the sources read, the checkout sources' folders and
+# the manifest rows of the cache (precedence: own, checkout, foundation, example, vendored,
+# manifest; the first wins an item name two carry), minus the `exclude` lines and, with an AI
+# profile (ai-profiles.conf), its include and exclude lines and the manifest rows outside its
+# scope; each source is headed with its kind (own, checkout, product, example, vendored,
+# manifest), each item shows the description of its frontmatter (a mod's plugin.json). --kind picks
 # kinds (skills, mods, rules, prompts, agents), --source picks sources (own, mattpocock, ...),
 # --name filters item names (wildcards allowed, case-insensitive); --source and --name also take a
 # number (the position in the sorted list), and a bare --source or --name opens a menu. A filter
@@ -23,7 +26,7 @@ while [ -L "$_foundation" ]; do
 done
 . "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
 foundation_require_bash || exit 1
-foundation_load config skills artifacts
+foundation_load config skills aiprofile artifacts
 
 foundation_normalize_args "$@"
 set -- "${FOUNDATION_ARGS[@]}"
@@ -75,6 +78,9 @@ while [ $# -gt 0 ]; do
 done
 [ ${#kinds[@]} -gt 0 ] || read -r -a kinds <<<"$(ai_kinds)"
 
+ai_profile_load
+[ $? -ne 2 ] || foundation_die "AI profile: $AI_PROFILE_ERROR"
+
 root=$(ai_root)
 [ -d "$root" ] || foundation_die "Missing artifacts root $root"
 
@@ -120,10 +126,13 @@ except (OSError, ValueError, AttributeError):
 # The whole roster (KIND<TAB>SOURCE<TAB>ITEM<TAB>DIR, the winners only) and the duplicates dropped.
 all=()
 duplicates=()
+warnings=()
 for kind in "${kinds[@]}"; do
-	while IFS=$'\t' read -r source item dir kept; do
-		if [ "$source" = DUPLICATE ]; then
-			duplicates+=("$kind/$item is in [$(basename "$(dirname "$dir")")] and [$kept] - the one from [$kept] is the one deployed")
+	while IFS=$'\t' read -r source item dir kept loser; do
+		if [ "$source" = WARN ]; then
+			warnings+=("$item")
+		elif [ "$source" = DUPLICATE ]; then
+			duplicates+=("$kind/$item is in [$loser] and [$kept] - the one from [$kept] is the one deployed")
 		else
 			all+=("$kind"$'\t'"$source"$'\t'"$item"$'\t'"$dir")
 		fi
@@ -174,6 +183,7 @@ if [ "$discrepancies" -eq 1 ]; then
 			WARN) problem "$a" ;;
 			DEST)
 				placement=$b
+				hooks=$c
 				label=${d/#$HOME/\~}
 				if [ "$placement" != file ]; then
 					[ -d "$d" ] || problem "$label does not exist - run Deploy-AiArtifacts"
@@ -188,7 +198,18 @@ if [ "$discrepancies" -eq 1 ]; then
 			ITEM)
 				case $keep in *$'\n'"$a/$b"$'\n'*) ;; *) continue ;; esac
 				label=${d/#$HOME/\~}
-				if [ "$placement" = copy ]; then
+				if [[ ,$hooks, == *,managed-settings,* ]]; then
+					# A root-owned copy rendered from the item, never a link.
+					if [ -L "$d" ]; then
+						problem "$label is a link; the managed settings are a root-owned copy - run Deploy-AiArtifacts"
+					elif [ ! -f "$d" ]; then
+						problem "[$a] $b is not copied as $label"
+					elif ! ai_render_managed_settings "$c" "$(dirname "$d")" 2>/dev/null | cmp -s - "$d"; then
+						problem "$label differs from the managed settings rendered from [$a] $b"
+					elif [ -n "$AI_PROFILE" ] && ! ai_profile_conf_text | cmp -s - "$(dirname "$d")/ai-profile.conf"; then
+						problem "$(dirname "$label")/ai-profile.conf differs from the AI profile configuration"
+					fi
+				elif [ "$placement" = copy ]; then
 					if [ ! -e "$d" ]; then
 						problem "[$a] $b is not copied into ${label%/*}"
 					elif ! diff -rq "$c" "$d" >/dev/null 2>&1; then
@@ -208,6 +229,17 @@ if [ "$discrepancies" -eq 1 ]; then
 				;;
 		esac
 	done < <(ai_plan "${kinds[@]}")
+	# The repository-scoped manifest rows, linked into their repository's .claude/skills.
+	if [[ " ${kinds[*]} " == *" skills "* ]]; then
+		repositories=$(conf_path repositories.conf) || repositories=''
+		while IFS=$'\t' read -r record a b c; do
+			[ "$record" = REPO ] || continue
+			repo_dir=$(ai_repository_dir "$repositories" "$a") && [ -d "$repo_dir" ] || continue
+			matches "$b" "${items[@]}" || continue
+			[ -L "$repo_dir/.claude/skills/$b" ] && [ "$(readlink "$repo_dir/.claude/skills/$b")" = "$c" ] ||
+				problem "[repo:$a] $b is not linked into $repo_dir/.claude/skills"
+		done < <(ai_manifest_repo_rows)
+	fi
 	for line in "${duplicates[@]}"; do problem "Duplicate item name: $line"; done
 	if [ "$found" -eq 0 ] && [ "$quiet" -eq 0 ]; then
 		log_success "No discrepancies between the artifacts root and the harnesses!"
@@ -215,6 +247,9 @@ if [ "$discrepancies" -eq 1 ]; then
 	exit $found
 fi
 
+if [ "$quiet" -eq 0 ]; then
+	for line in "${warnings[@]}"; do log_warning "$line"; done
+fi
 if [ ${#roster[@]} -eq 0 ]; then
 	[ "$quiet" -eq 1 ] || log_warning "No item matched the filter!"
 	exit 0
@@ -230,7 +265,7 @@ for entry in "${roster[@]}"; do
 		continue
 	fi
 	if [ "$kind/$source" != "$current" ]; then
-		log_title "$kind - $source"
+		log_title "$kind - $source ($(ai_source_kind "$source" "$dir"))"
 		current=$kind/$source
 	fi
 	printf '\n%s%s%s\n' "$green" "$item" "$reset"

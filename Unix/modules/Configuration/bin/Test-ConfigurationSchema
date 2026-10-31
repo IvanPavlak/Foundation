@@ -33,6 +33,10 @@
 #                         entries are KIND/NAME or KIND/SOURCE/NAME, use lines KIND NAME
 #   ai-harnesses.conf     every destination line is KIND PLACEMENT FILES [+HOOK...] PATH with a
 #                         known kind, placement and hook
+#   ai-profiles.conf      host, default and default-owner name a profile section; each profile
+#                         line is a known kind with a value it takes (a plan UUID is a UUID,
+#                         unattended on or off); deploy names ai-harnesses.conf sections, mcp
+#                         ai-mcp-servers.conf sections, marketplaces ai-marketplaces.conf sections
 #   shell.conf            every line is a kind it knows with a value that kind takes; key lines
 #                         name a known key and a known function or zle widget (lib/lineediting.sh)
 #   theme.conf            every list-color line names an eza colour key and a colour
@@ -377,6 +381,50 @@ if [ -f "$cfg/ai-artifacts.conf" ] || [ -f "$cfg/ai-harnesses.conf" ]; then
 			esac
 		done < <(conf_lines "$cfg/ai-artifacts.conf")
 	fi
+fi
+
+# AI profiles: host, default and default-owner name a profile; each profile line is a known kind
+# with a value it takes; deploy names harnesses, mcp servers of ai-mcp-servers.conf, marketplaces
+# sections of ai-marketplaces.conf.
+if [ -f "$cfg/ai-profiles.conf" ]; then
+	profiles=$(sections_of ai-profiles.conf)
+	harnesses=$(sections_of ai-harnesses.conf)
+	servers=$(sections_of ai-mcp-servers.conf)
+	marketplaces=$(sections_of ai-marketplaces.conf)
+	while read -r key first second _; do
+		case $(foundation_lower "$key") in
+			host) [ -n "$second" ] && in_list "$second" "$profiles" || problem "ai-profiles.conf: host [$first $second] names no profile section" ;;
+			default | default-owner) [ -n "$first" ] && in_list "$first" "$profiles" || problem "ai-profiles.conf: $key [$first] names no profile section" ;;
+			shared) ;;
+			*) problem "ai-profiles.conf: unknown line before the first section => $key $first" ;;
+		esac
+	done < <(conf_lines "$cfg/ai-profiles.conf")
+	while IFS= read -r profile; do
+		[ -n "$profile" ] || continue
+		while read -r key rest; do
+			read -r -a words <<<"$rest"
+			case $(foundation_lower "$key") in
+				rules) [ ${#words[@]} -eq 1 ] || problem "ai-profiles.conf [$profile]: rules takes one item name => $rest" ;;
+				plan)
+					[ ${#words[@]} -ge 2 ] || problem "ai-profiles.conf [$profile]: plan is NAME UUID... => $rest"
+					for word in "${words[@]:1}"; do
+						[[ $word =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]] || problem "ai-profiles.conf [$profile]: plan UUID [$word] is not a UUID"
+					done
+					;;
+				deploy) for word in "${words[@]}"; do in_list "$word" "$harnesses" || problem "ai-profiles.conf [$profile]: deploy names [$word], no section of ai-harnesses.conf"; done ;;
+				include | exclude)
+					for word in "${words[@]}"; do
+						ai_kind_folder "${word%%/*}" >/dev/null && [[ $word == */* ]] || problem "ai-profiles.conf [$profile]: $key [$word] is not KIND/NAME or KIND/SOURCE/NAME"
+					done
+					;;
+				mcp) for word in "${words[@]}"; do in_list "$word" "$servers" || problem "ai-profiles.conf [$profile]: mcp names [$word], no section of ai-mcp-servers.conf"; done ;;
+				marketplaces) for word in "${words[@]}"; do in_list "$word" "$marketplaces" || problem "ai-profiles.conf [$profile]: marketplaces names [$word], no section of ai-marketplaces.conf"; done ;;
+				unattended) case $(foundation_lower "$rest") in on | off) ;; *) problem "ai-profiles.conf [$profile]: unattended is on or off => $rest" ;; esac ;;
+				owns | autonomous | env) ;;
+				*) problem "ai-profiles.conf [$profile]: unknown line => $key $rest" ;;
+			esac
+		done < <(conf_section "$cfg/ai-profiles.conf" "$profile")
+	done < <(conf_sections "$cfg/ai-profiles.conf")
 fi
 
 # Shell line editing: what foundation-shell-settings would skip without a word, as Windows'
