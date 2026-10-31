@@ -299,6 +299,17 @@ testrun_bats_verdict() {
 
 # The one-minute load average, or `unknown` when no probe answers (unknown, not zero, as
 # Get-RunConditionSummary of Windows).
+# Does this process run with SIGPIPE ignored? A parent that ignores it (the GitHub Actions runner,
+# a .NET program) passes the ignore on through every exec, and bash cannot undo an ignore it
+# inherited. A builtin printf into a reader that exits early (printf ... | grep -q) then prints
+# "write error: Broken pipe" on stderr, at random, instead of ending quietly as it does in a Mac
+# terminal: a suite that asserts empty output fails now and then. The probe writes more than a
+# pipe holds into a reader that reads nothing, so it fails the same way every time.
+# Usage: testrun_sigpipe_ignored
+testrun_sigpipe_ignored() {
+	[ -n "$("${BASH:-bash}" -c 'printf "%070000d" 0 | :' 2>&1)" ]
+}
+
 testrun_load() {
 	local load
 	load=$(sysctl -n vm.loadavg 2>/dev/null | awk '{ gsub(/[{}]/, ""); print $1; exit }')
