@@ -19,6 +19,10 @@ into, or with `--check` reports what a run would change.
 | [`ai-artifacts.conf`](../../configuration.md#ai-artifactsconf-and-ai-harnessesconf) | `[Source]` | none | A vendored source folder that is read (besides `own`, `foundation` and `example`) |
 | [`ai-harnesses.conf`](../../configuration.md#ai-artifactsconf-and-ai-harnessesconf) | `[Harness]` | `claude-code`, `codex`, `gemini-cli`, `copilot`, all inactive | One app and its destinations |
 | [`ai-harnesses.conf`](../../configuration.md#ai-artifactsconf-and-ai-harnessesconf) | `KIND PLACEMENT FILES [+HOOK...] PATH` | the catalogue on [AI on a Mac](../../ai.md#the-base-catalogue) | One destination: `each`, `copy` or `file`; the files to take from an item; the hooks `+claude-plugin-dirs` and `+managed-settings`; the path |
+| [`ai-artifacts.conf`](../../configuration.md#ai-artifactsconf-and-ai-harnessesconf) | `[Source]` with `checkout PATH` | none | A checkout source: the items under its kind folders (`skills skills` without a kind line) are linked from that local repository in place |
+| [`ai-artifacts.conf`](../../configuration.md#ai-artifactsconf-and-ai-harnessesconf) | `[Source]` with `manifest FILE` | none | A manifest source: its rows are linked from their pinned clones in `~/.local/share/foundation/ai-manifests/`, fetched through git first when missing (not under `--check`; a failed fetch is a warning) |
+| [`ai-profiles.conf`](../../configuration.md#ai-profilesconf) | `[Profile]` and its `deploy`, `rules`, `include`, `exclude`, `plan`, `owns`, `autonomous`, `unattended` lines; `shared`, `default-owner` | none: profiles off | With a profile: its harnesses, rules item, included and excluded items, the manifest rows of its scope, and what the managed settings copy pins and writes next to it (`ai-profile.conf`) |
+| [`repositories.conf`](../../configuration.md#repositoriesconf) | `NAME PATH-OR-URL DIR` | the repository itself | Where a `repo:NAME` manifest row is linked (`DIR/.claude/skills/`) |
 
 ## Decisions
 

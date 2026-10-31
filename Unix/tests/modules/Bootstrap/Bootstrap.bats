@@ -201,6 +201,54 @@ setup() {
 	[ -z "$(calls cmd)" ]
 }
 
+@test "AiProfileInit is off by default: with an AI profile active the run warns and names Initialize-AiProfile; --only stays quiet" {
+	printf 'default Personal\n[Personal]\n' >"$FOUNDATION_CONFIG_DIR/ai-profiles.conf"
+	all_off >"$FOUNDATION_CONFIG_DIR/bootstrap.conf"
+	run "${BASH:-bash}" "$cmd" --list
+	[[ $output =~ AiProfileInit\ +off\ +off\ +interactive ]]
+	run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	[[ $output == *"AI profile [Personal] sign-ins skipped - run Initialize-AiProfile once on this Mac, or opt in with step AiProfileInit on"* ]]
+	[ -z "$(calls 'cmd Initialize-AiProfile')" ]
+	run "${BASH:-bash}" "$cmd" --only DockPins
+	[[ $output != *"sign-ins skipped"* ]]
+	# No profile: nothing to name.
+	rm "$FOUNDATION_CONFIG_DIR/ai-profiles.conf"
+	run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	[[ $output != *"sign-ins skipped"* ]]
+}
+
+@test "AiProfileInit on runs Initialize-AiProfile after AiMcpServers with a profile active, and only names it in a dry run" {
+	printf 'default Personal\n[Personal]\n' >"$FOUNDATION_CONFIG_DIR/ai-profiles.conf"
+	{
+		all_off
+		echo "step AiMcpServers on"
+		echo "step AiProfileInit on"
+	} >"$FOUNDATION_CONFIG_DIR/bootstrap.conf"
+	run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	[ "$(calls cmd)" = $'cmd Deploy-AiMcpServers \ncmd Initialize-AiProfile ' ]
+	[[ $output != *"sign-ins skipped"* ]]
+	[[ $output == *"Ran: AiMcpServers AiProfileInit"* ]]
+	rm "$BATS_TEST_TMPDIR/tool.log"
+	run "${BASH:-bash}" "$cmd" --dry-run --only AiProfileInit
+	[ "$status" -eq 0 ]
+	[[ $output == *"would run: Initialize-AiProfile"* ]]
+	[ -z "$(calls 'cmd Initialize-AiProfile')" ]
+}
+
+@test "AiProfileInit on without an AI profile warns and runs nothing" {
+	{
+		all_off
+		echo "step AiProfileInit on"
+	} >"$FOUNDATION_CONFIG_DIR/bootstrap.conf"
+	run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	[[ $output == *"AI profile sign-ins skipped - no AI profile is active (ai-profiles.conf)"* ]]
+	[ -z "$(calls cmd)" ]
+}
+
 @test "a run keeps a plain transcript on the Desktop and ends with its path and the total duration; a dry run keeps none" {
 	conf
 	unset NO_COLOR

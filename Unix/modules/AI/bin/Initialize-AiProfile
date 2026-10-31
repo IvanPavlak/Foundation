@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# Initialize-AiProfile - walks the one-time sign-ins this Mac's AI profile needs, then runs
+# Test-AiProfile.
+#
+# Usage: Initialize-AiProfile
+#
+# Unix counterpart of Initialize-AiProfile (WinuX AI module). Once per machine, after Bootstrap,
+# for the profile of Unix/config/ai-profiles.conf (FOUNDATION_AI_PROFILE, a host line, else the
+# default), in this order:
+#   1. Claude Code: when ~/.claude.json is not signed in to the profile's Plan, it names the Plan
+#      and its organization and offers to start `claude`, where /login signs in;
+#   2. GitHub CLI: when `gh auth status` fails, it offers `gh auth login`;
+#   3. the profile's OAuth MCP servers (ai-mcp-servers.conf): it lists them and offers to start
+#      `claude`, where /mcp signs in to each;
+#   4. the environment variables the profile's `env NAME...` lines name: it says which are set in
+#      this shell and which are missing (set them in ~/.zshenv, never in the repository);
+#   5. Test-AiProfile, whose exit code it returns.
+# Every sign-in happens in the tool itself: nothing here reads, asks for or stores a secret. A step
+# already done is reported and skipped; without a terminal every offer is only described. No
+# profile configured: says so and exits 2, like Test-AiProfile.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config aiprofile aimcp
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+for argument in "$@"; do
+	case $argument in
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument: $argument (Initialize-AiProfile takes none)" ;;
+	esac
+done
+
+claude_cli=${FOUNDATION_CLAUDE_CLI:-claude}
+gh_cli=${FOUNDATION_GH_CLI:-gh}
+
+log_title "Initialize-AiProfile"
+ai_profile_load
+case $? in
+	1)
+		log_warning "No AI profile is configured (ai-profiles.conf has no [Profile] section) - nothing to initialize"
+		exit 2
+		;;
+	2) foundation_die "AI profile: $AI_PROFILE_ERROR" ;;
+esac
+log_step "Profile: $AI_PROFILE (picked by $AI_PROFILE_HOW)"
+
+# Starts a CLI for an interactive sign-in when the user says yes. Usage: offer TITLE QUESTION COMMAND...
+offer() {
+	local title=$1 question=$2
+	shift 2
+	if ! command -v "$1" >/dev/null 2>&1; then
+		log_warning "$1 is not installed - install it, then run Initialize-AiProfile again"
+		return 1
+	fi
+	foundation_confirm "$title" "$question" || {
+		log_step "Skipped - run it yourself: $*"
+		return 1
+	}
+	"$@"
+}
+
+# 1. Claude Code, signed in to the profile's Plan.
+plan=()
+while IFS= read -r line; do [ -n "$line" ] && plan+=("$line"); done < <(ai_profile_plan)
+signed_in() {
+	local org uuid
+	org=$(ai_logged_in_org) || return 1
+	uuid=${org%%$'\t'*}
+	[ ${#plan[@]} -ge 2 ] || return 0
+	[[ " $(foundation_lower "${plan[*]:1}") " == *" $(foundation_lower "$uuid") "* ]]
+}
+log_title "1. Claude Code sign-in"
+if [ ${#plan[@]} -lt 2 ]; then
+	log_warning "The profile has no \`plan NAME UUID...\` line - sign in with the account of the Plan this machine should use"
+fi
+if signed_in && [ ${#plan[@]} -ge 2 ]; then
+	log_success "Signed in to the ${plan[0]} Plan"
+else
+	[ ${#plan[@]} -lt 2 ] || log_step "Sign in with the account of the ${plan[0]} Plan (organization ${plan[*]:1}): in Claude Code type /login, pick that organization, then /exit"
+	offer "Claude Code sign-in" "Start Claude Code now to sign in?" "$claude_cli"
+	if signed_in && [ ${#plan[@]} -ge 2 ]; then log_success "Signed in to the ${plan[0]} Plan"; fi
+fi
+
+# 2. GitHub CLI.
+log_title "2. GitHub CLI sign-in"
+if command -v "$gh_cli" >/dev/null 2>&1 && "$gh_cli" auth status >/dev/null 2>&1; then
+	log_success "The GitHub CLI is signed in"
+else
+	offer "GitHub CLI sign-in" "Run gh auth login now?" "$gh_cli" auth login
+fi
+
+# 3. The OAuth MCP servers.
+log_title "3. MCP server sign-ins"
+oauth=$(ai_profile_oauth_servers | paste -sd' ' -)
+if [ -z "$oauth" ]; then
+	log_step "The profile names no OAuth MCP server"
+else
+	log_step "Sign in to each once (Deploy-AiMcpServers adds them first): $oauth - in Claude Code type /mcp, pick each server and sign in, then /exit"
+	offer "MCP sign-ins" "Start Claude Code now to sign in to the MCP servers?" "$claude_cli"
+fi
+
+# 4. The environment variables the profile names.
+log_title "4. Environment variables"
+names=()
+while IFS= read -r name; do [ -n "$name" ] && names+=("$name"); done < <(ai_profile_words env)
+if [ ${#names[@]} -eq 0 ]; then
+	log_step "The profile names no environment variable"
+fi
+for name in "${names[@]}"; do
+	if ! [[ $name =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+		log_warning "[$name] is no variable name - fix the env line of [$AI_PROFILE] in ai-profiles.conf"
+	elif [ -n "${!name:-}" ]; then
+		log_success "$name is set"
+	else
+		log_warning "$name is not set - add export $name=... to ~/.zshenv (never to the repository), then open a new shell"
+	fi
+done
+
+# 5. The verdict.
+"${BASH:-bash}" "$FOUNDATION_UNIX/modules/AI/bin/Test-AiProfile"

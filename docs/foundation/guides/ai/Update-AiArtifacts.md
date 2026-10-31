@@ -21,6 +21,8 @@ reports which sources are behind.
 | [`ai-artifacts.conf`](../../configuration.md#ai-artifactsconf-and-ai-harnessesconf) | `exclude ITEM...` | none | Item names not to vendor |
 | [`ai-artifacts.conf`](../../configuration.md#ai-artifactsconf-and-ai-harnessesconf) | `skip NAME...` | `.git .github tests design docs` | Top-level entries of an item not to copy; an empty `skip` line copies everything |
 | [`ai-harnesses.conf`](../../configuration.md#ai-artifactsconf-and-ai-harnessesconf) | - | - | Not used here: the library this command shares with Deploy-AiArtifacts reads it |
+| [`ai-artifacts.conf`](../../configuration.md#ai-artifactsconf-and-ai-harnessesconf) | `[Source]` with `manifest FILE` | none | A manifest source: the rows of its scope and the `repo:NAME` rows are cloned at their pinned ref into the cache; `--check` compares each pin with its upstream default branch |
+| [`ai-profiles.conf`](../../configuration.md#ai-profilesconf) | `[Profile]` | none: profiles off | Which manifest rows are in scope (`*` rows only without a profile) |
 
 ## Decisions
 

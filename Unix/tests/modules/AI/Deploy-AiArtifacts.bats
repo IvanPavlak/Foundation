@@ -27,6 +27,8 @@ setup() {
 	conf 'deploy one' 'use rules Core'
 	harness one 'skills each . ~/one/skills' 'rules file RULES.md ~/one/RULES.md'
 	cmd=$UNIX_DIR/modules/AI/bin/Deploy-AiArtifacts
+	# A manifest fetch never reaches the network (local_github, below).
+	export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.$BATS_TEST_TMPDIR/no-github/.insteadOf" GIT_CONFIG_VALUE_0=https://github.com/
 }
 
 # Creates AI/Skills/SOURCE/NAME/SKILL.md. Usage: skill SOURCE NAME
@@ -370,17 +372,52 @@ harness() {
 	[ "$(cat "$HOME/.claude/settings.json")" = 'not json' ]
 }
 
-@test "+managed-settings links through sudo; --check never calls it" {
-	printf '{}\n' >"$ai/Rules/own/Core/managed-settings.json"
-	stub_tool sudo 'exec "$@"'
-	harness two "rules file managed-settings.json +managed-settings $BATS_TEST_TMPDIR/root/ClaudeCode/managed-settings.json"
+@test "+managed-settings writes a root-owned rendered copy through sudo; --check never calls it" {
+	printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"bash \\"{ManagedDir}/hooks/policy.sh\\""}]}]}}\n' >"$ai/Rules/own/Core/managed-settings.json"
+	mkdir -p "$ai/Rules/own/Core/hooks"
+	printf 'echo policy\n' >"$ai/Rules/own/Core/hooks/policy.sh"
+	# chown root:wheel cannot run as the test user: the stand-in logs it and succeeds.
+	stub_tool sudo 'case "$1" in chown) exit 0 ;; esac; exec "$@"'
+	dir=$BATS_TEST_TMPDIR/root/ClaudeCode
+	harness two "rules file managed-settings.json +managed-settings $dir/managed-settings.json"
 	conf 'deploy two' 'use rules Core'
 	run "${BASH:-bash}" "$cmd" --check
+	[[ $output == *"MISSING $dir/managed-settings.json"* ]]
 	[ ! -e "$BATS_TEST_TMPDIR/tool.log" ]
 	run "${BASH:-bash}" "$cmd"
 	[ "$status" -eq 0 ]
-	[ "$(readlink "$BATS_TEST_TMPDIR/root/ClaudeCode/managed-settings.json")" = "$ai/Rules/own/Core/managed-settings.json" ]
-	grep -q '^sudo ln -s' "$BATS_TEST_TMPDIR/tool.log"
+	[ -f "$dir/managed-settings.json" ] && [ ! -L "$dir/managed-settings.json" ]
+	grep -qF "bash \\\"$dir/hooks/policy.sh\\\"" "$dir/managed-settings.json"
+	! grep -q 'ManagedDir' "$dir/managed-settings.json" || false
+	! grep -q forceLoginOrgUUID "$dir/managed-settings.json" || false
+	cmp -s "$dir/hooks/policy.sh" "$ai/Rules/own/Core/hooks/policy.sh"
+	grep -q "^sudo chown root:wheel $dir/managed-settings.json" "$BATS_TEST_TMPDIR/tool.log"
+	grep -q "^sudo chmod 644 $dir/managed-settings.json" "$BATS_TEST_TMPDIR/tool.log"
+	# Without a profile: no guard and no ai-profile.conf.
+	[ ! -e "$dir/ai-ownership-guard.sh" ] && [ ! -e "$dir/ai-profile.conf" ]
+	# Rewritten only when the rendering differs.
+	rm "$BATS_TEST_TMPDIR/tool.log"
+	run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	[ ! -e "$BATS_TEST_TMPDIR/tool.log" ]
+	run "${BASH:-bash}" "$cmd" --check
+	[[ $output == *"fully deployed"* ]]
+}
+
+@test "+managed-settings replaces the link of an earlier run with the copy" {
+	printf '{}\n' >"$ai/Rules/own/Core/managed-settings.json"
+	stub_tool sudo 'case "$1" in chown) exit 0 ;; esac; exec "$@"'
+	dir=$BATS_TEST_TMPDIR/root/ClaudeCode
+	mkdir -p "$dir"
+	ln -s "$ai/Rules/own/Core/managed-settings.json" "$dir/managed-settings.json"
+	harness two "rules file managed-settings.json +managed-settings $dir/managed-settings.json"
+	conf 'deploy two' 'use rules Core'
+	run "${BASH:-bash}" "$cmd" --check
+	[[ $output == *"WRONG   $dir/managed-settings.json"* ]]
+	run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	[ -f "$dir/managed-settings.json" ] && [ ! -L "$dir/managed-settings.json" ]
+	[ -f "$ai/Rules/own/Core/managed-settings.json" ]
 }
 
 @test "+managed-settings leaves out a rules item without that file" {
@@ -416,4 +453,227 @@ harness() {
 	run "${BASH:-bash}" "$cmd"
 	[ "$status" -eq 0 ]
 	[[ $output == *"No harness to deploy into"* ]]
+}
+
+# Writes ai-profiles.conf, one argument per line. Usage: profiles LINE...
+profiles() {
+	printf '%s\n' "$@" >"$FOUNDATION_CONFIG_DIR/ai-profiles.conf"
+}
+
+# The full SHA every manifest row of these tests pins.
+SHA=0123456789abcdef0123456789abcdef01234567
+
+# A skill in the manifest cache: OWNER/REPO at $SHA, PATH/SKILL.md with an invocation guard.
+# Usage: cached_skill OWNER REPO PATH NAME
+cached_skill() {
+	local dir=$FOUNDATION_AI_MANIFEST_CACHE/$1/$2/$SHA/$3
+	mkdir -p "$dir"
+	printf -- '---\nname: %s\ndisable-model-invocation: true\ndescription: cached\n---\nbody\n' "$4" >"$dir/SKILL.md"
+}
+
+# Points every https://github.com/ URL git sees at a local folder of the test (environment only), so
+# a manifest fetch never reaches the network; a missing folder makes every fetch fail fast.
+# Usage: local_github [FOLDER]
+local_github() {
+	export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.${1:-$BATS_TEST_TMPDIR/no-github}/.insteadOf" GIT_CONFIG_VALUE_0=https://github.com/
+}
+
+# Writes the manifest of a [pm] manifest source, one row per argument (already tab-separated).
+# Usage: manifest ROW...
+manifest() {
+	printf 'name\tkind\tscope\tsource\tref\tpath\tinstall\n' >"$BATS_TEST_TMPDIR/manifest.tsv"
+	printf '%s\n' "$@" >>"$BATS_TEST_TMPDIR/manifest.tsv"
+	printf '[pm]\nmanifest %s\n' "$BATS_TEST_TMPDIR/manifest.tsv" >>"$FOUNDATION_CONFIG_DIR/ai-artifacts.conf"
+}
+
+@test "an AI profile's rules, deploy, include and exclude lines win; profiles off changes nothing" {
+	rules own Other other-rules
+	skill own gamma
+	harness two 'skills each . ~/two/skills' 'rules file RULES.md ~/two/RULES.md'
+	profiles 'default Work' '[Work]' 'rules Other' 'deploy two' 'include skills/alpha skills/gamma' 'exclude skills/gamma'
+	run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	[[ $output == *"AI profile      : Work (by default)"* ]]
+	[ ! -e "$HOME/one" ]
+	[ "$(readlink "$HOME/two/RULES.md")" = "$ai/Rules/own/Other/RULES.md" ]
+	[ -L "$HOME/two/skills/alpha" ]
+	[ ! -e "$HOME/two/skills/beta" ]
+	[ ! -e "$HOME/two/skills/gamma" ]
+}
+
+@test "the override picks the profile; one naming no profile stops the run" {
+	harness two 'skills each . ~/two/skills'
+	profiles 'default Work' '[Work]' '[Home]' 'deploy two'
+	FOUNDATION_AI_PROFILE=home run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	[[ $output == *"AI profile      : Home (by override)"* ]]
+	[ -L "$HOME/two/skills/alpha" ]
+	FOUNDATION_AI_PROFILE=Nope run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 1 ]
+	[[ $output == *"[Nope], which is no section"* ]]
+}
+
+@test "+managed-settings with a profile pins its Plan, wires the guard and writes ai-profile.conf" {
+	printf '{"forceLoginMethod":"claudeai"}\n' >"$ai/Rules/own/Core/managed-settings.json"
+	stub_tool sudo 'case "$1" in chown) exit 0 ;; esac; exec "$@"'
+	dir=$BATS_TEST_TMPDIR/root/ClaudeCode
+	harness two "rules file managed-settings.json +managed-settings $dir/managed-settings.json"
+	conf 'deploy two' 'use rules Core'
+	profiles 'default Personal' 'default-owner personal' 'shared github.com/me/shared' \
+		'[Personal]' 'plan Max 00000000-0000-0000-0000-000000000000' 'unattended on' 'autonomous github.com/me/mine' \
+		'[Work]' 'plan Team 11111111-1111-1111-1111-111111111111' 'owns github.com/org/*' 'autonomous github.com/org/x'
+	run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	value=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["forceLoginOrgUUID"], d["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"], d["hooks"]["PreToolUse"][0]["matcher"])' "$dir/managed-settings.json")
+	[ "$value" = "00000000-0000-0000-0000-000000000000 bash \"$dir/ai-ownership-guard.sh\" UserPromptSubmit *" ]
+	cmp -s "$dir/ai-ownership-guard.sh" "$(dirname "$UNIX_DIR")/AI/Hooks/ai-ownership-guard.sh"
+	[ "$(cat "$dir/ai-profile.conf")" = "# Written by Deploy-AiArtifacts from the AI profile configuration; do not edit.
+profile Personal
+default-owner Personal
+unattended on
+plan Max 00000000-0000-0000-0000-000000000000
+shared github.com/me/shared
+owns Work github.com/org/*
+autonomous github.com/me/mine" ]
+	# A changed Plan is a changed rendering: --check reports it, the next run rewrites it.
+	profiles 'default Personal' '[Personal]' 'plan Max 22222222-2222-2222-2222-222222222222 33333333-3333-3333-3333-333333333333'
+	run "${BASH:-bash}" "$cmd" --check
+	[[ $output == *"DIFFERS $dir/managed-settings.json"* ]]
+	run "${BASH:-bash}" "$cmd"
+	value=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["forceLoginOrgUUID"])' "$dir/managed-settings.json")
+	[ "$value" = "['22222222-2222-2222-2222-222222222222', '33333333-3333-3333-3333-333333333333']" ]
+}
+
+@test "a checkout source links its items in place, after own and before the product skills" {
+	mkdir -p "$BATS_TEST_TMPDIR/checkout/skills/delta" "$BATS_TEST_TMPDIR/checkout/skills/group/alpha" "$BATS_TEST_TMPDIR/checkout/skills/product"
+	printf -- '---\nname: delta\n---\n' >"$BATS_TEST_TMPDIR/checkout/skills/delta/SKILL.md"
+	printf -- '---\nname: alpha\n---\n' >"$BATS_TEST_TMPDIR/checkout/skills/group/alpha/SKILL.md"
+	printf -- '---\nname: product\n---\n' >"$BATS_TEST_TMPDIR/checkout/skills/product/SKILL.md"
+	skill foundation product
+	printf '[pm]\ncheckout %s\n' "$BATS_TEST_TMPDIR/checkout" >>"$FOUNDATION_CONFIG_DIR/ai-artifacts.conf"
+	run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	[ "$(readlink "$HOME/one/skills/delta")" = "$BATS_TEST_TMPDIR/checkout/skills/delta" ]
+	[ "$(readlink "$HOME/one/skills/alpha")" = "$ai/Skills/own/alpha" ]
+	[ "$(readlink "$HOME/one/skills/product")" = "$BATS_TEST_TMPDIR/checkout/skills/product" ]
+	[[ $output == *"Duplicate skill [product]"*"keeping the one from [pm]"* ]]
+	# Nothing is copied into the artifacts root for it.
+	[ ! -e "$ai/Skills/pm" ]
+}
+
+@test "a missing checkout folder warns and the rest deploys" {
+	printf '[pm]\ncheckout %s\n' "$BATS_TEST_TMPDIR/nowhere" >>"$FOUNDATION_CONFIG_DIR/ai-artifacts.conf"
+	run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	[[ $output == *"Checkout source [pm]"*"is not a folder on this machine"* ]]
+	[ -L "$HOME/one/skills/alpha" ]
+}
+
+@test "the product skills now win over a vendored source whose name sorts first" {
+	skill foundation zeta
+	skill aaa zeta
+	printf '[aaa]\nrepository Owner/Repo\n' >>"$FOUNDATION_CONFIG_DIR/ai-artifacts.conf"
+	run "${BASH:-bash}" "$cmd"
+	[ "$(readlink "$HOME/one/skills/zeta")" = "$ai/Skills/foundation/zeta" ]
+}
+
+@test "manifest rows: scope, rename and strip-invocation-guard through a derived copy, never the clone" {
+	export FOUNDATION_AI_MANIFEST_CACHE=$BATS_TEST_TMPDIR/cache
+	cached_skill up skills skills/tdd tdd
+	cached_skill up skills skills/plain plain
+	cached_skill up skills skills/work work
+	manifest "tdd	skills	*	https://github.com/up/skills	$SHA	skills/tdd	clone rename=tdd2 strip-invocation-guard" \
+		"plain	skills	*	https://github.com/up/skills.git	$SHA	skills/plain	clone" \
+		"work	skills	Work	https://github.com/up/skills	$SHA	skills/work	clone" \
+		"bad	skills	*	https://example.com/up/skills	$SHA	skills/bad	clone"
+	run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	clone=$FOUNDATION_AI_MANIFEST_CACHE/up/skills/$SHA
+	[ "$(readlink "$HOME/one/skills/plain")" = "$clone/skills/plain" ]
+	[ "$(readlink "$HOME/one/skills/tdd2")" = "$clone.derived/tdd2" ]
+	[ ! -e "$HOME/one/skills/tdd" ]
+	# Without a profile only the * rows are read.
+	[ ! -e "$HOME/one/skills/work" ]
+	[[ $output == *"source is not https://github.com/OWNER/REPO"* ]]
+	grep -qx 'name: tdd2' "$clone.derived/tdd2/SKILL.md"
+	! grep -q disable-model-invocation "$clone.derived/tdd2/SKILL.md" || false
+	grep -q disable-model-invocation "$clone/skills/tdd/SKILL.md"
+	grep -qx 'name: tdd' "$clone/skills/tdd/SKILL.md"
+	profiles 'default Work' '[Work]'
+	run "${BASH:-bash}" "$cmd"
+	[ "$(readlink "$HOME/one/skills/work")" = "$clone/skills/work" ]
+}
+
+@test "a manifest row whose fetch fails warns, is left out, and does not fail the run" {
+	export FOUNDATION_AI_MANIFEST_CACHE=$BATS_TEST_TMPDIR/cache
+	local_github
+	manifest "gone	skills	*	https://github.com/up/skills	$SHA	skills/gone	clone"
+	run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	[[ $output == *"[pm] Could not fetch up/skills@0123456 (row gone)"* ]]
+	[[ $output == *"row gone (up/skills@0123456) is not fetched yet"* ]]
+	[ ! -e "$HOME/one/skills/gone" ]
+	[ -z "$(find "$FOUNDATION_AI_MANIFEST_CACHE" -name '.fetch.*' 2>/dev/null)" ]
+}
+
+# bats test_tags=integration
+@test "a missing pinned clone is fetched before linking, once, and --check fetches nothing" {
+	export FOUNDATION_AI_MANIFEST_CACHE=$BATS_TEST_TMPDIR/cache
+	remote=$BATS_TEST_TMPDIR/github/up/skills
+	mkdir -p "$remote/skills/tdd"
+	printf -- '---\nname: tdd\ndisable-model-invocation: true\n---\n' >"$remote/skills/tdd/SKILL.md"
+	git -C "$remote" init -q
+	git -C "$remote" add -A
+	git -C "$remote" -c user.name=t -c user.email=t@example.com commit -qm one
+	sha=$(git -C "$remote" rev-parse HEAD)
+	local_github "$BATS_TEST_TMPDIR/github"
+	manifest "tdd	skills	*	https://github.com/up/skills	$sha	skills/tdd	clone rename=tdd2 strip-invocation-guard"
+	run "${BASH:-bash}" "$cmd" --check
+	[ ! -e "$FOUNDATION_AI_MANIFEST_CACHE" ]
+	run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	[[ $output == *"[pm] fetching up/skills@${sha:0:7}"*"[pm] fetched up/skills@${sha:0:7}"* ]]
+	clone=$FOUNDATION_AI_MANIFEST_CACHE/up/skills/$sha
+	[ "$(readlink "$HOME/one/skills/tdd2")" = "$clone.derived/tdd2" ]
+	grep -qx 'name: tdd2' "$clone.derived/tdd2/SKILL.md"
+	run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	[[ $output != *"fetched up/skills"* ]]
+	[[ $output != *"fetching up/skills"* ]]
+}
+
+@test "own and exclude by the row's owner beat a manifest row" {
+	export FOUNDATION_AI_MANIFEST_CACHE=$BATS_TEST_TMPDIR/cache
+	cached_skill up skills skills/alpha alpha
+	cached_skill up skills skills/omega omega
+	conf 'deploy one' 'use rules Core' 'exclude skills/up/omega'
+	manifest "alpha	skills	*	https://github.com/up/skills	$SHA	skills/alpha	clone" \
+		"omega	skills	*	https://github.com/up/skills	$SHA	skills/omega	clone"
+	run "${BASH:-bash}" "$cmd"
+	[ "$(readlink "$HOME/one/skills/alpha")" = "$ai/Skills/own/alpha" ]
+	[[ $output == *"Duplicate skill [alpha]"*"keeping the one from [own]"* ]]
+	[ ! -e "$HOME/one/skills/omega" ]
+}
+
+@test "a repo: row is linked into that repository's .claude/skills and listed in its .git/info/exclude" {
+	export FOUNDATION_AI_MANIFEST_CACHE=$BATS_TEST_TMPDIR/cache
+	cached_skill up design design design
+	target=$BATS_TEST_TMPDIR/MyRepo
+	git init -q "$target"
+	printf '[Private]\nMyRepo /me/MyRepo.git %s\n' "$target" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
+	manifest "design	skills	repo:MyRepo	https://github.com/up/design	$SHA	design	clone" \
+		"other	skills	repo:Elsewhere	https://github.com/up/design	$SHA	design	clone"
+	run "${BASH:-bash}" "$cmd" --check
+	[[ $output == *"MISSING $target/.claude/skills/design"* ]]
+	[ ! -e "$target/.claude" ]
+	run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	[ "$(readlink "$target/.claude/skills/design")" = "$FOUNDATION_AI_MANIFEST_CACHE/up/design/$SHA/design" ]
+	[ "$(grep -cx '/.claude/skills/design' "$target/.git/info/exclude")" -eq 1 ]
+	[[ $output == *"repository [Elsewhere] of a manifest row is not on this machine"* ]]
+	# Not in the harness destinations, and a second run adds no second exclude line.
+	[ ! -e "$HOME/one/skills/design" ]
+	run "${BASH:-bash}" "$cmd"
+	[ "$(grep -cx '/.claude/skills/design' "$target/.git/info/exclude")" -eq 1 ]
+	[ -z "$(git -C "$target" status --porcelain)" ]
 }

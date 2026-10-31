@@ -62,6 +62,11 @@
 #   AiMarketplaces     Deploy-AiMarketplaces (off)
 #   AiMcpServers       Deploy-AiMcpServers: the servers of ai-mcp-servers.conf into Claude Code and
 #                      Codex (off)
+#   AiProfileInit      Initialize-AiProfile: the one-time sign-ins of this Mac's AI profile (the
+#                      Claude login of its Plan, gh, the OAuth MCP servers, its env variables,
+#                      then Test-AiProfile), after the AI steps so the Plan pin is deployed first;
+#                      skipped with a warning without a profile (off, interactive; it waits at the
+#                      terminal, so when off and a profile is active a warning names it instead)
 #   ObsidianCli        Enable-ObsidianCli --create-if-missing (off)
 #   DotnetEf           Install-DotnetEf
 #   DotnetSdks         Install-DotnetSdks: the sdk-channel lines of dotnet.conf (off, sudo)
@@ -136,6 +141,7 @@ CATALOG=(
 	"AiArtifacts off sudo-optional"
 	"AiMarketplaces off"
 	"AiMcpServers off"
+	"AiProfileInit off interactive"
 	"ObsidianCli off"
 	"DotnetEf on"
 	"DotnetSdks off sudo"
@@ -663,6 +669,30 @@ step_language() {
 	run_command '' "$1" "$name"
 }
 
+# AiProfileInit (the Windows Bootstrap's Initialize-AiProfile step): the sign-ins of this Mac's AI
+# profile happen in the tools themselves and wait at the terminal, so the step is opt-in. Without
+# a terminal Initialize-AiProfile only describes them. No profile: nothing to sign in to.
+step_ai_profile_init() {
+	foundation_load aiprofile || return 1
+	local status=0
+	ai_profile_load || status=$?
+	case $status in
+		0) run_command '' Initialize-AiProfile ;;
+		1) log_warning "AI profile sign-ins skipped - no AI profile is active (ai-profiles.conf)" ;;
+		*) log_warning "AI profile sign-ins skipped - $AI_PROFILE_ERROR" ;;
+	esac
+}
+
+# The step off with a profile active: the run stays unattended and names the command, where the
+# Windows run warns (right after the AI MCP servers step). Not for an --only run, which asked for
+# other steps.
+ai_profile_init_hint() {
+	[ ${#onlys[@]} -eq 0 ] || return 0
+	foundation_load aiprofile || return 0
+	ai_profile_load 2>/dev/null || return 0
+	log_warning "AI profile [$AI_PROFILE] sign-ins skipped - run Initialize-AiProfile once on this Mac, or opt in with step AiProfileInit on in bootstrap.local.conf"
+}
+
 step_logout() {
 	if [ "$dry" -eq 1 ]; then
 		printf '  would ask: log out now?\n'
@@ -707,6 +737,7 @@ run_step() {
 		AiArtifacts) run_command --check Deploy-AiArtifacts ;;
 		AiMarketplaces) run_command --check Deploy-AiMarketplaces ;;
 		AiMcpServers) run_command --check Deploy-AiMcpServers ;;
+		AiProfileInit) step_ai_profile_init ;;
 		ObsidianCli) run_command --check Enable-ObsidianCli --create-if-missing ;;
 		DotnetEf) run_command --dry-run Install-DotnetEf ;;
 		DotnetSdks) run_command --dry-run Install-DotnetSdks ;;
@@ -830,6 +861,7 @@ for i in "${!names[@]}"; do
 	language_readback "$name"
 	if [ "${states[$i]}" != on ]; then
 		[ "$name" = Logout ] && [ "$dry" -eq 0 ] && LOGOUT_HINT=1
+		[ "$name" = AiProfileInit ] && ai_profile_init_hint
 		continue
 	fi
 	case ",${attributes[$i]}," in

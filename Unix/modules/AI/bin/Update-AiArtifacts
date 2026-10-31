@@ -24,6 +24,15 @@
 # (GITHUB_TOKEN, else GH_TOKEN, else `gh auth token` when the GitHub CLI is signed in) both
 # requests authenticate and the archive comes from the API's tarball endpoint; the token goes only
 # to api.github.com, never to the log.
+# A manifest source (a `manifest FILE` line): every row whose scope includes the AI profile
+# (ai-profiles.conf; `*` rows without one) or names a repository (`repo:NAME`) is cloned at its
+# pinned ref into the cache (${XDG_DATA_HOME:-~/.local/share}/foundation/ai-manifests/<owner>/<repo>/<ref>/,
+# through git, so a private upstream uses git's own credentials) unless that clone is already
+# there, and a strip-invocation-guard or renamed row gets its derived copy (<ref>.derived/<link-name>/,
+# with disable-model-invocation removed or the frontmatter name: rewritten); a clone is
+# never refetched. With --check, each such row's pin is compared with its upstream default branch
+# (git ls-remote) and nothing changes. A checkout source (a `checkout PATH` line) is linked in
+# place and has nothing to vendor; a pull of that repository updates it.
 # Windows-style names: --source (-Source) is accepted and ignored: the names after it are sources.
 _foundation=${BASH_SOURCE[0]}
 while [ -L "$_foundation" ]; do
@@ -32,7 +41,7 @@ while [ -L "$_foundation" ]; do
 done
 . "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
 foundation_require_bash || exit 1
-foundation_load config skills artifacts
+foundation_load config skills aiprofile artifacts
 
 foundation_normalize_args "$@"
 set -- "${FOUNDATION_ARGS[@]}"
@@ -225,6 +234,69 @@ vendor_kind() {
 	log_success "[$name] Vendored ${#incoming[@]} $kind from [$repository@${sha:0:7}]"
 }
 
+# Fetches the missing pinned clones of manifest source NAME (its FILE) into the cache and makes
+# the derived copies (ai_manifest_sync of lib/artifacts.sh, which Deploy-AiArtifacts runs too), or
+# with --check compares every pin with its upstream default branch. Fails when a row could not be
+# fetched or checked. Usage: update_manifest NAME FILE
+update_manifest() {
+	local name=$1 manifest_file=$2 record row_name kind scope owner repo ref path key head
+	local row_count=0 fetched=0 behind=0 problems=0
+	local -A heads=()
+	command -v git >/dev/null 2>&1 || {
+		log_error "[$name] git is required for a manifest source"
+		return 1
+	}
+	log_step "[$name] manifest $manifest_file"
+	if [ "$check" -eq 0 ]; then
+		while IFS=$'\t' read -r record row_name; do
+			case $record in
+				FETCHING) log_step "[$name] fetching $row_name" ;;
+				FETCHED)
+					fetched=$((fetched + 1))
+					log_step "[$name] fetched $row_name"
+					;;
+				ROWS) row_count=$row_name ;;
+				WARN) log_warning "[$name] $row_name" ;;
+				FAILED) problems=1 ;;
+			esac
+		done < <(
+			ai_manifest_sync "$manifest_file" || printf 'FAILED\n'
+		)
+		log_success "[$name] $row_count manifest row(s) in scope ($fetched clone(s) fetched)"
+		# A row that could not be fetched or derived fails the run.
+		[ "$problems" -eq 0 ]
+		return
+	fi
+	while IFS=$'\t' read -r record row_name kind scope owner repo ref path _; do
+		if [ "$record" = WARN ]; then
+			log_warning "[$name] $row_name"
+			continue
+		fi
+		[ "$record" = ROW ] || continue
+		case $scope in repo:?*) ;; *) ai_manifest_scope_applies "$scope" || continue ;; esac
+		row_count=$((row_count + 1))
+		key=$owner/$repo
+		[ -n "${heads[$key]+set}" ] || heads[$key]=$(git ls-remote "https://github.com/$owner/$repo" HEAD 2>/dev/null | awk 'NR == 1 { print $1 }')
+		head=${heads[$key]}
+		if [ -z "$head" ]; then
+			log_error "[$name] $row_name: could not read the default branch of $owner/$repo"
+			problems=$((problems + 1))
+		elif [ "$head" != "$ref" ]; then
+			log_warning "[$name] $row_name: $owner/$repo has moved to ${head:0:7}, pinned at ${ref:0:7}"
+			behind=$((behind + 1))
+		fi
+	done < <(ai_manifest_rows "$manifest_file")
+	if [ "$behind" -eq 0 ] && [ "$problems" -eq 0 ]; then
+		log_success "[$name] Every pin ($row_count row(s)) is at its upstream default branch"
+	elif [ "$behind" -gt 0 ]; then
+		log_warning "[$name] $behind row(s) pinned behind upstream - update their ref in $manifest_file"
+	fi
+	[ "$problems" -eq 0 ]
+}
+
+ai_profile_load
+[ $? -ne 2 ] || foundation_die "AI profile: $AI_PROFILE_ERROR"
+
 root=$(ai_root)
 failures=0
 for requested in "${names[@]}"; do
@@ -233,6 +305,14 @@ for requested in "${names[@]}"; do
 		failures=$((failures + 1))
 		continue
 	}
+	section_kinds=$(ai_section_kinds "$name")
+	if [[ $section_kinds == *manifest* ]]; then
+		update_manifest "$name" "$(foundation_expand_path "$(ai_section_value "$name" manifest)")" || failures=$((failures + 1))
+	fi
+	if [[ $section_kinds == *checkout* ]] && [[ $section_kinds != *vendored* ]]; then
+		log_step "[$name] checkout source $(foundation_expand_path "$(ai_section_value "$name" checkout)"), linked in place - nothing to vendor"
+	fi
+	[[ $section_kinds == *vendored* ]] || continue
 	lines=$(conf_section "$file" "$name")
 	value() { printf '%s\n' "$lines" | awk -v k="$1" 'tolower($1) == k { $1 = ""; sub(/^ +/, ""); print; exit }'; }
 	repository=$(value repository)

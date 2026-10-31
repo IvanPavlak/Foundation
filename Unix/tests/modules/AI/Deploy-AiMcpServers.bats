@@ -200,3 +200,81 @@ SH
 	[[ $output == *"No deploy line names an app"* ]]
 	[ ! -e "$toml" ]
 }
+
+# Writes ai-profiles.conf: a default profile and its section lines. Usage: profile NAME LINE...
+profile() {
+	local name=$1
+	shift
+	printf 'default %s\n[%s]\n' "$name" "$name" >"$FOUNDATION_CONFIG_DIR/ai-profiles.conf"
+	[ $# -eq 0 ] || printf '%s\n' "$@" >>"$FOUNDATION_CONFIG_DIR/ai-profiles.conf"
+}
+
+@test "an AI profile's mcp line picks the servers; a name it lists that is not configured warns" {
+	stub_claude
+	printf '[mobbin]\nurl https://api.mobbin.com/mcp\n' >>"$FOUNDATION_CONFIG_DIR/ai-mcp-servers.conf"
+	profile Personal 'mcp mobbin nope'
+	run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	[[ $output == *"MCP server [nope], which ai-mcp-servers.conf does not configure"* ]]
+	[ "$(cat "$BATS_TEST_TMPDIR/claude.log")" = 'mcp|add|--scope|user|--transport|http|mobbin|https://api.mobbin.com/mcp|' ]
+	grep -q '^\[mcp_servers.mobbin\]' "$toml"
+	! grep -q 'mcp_servers.linear' "$toml" || false
+	[ "$(sort "$FOUNDATION_STATE_DIR/ai-mcp-servers.state")" = $'claude-code\tmobbin\ncodex\tmobbin' ]
+}
+
+@test "without a profile nothing is recorded and nothing is removed" {
+	stub_claude
+	printf '{"mcpServers":{"linear":{"type":"http","url":"https://mcp.linear.app/mcp"}}}' >"$state"
+	run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	[ ! -e "$FOUNDATION_STATE_DIR/ai-mcp-servers.state" ]
+	[ ! -e "$BATS_TEST_TMPDIR/claude.log" ]
+}
+
+@test "a bare mcp line removes a configured server the apps carry as configured, never a foreign one" {
+	stub_claude
+	printf '{"mcpServers":{"linear":{"type":"http","url":"https://mcp.linear.app/mcp"},"mine":{"type":"http","url":"https://mine.example.com"}}}' >"$state"
+	mkdir -p "$HOME/.codex"
+	printf '[mcp_servers.linear]\nurl = "https://mcp.linear.app/mcp"\n\n[mcp_servers.mine]\nurl = "https://mine.example.com"\n' >"$toml"
+	profile Work 'mcp'
+	run "${BASH:-bash}" "$cmd" --check
+	[ "$status" -eq 0 ]
+	[[ $output == *"REMOVE Claude Code MCP server [linear]"* ]]
+	[[ $output == *"REMOVE Codex MCP server [linear]"* ]]
+	[ ! -e "$BATS_TEST_TMPDIR/claude.log" ]
+	run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	[ "$(cat "$BATS_TEST_TMPDIR/claude.log")" = 'mcp|remove|--scope|user|linear|' ]
+	! grep -q 'mcp_servers.linear' "$toml" || false
+	grep -q '^\[mcp_servers.mine\]' "$toml"
+	[ ! -s "$FOUNDATION_STATE_DIR/ai-mcp-servers.state" ]
+}
+
+@test "a recorded server the profile drops is removed even when its definition changed" {
+	stub_claude
+	printf '{"mcpServers":{"linear":{"type":"http","url":"https://changed.example.com"}}}' >"$state"
+	mkdir -p "$FOUNDATION_STATE_DIR"
+	printf 'claude-code\tlinear\n' >"$FOUNDATION_STATE_DIR/ai-mcp-servers.state"
+	profile Work 'mcp'
+	run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	[ "$(cat "$BATS_TEST_TMPDIR/claude.log")" = 'mcp|remove|--scope|user|linear|' ]
+}
+
+@test "a failed removal stays recorded and fails the run" {
+	stub_claude
+	printf '{"mcpServers":{"linear":{"type":"http","url":"https://mcp.linear.app/mcp"}}}' >"$state"
+	profile Work 'mcp'
+	STUB_FAIL='mcp remove' run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 1 ]
+	grep -qx $'claude-code\tlinear' "$FOUNDATION_STATE_DIR/ai-mcp-servers.state"
+}
+
+@test "an override naming no profile stops before anything is deployed" {
+	stub_claude
+	profile Personal
+	FOUNDATION_AI_PROFILE=Nope run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 1 ]
+	[[ $output == *"[Nope], which is no section"* ]]
+	[ ! -e "$BATS_TEST_TMPDIR/claude.log" ]
+}

@@ -26,8 +26,22 @@
 # Hooks of a destination: +claude-plugin-dirs sets env.CLAUDE_CODE_PLUGIN_DIRS of
 # ~/.claude/settings.json to its links, then every entry added by hand (python3 edits the JSON;
 # without it a warning), and runs `claude plugin validate` on each (a missing or rejecting CLI only
-# warns); +managed-settings makes the link through sudo (Claude Code's managed settings, which no
-# other setting overrides).
+# warns); +managed-settings writes a root-owned copy through sudo instead of a link (Claude Code's
+# managed settings, which no other setting overrides): the item's file rendered (the token
+# {ManagedDir} becomes the destination's folder; with an AI profile, forceLoginOrgUUID from its
+# Plan and the ownership guard appended to hooks.UserPromptSubmit and hooks.PreToolUse), and next
+# to it the item's hooks/ folder, and with a profile ai-ownership-guard.sh and ai-profile.conf;
+# each is rewritten only when it differs, root:wheel and mode 644 (a link left by an earlier run is
+# replaced).
+# AI profile (ai-profiles.conf, FOUNDATION_AI_PROFILE; none: everything as above): its `deploy`
+# lines replace the deploy line, its `rules` line the `use rules` line, its `include` lines limit a
+# kind to those items and its `exclude` lines add to the excludes. Sources (ai-artifacts.conf):
+# a checkout source's items are linked from the local repository itself; a manifest source's rows
+# from their pinned clone in the cache (fetched here first when missing, through git; not under
+# --check; a fetch that fails is a warning), only the rows whose scope
+# includes the profile, a strip-invocation-guard or renamed row from its derived copy (made here
+# when missing; a rename also sets the frontmatter name:, linked under the new name); a `repo:NAME` row is linked into .claude/skills/ of that repository (repositories.conf)
+# and its link name added to the repository's .git/info/exclude.
 # --kind deploys only those kinds; --check (--dry-run, the Windows -WhatIf) reports what a run would
 # change and changes nothing.
 _foundation=${BASH_SOURCE[0]}
@@ -37,7 +51,7 @@ while [ -L "$_foundation" ]; do
 done
 . "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
 foundation_require_bash || exit 1
-foundation_load config backup artifacts
+foundation_load config backup aiprofile artifacts
 
 foundation_normalize_args "$@"
 set -- "${FOUNDATION_ARGS[@]}"
@@ -62,9 +76,14 @@ while [ $# -gt 0 ]; do
 	shift
 done
 
+ai_profile_load
+[ $? -ne 2 ] || foundation_die "AI profile: $AI_PROFILE_ERROR"
+
 root=$(ai_root)
 settings="$HOME/.claude/settings.json"
 claude_cli=${FOUNDATION_CLAUDE_CLI:-claude}
+# The guard is one mirror file of WinuX and Foundation, at AI/Hooks of the repository.
+guard_source=$(dirname "$FOUNDATION_UNIX")/AI/Hooks/ai-ownership-guard.sh
 
 failures=0
 linked=0
@@ -72,6 +91,7 @@ linked=0
 log_title "Deploy-AiArtifacts"
 log_step "Repository root : $DOTFILES_ROOT"
 log_step "Artifacts root  : $root"
+[ -z "$AI_PROFILE" ] || log_step "AI profile      : $AI_PROFILE (by $AI_PROFILE_HOW)"
 
 if [ -z "$(ai_deployed_harnesses)" ]; then
 	log_warning "No harness to deploy into - add a deploy line to ai-artifacts.conf (see ai-harnesses.conf for the catalogue)!"
@@ -154,6 +174,164 @@ copy_item() {
 	fi
 	linked=$((linked + 1))
 	log_step "copied  $target_path"
+}
+
+# Reports the state of one root-owned file of the managed settings folder and, unless --check,
+# writes it from SOURCE through sudo (root:wheel, 644) when its content differs. A link in its
+# place (an earlier run's) is replaced; a real file that differs is first backed up.
+# Usage: managed_file KEY SOURCE TARGET
+managed_file() {
+	local key=$1 source_path=$2 target_path=$3
+	if [ -f "$target_path" ] && [ ! -L "$target_path" ] && cmp -s "$source_path" "$target_path"; then
+		linked=$((linked + 1))
+		return 0
+	fi
+	if [ "$check_only" -eq 1 ]; then
+		if [ -L "$target_path" ]; then
+			log_step "WRONG   $target_path (a link; the managed settings are a root-owned copy)"
+		elif [ -e "$target_path" ]; then
+			log_step "DIFFERS $target_path (not the rendered copy)"
+		else
+			log_step "MISSING $target_path"
+		fi
+		failures=$((failures + 1))
+		return 0
+	fi
+	if ! as_owner "$dest_elevate" mkdir -p "$(dirname "$target_path")" ||
+		! clear_target "$key" "$target_path" "$dest_elevate" ||
+		! as_owner "$dest_elevate" cp "$source_path" "$target_path" ||
+		! as_owner "$dest_elevate" chown root:wheel "$target_path" ||
+		! as_owner "$dest_elevate" chmod 644 "$target_path"; then
+		log_error "Could not write $target_path"
+		failures=$((failures + 1))
+		return 0
+	fi
+	linked=$((linked + 1))
+	log_step "copied  $target_path"
+}
+
+# The same for a folder (the rules item's hooks/): replaced whole when it differs, root:wheel,
+# files 644 and folders 755. Usage: managed_tree SOURCE TARGET
+managed_tree() {
+	local source_path=$1 target_path=$2
+	if [ -d "$target_path" ] && [ ! -L "$target_path" ] && diff -rq "$source_path" "$target_path" >/dev/null 2>&1; then
+		linked=$((linked + 1))
+		return 0
+	fi
+	if [ "$check_only" -eq 1 ]; then
+		if [ -e "$target_path" ] || [ -L "$target_path" ]; then
+			log_step "DIFFERS $target_path (not the rules item's hooks)"
+		else
+			log_step "MISSING $target_path"
+		fi
+		failures=$((failures + 1))
+		return 0
+	fi
+	if ! as_owner "$dest_elevate" rm -rf "$target_path" ||
+		! as_owner "$dest_elevate" cp -R "$source_path" "$target_path" ||
+		! as_owner "$dest_elevate" chown -R root:wheel "$target_path" ||
+		! as_owner "$dest_elevate" chmod -R u=rwX,go=rX "$target_path"; then
+		log_error "Could not write $target_path"
+		failures=$((failures + 1))
+		return 0
+	fi
+	linked=$((linked + 1))
+	log_step "copied  $target_path"
+}
+
+# The +managed-settings destination: the rendered managed settings at TARGET and what goes next
+# to it (the item's hooks/, and with a profile the ownership guard and ai-profile.conf).
+# Usage: managed_item KEY SOURCE TARGET
+managed_item() {
+	local key=$1 source_path=$2 target_path=$3 dir item_dir scratch
+	dir=$(dirname "$target_path")
+	item_dir=$(dirname "$source_path")
+	scratch=$(mktemp -d) || {
+		failures=$((failures + 1))
+		return 0
+	}
+	if ai_render_managed_settings "$source_path" "$dir" >"$scratch/managed-settings.json"; then
+		managed_file "$key" "$scratch/managed-settings.json" "$target_path"
+	else
+		log_error "SKIPPED $target_path (the managed settings of ${item_dir##*/} could not be rendered)"
+		failures=$((failures + 1))
+	fi
+	[ ! -d "$item_dir/hooks" ] || managed_tree "$item_dir/hooks" "$dir/hooks"
+	if [ -n "$AI_PROFILE" ]; then
+		if [ -f "$guard_source" ]; then
+			managed_file "$key.guard" "$guard_source" "$dir/ai-ownership-guard.sh"
+		else
+			log_error "The ownership guard is missing => $guard_source"
+			failures=$((failures + 1))
+		fi
+		ai_profile_conf_text >"$scratch/ai-profile.conf"
+		managed_file "$key.profile" "$scratch/ai-profile.conf" "$dir/ai-profile.conf"
+	fi
+	rm -rf "$scratch"
+}
+
+# Links the repository-scoped manifest rows (repo:NAME) into .claude/skills/ of each repository
+# and lists each link name in that repository's .git/info/exclude. A repository not on this
+# machine is a note; a real file where a link goes is skipped.
+deploy_repository_rows() {
+	local record repository link dir repo_dir folder exclude target line repositories
+	repositories=$(conf_path repositories.conf) || repositories=''
+	while IFS=$'\t' read -r record repository link dir; do
+		case $record in
+			WARN)
+				log_warning "$repository"
+				continue
+				;;
+			REPO) ;;
+			*) continue ;;
+		esac
+		if ! repo_dir=$(ai_repository_dir "$repositories" "$repository") || [ ! -d "$repo_dir" ]; then
+			log_step "NOTE    repository [$repository] of a manifest row is not on this machine (repositories.conf) - $link skipped"
+			continue
+		fi
+		if [ ! -d "$dir" ]; then
+			log_warning "Manifest row $link for [$repository] is not fetched yet - run Update-AiArtifacts"
+			continue
+		fi
+		folder=$repo_dir/.claude/skills
+		target=$folder/$link
+		log_step "[repo:$repository] skills => $folder"
+		if [ -e "$target" ] && [ ! -L "$target" ]; then
+			log_step "SKIPPED $target (a real file or folder of the repository)"
+			failures=$((failures + 1))
+			continue
+		fi
+		exclude=$(git -C "$repo_dir" rev-parse --git-path info/exclude 2>/dev/null) || exclude=''
+		[ -z "$exclude" ] || case $exclude in /*) ;; *) exclude=$repo_dir/$exclude ;; esac
+		line="/.claude/skills/$link"
+		if [ "$check_only" -eq 1 ]; then
+			[ -L "$target" ] && [ "$(readlink "$target")" = "$dir" ] || {
+				log_step "MISSING $target"
+				failures=$((failures + 1))
+			}
+			if [ -n "$exclude" ] && ! grep -qxF -- "$line" "$exclude" 2>/dev/null; then
+				log_step "MISSING $line in $exclude"
+				failures=$((failures + 1))
+			fi
+			continue
+		fi
+		if ! [ -L "$target" ] || [ "$(readlink "$target")" != "$dir" ]; then
+			if ! mkdir -p "$folder" || ! rm -f "$target" || ! ln -s "$dir" "$target"; then
+				failures=$((failures + 1))
+				continue
+			fi
+			log_step "linked  $target"
+		fi
+		linked=$((linked + 1))
+		if [ -z "$exclude" ]; then
+			log_warning "$repo_dir is not a git repository - $line not excluded"
+		elif ! grep -qxF -- "$line" "$exclude" 2>/dev/null; then
+			mkdir -p "$(dirname "$exclude")" || continue
+			# A last line without its newline would run into the new one.
+			[ ! -s "$exclude" ] || [ -z "$(tail -c 1 "$exclude")" ] || printf '\n' >>"$exclude"
+			printf '%s\n' "$line" >>"$exclude" && log_step "excluded $line in ${exclude#"$repo_dir"/}"
+		fi
+	done < <(ai_manifest_repo_rows)
 }
 
 # Makes the folder of an each or copy destination ready; fails (counted) when it cannot be used.
@@ -338,6 +516,22 @@ open_destination() {
 	fi
 }
 
+# The manifest cache first: every row in scope gets its pinned clone (fetched once, through git)
+# and its derived copy, so a fresh machine needs no separate Update-AiArtifacts. Not under --check;
+# a row that cannot be fetched is a warning, and the roster then reports it as not fetched.
+if [ "$check_only" -eq 0 ]; then
+	while IFS=$'\t' read -r manifest_name manifest_file; do
+		[ -n "$manifest_name" ] || continue
+		while IFS=$'\t' read -r record text; do
+			case $record in
+				FETCHING) log_step "[$manifest_name] fetching $text" ;;
+				FETCHED) log_step "[$manifest_name] fetched $text" ;;
+				WARN) log_warning "[$manifest_name] $text" ;;
+			esac
+		done < <(ai_manifest_sync "$manifest_file" 2>/dev/null)
+	done < <(ai_manifest_sources)
+fi
+
 dest_path=''
 dest_ready=0
 while IFS=$'\t' read -r record a b c d e; do
@@ -357,6 +551,8 @@ while IFS=$'\t' read -r record a b c d e; do
 			[ "$dest_placement" = file ] && key=$a.$b.$(basename "$d")
 			if [ "$dest_placement" = copy ]; then
 				copy_item "$key" "$c" "$d"
+			elif [[ ,$dest_hooks, == *,managed-settings,* ]]; then
+				managed_item "$key" "$c" "$d"
 			else
 				link_item "$key" "$c" "$d" "$dest_elevate"
 			fi
@@ -365,6 +561,9 @@ while IFS=$'\t' read -r record a b c d e; do
 	esac
 done < <(ai_plan "${kinds[@]}")
 finish_destination
+if [ ${#kinds[@]} -eq 0 ] || [[ " ${kinds[*]} " == *" skills "* ]]; then
+	deploy_repository_rows
+fi
 
 if [ "$check_only" -eq 1 ]; then
 	if [ "$failures" -eq 0 ]; then

@@ -47,6 +47,7 @@ In execution order. **Default** is the built-in state before any configuration; 
 | AiArtifacts | off | sudo-optional | Deploy-AiArtifacts: the skills, mods, rules, prompts and agents into the harnesses of the `deploy` line of `ai-artifacts.conf` (see [AI on a Mac](ai.md)) | CoreAiRules, AiSkills, AiMods |
 | AiMarketplaces | off | | Deploy-AiMarketplaces | AiMarketplaces |
 | AiMcpServers | off | | Deploy-AiMcpServers: the servers of `ai-mcp-servers.conf` into Claude Code and Codex (see [AI on a Mac](ai.md#mcp-servers)) | AiMcpServers |
+| AiProfileInit | off | interactive | Initialize-AiProfile: the one-time sign-ins of this Mac's AI profile (the Claude login of its Plan, `gh`, the OAuth MCP servers, its `env` variables, then Test-AiProfile), after the AI steps so the Plan pin is deployed first; without a profile it is skipped with a warning. It waits at the terminal, so it ships off: a run with it off stays unattended and, with a profile active, only warns and names Initialize-AiProfile (see [AI on a Mac](ai.md#profiles)) | AiProfileInit |
 | ObsidianCli | off | | Enable-ObsidianCli --create-if-missing | ObsidianCli |
 | DotnetEf | on | | Install-DotnetEf | DotnetEf |
 | DotnetSdks | off | sudo | Install-DotnetSdks: the `sdk-channel` lines of `dotnet.conf` (a .NET SDK no cask ships, such as 6.0) | the .NET 6 SDK of `WinGetApps.local.csv` |

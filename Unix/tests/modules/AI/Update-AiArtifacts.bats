@@ -239,3 +239,74 @@ conf() {
 	[ -f "$BATS_TEST_TMPDIR/elsewhere/Skills/vendor/alpha/SKILL.md" ]
 	[ ! -e "$ai/Skills" ]
 }
+
+# A local upstream for the manifest tests, reached through git's url.<base>.insteadOf (set in the
+# environment only), so https://github.com/up/skills never leaves the test folder. Sets
+# REMOTE_SHA to its head. Usage: manifest_upstream
+manifest_upstream() {
+	local remote=$BATS_TEST_TMPDIR/remotes/skills
+	mkdir -p "$remote/skills/tdd"
+	printf -- '---\nname: tdd\ndisable-model-invocation: true\n---\nbody\n' >"$remote/skills/tdd/SKILL.md"
+	git -C "$remote" init -q
+	git -C "$remote" add -A
+	git -C "$remote" -c user.name=t -c user.email=t@example.com commit -qm one
+	REMOTE_SHA=$(git -C "$remote" rev-parse HEAD)
+	export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.$remote.insteadOf" GIT_CONFIG_VALUE_0=https://github.com/up/skills
+	export FOUNDATION_AI_MANIFEST_CACHE=$BATS_TEST_TMPDIR/cache
+	printf 'name\tkind\tscope\tsource\tref\tpath\tinstall\n' >"$BATS_TEST_TMPDIR/m.tsv"
+	printf 'tdd\tskills\t*\thttps://github.com/up/skills\t%s\tskills/tdd\tclone rename=tdd2 strip-invocation-guard\n' "$REMOTE_SHA" >>"$BATS_TEST_TMPDIR/m.tsv"
+	printf 'work\tskills\tWork\thttps://github.com/up/skills\t%s\tskills/work\tclone\n' "$REMOTE_SHA" >>"$BATS_TEST_TMPDIR/m.tsv"
+	printf '[pm]\nmanifest %s\n' "$BATS_TEST_TMPDIR/m.tsv" >"$FOUNDATION_CONFIG_DIR/ai-artifacts.conf"
+}
+
+# bats test_tags=integration
+@test "a manifest source: the pinned clone is fetched once, the derived copy made, nothing vendored" {
+	manifest_upstream
+	run "${BASH:-bash}" "$cmd" pm
+	[ "$status" -eq 0 ]
+	clone=$FOUNDATION_AI_MANIFEST_CACHE/up/skills/$REMOTE_SHA
+	[ -f "$clone/skills/tdd/SKILL.md" ]
+	[ "$(git -C "$clone" rev-parse HEAD)" = "$REMOTE_SHA" ]
+	grep -qx 'name: tdd2' "$clone.derived/tdd2/SKILL.md"
+	! grep -q disable-model-invocation "$clone.derived/tdd2/SKILL.md" || false
+	[ ! -e "$ai/Skills/pm" ]
+	# No curl: a manifest source never reaches the GitHub API.
+	! grep -q '^curl' "$BATS_TEST_TMPDIR/tool.log" 2>/dev/null || false
+	# A second run fetches nothing: the clone is kept as it is.
+	touch "$clone/marker"
+	run "${BASH:-bash}" "$cmd" pm
+	[ "$status" -eq 0 ]
+	[[ $output == *"(0 clone(s) fetched)"* ]]
+	[ -e "$clone/marker" ]
+}
+
+# bats test_tags=integration
+@test "a manifest source --check compares each pin with the upstream default branch" {
+	manifest_upstream
+	run "${BASH:-bash}" "$cmd" --check
+	[ "$status" -eq 0 ]
+	[[ $output == *"Every pin (1 row(s)) is at its upstream default branch"* ]]
+	[ ! -e "$FOUNDATION_AI_MANIFEST_CACHE" ]
+	git -C "$BATS_TEST_TMPDIR/remotes/skills" -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m two
+	run "${BASH:-bash}" "$cmd" --check
+	[ "$status" -eq 0 ]
+	[[ $output == *"tdd: up/skills has moved to"*"pinned at ${REMOTE_SHA:0:7}"* ]]
+}
+
+# bats test_tags=integration
+@test "a manifest row that cannot be fetched fails the run and leaves no partial clone" {
+	manifest_upstream
+	sed -i.bak "s/$REMOTE_SHA/ffffffffffffffffffffffffffffffffffffffff/" "$BATS_TEST_TMPDIR/m.tsv"
+	run "${BASH:-bash}" "$cmd" pm
+	[ "$status" -eq 1 ]
+	[ ! -e "$FOUNDATION_AI_MANIFEST_CACHE/up/skills/ffffffffffffffffffffffffffffffffffffffff" ]
+	[ -z "$(find "$FOUNDATION_AI_MANIFEST_CACHE" -name '.fetch.*' 2>/dev/null)" ]
+}
+
+@test "a checkout source has nothing to vendor" {
+	printf '[pm]\ncheckout %s\n' "$BATS_TEST_TMPDIR" >"$FOUNDATION_CONFIG_DIR/ai-artifacts.conf"
+	run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	[[ $output == *"checkout source"*"nothing to vendor"* ]]
+	[ ! -e "$BATS_TEST_TMPDIR/tool.log" ] || ! grep -q '^curl' "$BATS_TEST_TMPDIR/tool.log"
+}
