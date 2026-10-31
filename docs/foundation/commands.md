@@ -35,7 +35,7 @@ any case (`Run-Tests -testname layout`). PowerShell's prefix abbreviations (`-Al
 `-Alongside`) are not accepted.
 
 `--help` prints the header without doing anything, in the pass-through wrappers too (DotnetRun,
-DotnetBuildAndRun, NpmInstallAndStart, GitPull, Open-ClaudeDesktop): a leading `--help` is
+DotnetBuildAndRun, NpmInstallAndStart, GitPull, Open-ClaudeDesktop, Open-T3Code): a leading `--help` is
 theirs, and `DotnetRun -- --help` hands it to the wrapped tool.
 
 Command names are case-insensitive too (`kill-all`, `reload-profile`). Every shell function a

@@ -18,6 +18,7 @@ profiles, Obsidian, Acrobat and Docker Desktop; see [the module reference](../..
 | `Open-Docker` | `docker.conf` | [Open-Docker](Open-Docker.md) |
 | `Open-Obsidian` | `obsidian.conf`, `apps.conf` | [Open-Obsidian](Open-Obsidian.md) |
 | `Open-SecureBrowser` | `apps.conf` | [Open-SecureBrowser](Open-SecureBrowser.md) |
+| `Open-T3Code` | `apps.conf` | [Open-T3Code](Open-T3Code.md) |
 | `Open-VSCode` | `vscode-folders.conf`, `vscode-workspaces.conf` | [Open-VSCode](Open-VSCode.md) |
 | `Open-VSCodeWorkspace` | `vscode-workspaces.conf` | [Open-VSCodeWorkspace](Open-VSCodeWorkspace.md) |
 
