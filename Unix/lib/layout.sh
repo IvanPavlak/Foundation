@@ -712,6 +712,8 @@ layout_arrange_desktop() {
 	done <<<"$sorted"
 	local count=${#ids[@]} i ok=0
 	[ "$count" -gt 0 ] || return 1
+	# Whether AeroSpace batches commands, found out here so the walks in subshells need not ask.
+	as_eval_check
 
 	local distinct stacked=0
 	distinct=$(for ((i = 0; i < count; i++)); do printf '%s.%s\n' "${cols[i]}" "${rows[i]}"; done | sort -u | grep -c .)
@@ -719,12 +721,10 @@ layout_arrange_desktop() {
 
 	# A window in macOS native full screen sits on its own Space and covers the desktop no matter
 	# what the tree says; bring it back first and let the exit animation finish.
-	local exited=0
-	for ((i = 0; i < count; i++)); do
-		if as_exit_native_fullscreen "${ids[i]}"; then
-			log_debug "[arrange] window ${ids[i]} left macOS native full screen"
-			exited=1
-		fi
+	local exited=0 left
+	for left in $(as_exit_native_fullscreen_each "${ids[@]}"); do
+		log_debug "[arrange] window $left left macOS native full screen"
+		exited=1
 	done
 	[ "$exited" -eq 1 ] && sleep 1.5
 
@@ -734,20 +734,18 @@ layout_arrange_desktop() {
 	parking=$(parking_workspace)
 	for ((i = 0; i < count; i++)); do own="$own${ids[i]} "; done
 	if [ -n "$parking" ] && [ "$parking" != "$workspace" ]; then
-		local stranger
+		local stranger strangers=()
 		for stranger in $(as_workspace_windows "$workspace"); do
 			case $own in *" $stranger "*) continue ;; esac
 			case ${layout_protected:- } in *" $stranger "*) continue ;; esac
 			log_debug "[arrange] parking window $stranger from workspace $workspace on $parking"
-			as_move_window "$stranger" "$parking"
+			strangers+=("$stranger")
 		done
+		as_park_windows "$parking" ${strangers[@]+"${strangers[@]}"}
 	fi
 
-	for ((i = 0; i < count; i++)); do
-		as_move_window "${ids[i]}" "$workspace" || true
-		as_set_tiling "${ids[i]}" || true
-	done
-	as_flatten "$workspace"
+	# In entry order, each appended as the workspace root's last child: the order mechanism.
+	as_gather_tiled "$workspace" "${ids[@]}"
 
 	if [ "$stacked" -eq 1 ]; then
 		as_layout "${ids[0]}" h_accordion || ok=1

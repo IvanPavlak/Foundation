@@ -83,10 +83,103 @@ as_focused_workspace() {
 	as_cli list-workspaces --focused | head -1
 }
 
+# Several commands in one CLI call: AeroSpace's eval runs a `;`-separated list in order, a failing
+# command not stopping the next, as separate calls would - and each call costs about 17 ms of
+# process start, which arranging a desktop pays dozens of times. A trailing sentinel tells a list
+# that ran from one that did not (an AeroSpace without eval, a list it cannot parse): then this
+# fails and the caller sends the commands one by one, as before. Callers pass only plain tokens
+# (as__plain). Prints what the commands print. Usage: as__eval COMMAND...
+as__eval_known=''
+as__eval() {
+	local output expression
+	[ "$as__eval_known" != no ] || return 1
+	expression=$(printf '%s; ' "$@")
+	output=$(as_cli eval -- "${expression}echo -- as-eval-done") || true
+	case $output in
+		as-eval-done | *$'\n'as-eval-done)
+			as__eval_known=yes
+			output=${output%as-eval-done}
+			printf '%s' "$output"
+			;;
+		*)
+			[ -n "$as__eval_known" ] || as__eval_known=no
+			return 1
+			;;
+	esac
+}
+
+# Is eval there? Asked once, in the calling shell, so the batches of its subshells do not each
+# find out again. Usage: as_eval_check
+as_eval_check() {
+	[ -z "$as__eval_known" ] || return 0
+	as__eval true >/dev/null || as__eval_known=no
+}
+
+# Are all arguments plain tokens (window ids, workspace names) that AeroSpace's shell takes as one
+# word each? Usage: as__plain WORD...
+as__plain() {
+	local word
+	for word in "$@"; do
+		case $word in '' | *[!A-Za-z0-9._-]*) return 1 ;; esac
+	done
+}
+
+# as_exit_native_fullscreen for every ID, in one call: prints the ids of the windows that were in
+# native full screen (and now are not), in argument order. Usage: as_exit_native_fullscreen_each ID...
+as_exit_native_fullscreen_each() {
+	local id commands=()
+	[ $# -gt 0 ] || return 0
+	if as__plain "$@"; then
+		for id in "$@"; do commands+=("macos-native-fullscreen --window-id $id --fail-if-noop off && echo -- $id"); done
+		as__eval "${commands[@]}" && return 0
+	fi
+	for id in "$@"; do
+		as_exit_native_fullscreen "$id" && printf '%s\n' "$id"
+	done
+	return 0
+}
+
+# Move-WindowToVirtualDesktop for every ID, in one call (the windows of other workspaces a layout
+# parks). Usage: as_park_windows WORKSPACE ID...
+as_park_windows() {
+	local workspace=$1 id commands=()
+	shift
+	[ $# -gt 0 ] || return 0
+	if as__plain "$workspace" "$@"; then
+		for id in "$@"; do commands+=("move-node-to-workspace --window-id $id -- $workspace"); done
+		as__eval "${commands[@]}" >/dev/null && return 0
+	fi
+	for id in "$@"; do as_move_window "$id" "$workspace"; done
+	return 0
+}
+
+# The insertion step of an arrange, in one call: each ID moved to WORKSPACE in argument order
+# (appended as the last child, which is how the order is set) and made tiling, then the
+# workspace's tree flattened. Usage: as_gather_tiled WORKSPACE ID...
+as_gather_tiled() {
+	local workspace=$1 id commands=()
+	shift
+	if as__plain "$workspace" "$@"; then
+		for id in "$@"; do
+			commands+=("move-node-to-workspace --window-id $id -- $workspace" "layout --window-id $id tiling")
+		done
+		commands+=("flatten-workspace-tree --workspace $workspace")
+		as__eval "${commands[@]}" >/dev/null && return 0
+	fi
+	for id in "$@"; do
+		as_move_window "$id" "$workspace" || true
+		as_set_tiling "$id" || true
+	done
+	as_flatten "$workspace"
+}
+
 # Get-DesktopWindowOrder: window ids of a workspace in on-screen left-to-right order, walked
-# through focus (see header). Focus ends on the rightmost window.
+# through focus (see header). Focus ends on the rightmost window. The walk after the first focus
+# is one eval when AeroSpace has it: the moves left, then each move right with the focused window
+# read after it. A move that fails at the edge leaves the focus where it is, so the moves after it
+# fail too and add nothing - the same walk as one call per step, which is the fallback.
 as_workspace_order() {
-	local workspace=$1 members count i current order=' '
+	local workspace=$1 members count i current order=' ' commands=() walked
 	members=$(as_workspace_windows "$workspace")
 	count=$(printf '%s\n' "$members" | grep -c .)
 	if [ "$count" -lt 2 ]; then
@@ -97,6 +190,36 @@ as_workspace_order() {
 		printf '%s\n' "$members"
 		return 0
 	}
+	for ((i = 0; i < count; i++)); do commands+=("focus --ignore-floating --boundaries workspace --boundaries-action fail left"); done
+	commands+=("echo -- as-walk-start" "list-windows --focused --format %{window-id}" "echo -- as-walk-right")
+	for ((i = 0; i < count; i++)); do
+		commands+=("focus --ignore-floating --boundaries workspace --boundaries-action fail right && list-windows --focused --format %{window-id}")
+	done
+	if walked=$(as__eval "${commands[@]}"); then
+		# The leftmost window: what the focus read between the two markers printed.
+		current=${walked#*as-walk-start}
+		current=${current%%as-walk-right*}
+		current=$(printf '%s\n' "$current" | tr -d ' ' | grep -m 1 .)
+		[ -n "$current" ] || {
+			printf '%s\n' "$members"
+			return 0
+		}
+		order=" $current "
+		printf '%s\n' "$current"
+		# Then each window a move right reached, up to the first already seen.
+		while IFS= read -r current; do
+			current=${current// /}
+			[ -n "$current" ] || continue
+			case $order in *" $current "*) break ;; esac
+			order="$order$current "
+			printf '%s\n' "$current"
+		done <<<"${walked#*as-walk-right}"
+		local member
+		for member in $members; do
+			case $order in *" $member "*) ;; *) printf '%s\n' "$member" ;; esac
+		done
+		return 0
+	fi
 	for ((i = 0; i < count; i++)); do
 		as_cli focus --ignore-floating --boundaries workspace --boundaries-action fail left >/dev/null || break
 	done
