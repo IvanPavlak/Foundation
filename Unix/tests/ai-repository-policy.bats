@@ -102,6 +102,21 @@ always_denied() {
 	expect 'deny: *force pushes*' 'git push origin +feature'
 	expect 'deny: *default branch*' 'git push origin master'
 	expect 'deny: *default branch*' 'git push origin HEAD:main'
+	expect 'deny: *default branch*' 'git push origin HEAD:refs/heads/master'
+	expect 'deny: *default branch*' 'git push origin feature:refs/heads/main'
+	expect 'deny: *every branch*' 'git push --all origin'
+	expect 'deny: *every branch*' 'git push --mirror origin'
+	expect 'deny: *every branch*' "git push origin 'refs/heads/*:refs/heads/*'"
+	expect 'deny: *git configuration*' 'git -c push.default=matching push'
+	expect 'deny: *GitHub API*' 'gh api -X PUT repos/MyUser/MyProject/pulls/12/merge'
+	expect 'deny: *GitHub API*' 'gh api repos/MyUser/MyProject/merges -f base=master -f head=feature'
+	expect 'deny: *GitHub API*' 'gh api --method PATCH repos/MyUser/MyProject/git/refs/heads/master -f sha=abc'
+	expect 'deny: *GitHub API*' 'gh api -X PUT repos/MyUser/MyProject/contents/README.md -f message=x -f content=eA=='
+	expect 'deny: *GitHub API*' "gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: \"x\"}) { clientMutationId } }'"
+	expect 'deny: *GitHub API*' 'gh api graphql -F query=@merge.graphql'
+	expect 'deny: *GitHub repository*' 'gh repo sync MyUser/MyFork'
+	expect 'deny: *GitHub repository*' 'gh repo edit --default-branch feature'
+	expect 'deny: *gh configuration*' "gh alias set m 'pr merge'"
 	expect 'deny: *deleting branches*' 'git branch -D old'
 	expect 'deny: *deleting branches*' 'git push origin --delete old'
 	expect 'deny: *deleting branches*' 'git push origin :old'
@@ -128,6 +143,16 @@ always_allowed() {
 	expect allow 'git config --get user.name'
 	expect allow 'git config --list'
 	expect allow 'git status && git log --oneline -5'
+	expect allow 'git push origin feature:refs/heads/feature'
+	expect allow 'git push origin HEAD'
+	expect allow 'git -c core.pager=cat log -1'
+	expect allow 'gh api repos/MyUser/MyProject/pulls/12'
+	expect allow 'gh api repos/MyUser/MyProject/git/refs/heads/master'
+	expect allow 'gh api repos/MyUser/MyProject/contents/README.md'
+	expect allow 'gh api -X GET search/issues -f q=repo:MyUser/MyProject'
+	expect allow 'gh api repos/MyUser/MyProject/issues/12/comments -f body=Done'
+	expect allow 'gh api repos/MyUser/MyProject/statuses/abc -f state=success -f context=local/tests'
+	expect allow 'gh repo view MyUser/MyProject'
 	expect allow '' Edit
 	expect allow '' Write
 }
@@ -150,7 +175,34 @@ always_allowed() {
 @test "a plain push while the default branch is checked out is denied, naming a feature branch is not" {
 	policy_conf 'profile Personal' 'default-policy branch'
 	expect 'deny: *checked-out branch is the default branch*' 'git push' Bash "$ON_MASTER"
+	expect 'deny: *checked-out branch is the default branch*' 'git push origin HEAD' Bash "$ON_MASTER"
+	expect 'deny: *checked-out branch is the default branch*' 'git push -u origin @' Bash "$ON_MASTER"
 	expect allow 'git push origin feature' Bash "$ON_MASTER"
+}
+
+@test "a push from another folder must name its branch, since the hook cannot see that folder's branch" {
+	policy_conf 'profile Personal' 'default-policy branch'
+	expect 'deny: *must name its branch*' 'cd ../onmaster && git push'
+	expect 'deny: *must name its branch*' 'git -C ../onmaster push origin HEAD'
+	expect 'deny: *must name its branch*' 'Set-Location ../onmaster; git push' PowerShell
+	expect allow 'cd ../onmaster && git push origin feature'
+	expect allow 'git -C ../onmaster push -u origin feature'
+}
+
+@test "a merge runs in the folder of the repository it merges, so that repository's level applies" {
+	policy_conf 'profile Personal' 'default-policy autonomous'
+	fake_gh green
+	expect allow 'gh pr merge 12 --squash -R MyUser/MyProject'
+	expect allow 'gh pr merge https://github.com/MyUser/MyProject/pull/12 --squash'
+	expect 'deny: *another repository*' 'gh pr merge 12 --repo MyUser/OtherProject'
+	expect 'deny: *another repository*' 'gh -R MyUser/OtherProject pr merge 12'
+	expect 'deny: *another repository*' 'gh pr merge https://github.com/MyUser/OtherProject/pull/12'
+	expect 'deny: *another repository*' 'GH_REPO=MyUser/OtherProject gh pr merge 12'
+	expect 'deny: *another repository*' 'cd ../other && gh pr merge 12'
+	# The flags before the subcommand do not hide a merge from a branch repository.
+	policy_conf 'profile Personal' 'default-policy branch'
+	expect 'deny: *autonomous repository*' 'gh -R MyUser/MyProject pr merge 12'
+	expect 'deny: *autonomous repository*' 'gh pr --repo MyUser/MyProject merge 12'
 }
 
 @test "autonomous: a merge needs green checks, or none reported in a merge-without-checks repository" {
