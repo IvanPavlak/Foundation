@@ -17,7 +17,15 @@ setup_file() {
 	for pair in feature:feature onmaster:master; do
 		git init -q -b "${pair#*:}" "$POLICY_ROOT/${pair%%:*}"
 		git -C "$POLICY_ROOT/${pair%%:*}" remote add origin https://github.com/MyUser/MyProject.git
+		git -C "$POLICY_ROOT/${pair%%:*}" -c user.name=Test -c user.email=test@example.com -c commit.gpgsign=false commit -q --allow-empty -m Start
 	done
+	git -C "$POLICY_ROOT/feature" tag v1
+	# A third, whose origin/HEAD names a default branch that is neither master nor main.
+	git init -q -b topic "$POLICY_ROOT/ondevelop"
+	git -C "$POLICY_ROOT/ondevelop" remote add origin https://github.com/MyUser/MyProject.git
+	git -C "$POLICY_ROOT/ondevelop" -c user.name=Test -c user.email=test@example.com -c commit.gpgsign=false commit -q --allow-empty -m Start
+	git -C "$POLICY_ROOT/ondevelop" branch develop
+	git -C "$POLICY_ROOT/ondevelop" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/develop
 }
 
 setup() {
@@ -63,11 +71,11 @@ json_escape() {
 
 # Runs a hook on one hook input and prints its decision: allow, deny: REASON or block: REASON.
 # Each call is a new session (CALLS counts them, so call it outside $(...) or bump CALLS first), so
-# no level is cached between calls. Usage: decide COMMAND [TOOL [CWD [HOOK [EVENT [UNATTENDED]]]]]
+# no level is cached between calls, unless POLICY_SESSION names one. Usage: decide COMMAND [TOOL [CWD [HOOK [EVENT [UNATTENDED]]]]]
 decide() {
 	local command=$1 tool=${2:-Bash} cwd=${3:-$FEATURE} hook=${4:-$POLICY_HOOK} event=${5:-} unattended=${6:-} json output
-	json=$(printf '{"session_id":"s%s-%s-%s","cwd":"%s","tool_name":"%s","tool_input":{"command":"%s"}}' \
-		"$BATS_TEST_NUMBER" "$CALLS" "$$" "$cwd" "$tool" "$(json_escape "$command")")
+	json=$(printf '{"session_id":"%s","cwd":"%s","tool_name":"%s","tool_input":{"command":"%s"}}' \
+		"${POLICY_SESSION:-s$BATS_TEST_NUMBER-$CALLS-$$}" "$cwd" "$tool" "$(json_escape "$command")")
 	# shellcheck disable=SC2086 # EVENT is one word or none
 	output=$(printf '%s' "$json" | env -u AI_UNATTENDED AI_PROFILE_CONF="$CONF" TMPDIR="$BATS_TEST_TMPDIR/tmp" \
 		PATH="$POLICY_ROOT/bin:$PATH" ${unattended:+AI_UNATTENDED=$unattended} "$HOOK_BASH" "$hook" $event)
@@ -157,9 +165,19 @@ always_allowed() {
 	expect allow '' Write
 }
 
-@test "autonomous: the always-denied list, prose and the file tools" {
-	always_denied autonomous
-	always_allowed autonomous
+# The rules above run before the hook looks at the level, so the other levels get one case per kind.
+level_sample() {
+	policy_conf 'profile Personal' "default-policy $1"
+	expect 'deny: *force pushes*' 'git push --force origin feature'
+	expect 'deny: *default branch*' 'git push origin master'
+	expect 'deny: *every branch*' 'git push --all origin'
+	expect 'deny: *deleting branches*' 'git branch -D old'
+	expect 'deny: *git configuration*' 'git config user.name Someone'
+	expect 'deny: *GitHub API*' 'gh api -X PUT repos/MyUser/MyProject/pulls/12/merge'
+	expect 'deny: *GitHub repository*' 'gh repo sync MyUser/MyFork'
+	expect allow 'git add -A && git commit -m "Add the thing"'
+	expect allow 'git push -u origin feature'
+	expect allow '' Edit
 }
 
 @test "branch: the always-denied list, prose and the file tools" {
@@ -167,9 +185,97 @@ always_allowed() {
 	always_allowed branch
 }
 
-@test "draft: the always-denied list, prose and the file tools" {
-	always_denied draft
-	always_allowed draft
+@test "autonomous and draft: one case of each always-denied kind" {
+	level_sample autonomous
+	level_sample draft
+}
+
+@test "the hook's parsing: commands without git or gh, case, length, other tools" {
+	local long
+	long=$(printf 'x%.0s' {1..5000})
+	policy_conf 'profile Personal' 'default-policy branch'
+	expect allow 'ls -la'
+	expect allow 'echo gitlab'
+	expect 'deny: *force pushes*' 'GIT PUSH --FORCE origin feature'
+	expect allow "echo $long"
+	expect allow "echo $long && git status"
+	expect 'deny: *force pushes*' "echo $long && git push --force origin feature"
+	expect 'deny: *default branch*' "echo $long && git push origin master"
+	expect allow 'git push --force' Read
+	policy_conf 'profile Personal' 'default-policy autonomous'
+	expect allow "echo $long && git push --force-with-lease --force-if-includes origin feature"
+	expect 'deny: *both flags*' "echo $long && git push --force origin feature"
+}
+
+@test "a level and repository cached for the session give the same decision" {
+	POLICY_SESSION="cached-$BATS_TEST_NUMBER-$$"
+	policy_conf 'profile Personal' 'policy draft github.com/myuser/*'
+	expect 'deny: *(github.com/myuser/myproject, draft)*' 'git push origin master'
+	# The conf changes, the cached level does not, and the repository is still named.
+	policy_conf 'profile Personal' 'policy branch github.com/myuser/*'
+	expect 'deny: *(github.com/myuser/myproject, draft)*' 'git push origin master'
+	expect 'deny: *--draft*' 'gh pr create --title "Add it"'
+	expect 'deny: *(no origin, branch)*' 'git push origin master' Bash "$OUTSIDE"
+	expect 'deny: *(no origin, branch)*' 'git push origin master' Bash "$OUTSIDE"
+	unset POLICY_SESSION
+}
+
+@test "autonomous: the one force push allowed needs both flags and one named non-default branch" {
+	local form='git push --force-with-lease --force-if-includes origin'
+	policy_conf 'profile Personal' 'default-policy autonomous'
+	expect allow "$form feature"
+	expect allow 'git push --force-if-includes --force-with-lease origin feature'
+	expect allow "$form feature" PowerShell
+	expect allow "git fetch origin && $form feature"
+	expect allow "$form topic" Bash "$POLICY_ROOT/ondevelop"
+	# The flags.
+	expect 'deny: *both flags*' 'git push --force-with-lease origin feature'
+	expect 'deny: *both flags*' 'git push --force-if-includes origin feature'
+	expect 'deny: *both flags*' 'git push --force origin feature'
+	expect 'deny: *both flags*' 'git push -f origin feature'
+	expect 'deny: *both flags*' 'git push origin +feature'
+	expect 'deny: *both flags*' 'git push --force-with-lease=feature:abc --force-if-includes origin feature'
+	expect 'deny: *both flags*' 'git push -u --force-with-lease --force-if-includes origin feature'
+	expect 'deny: *one branch*' 'git push --force-with-lease --force-if-includes --no-force-if-includes origin feature'
+	expect 'deny: *both flags*' 'bash -c "git push --force origin feature"'
+	# The target.
+	expect 'deny: *default branch*' "$form master"
+	expect 'deny: *default branch*' "$form MASTER"
+	expect 'deny: *default branch*' "$form main"
+	expect 'deny: *default branch*' "$form develop" Bash "$POLICY_ROOT/ondevelop"
+	expect 'deny: *local branch*' "$form HEAD:master"
+	expect 'deny: *local branch*' "$form feature:master"
+	expect 'deny: *local branch*' "$form refs/heads/master"
+	expect 'deny: *local branch*' "$form heads/master"
+	expect 'deny: *local branch*' "$form HEAD"
+	expect 'deny: *local branch*' "$form \$branch"
+	expect 'deny: *local branch*' "$form v1"
+	expect 'deny: *local branch*' "$form +feature"
+	# How many targets, and where.
+	expect 'deny: *one branch*' 'git push --force-with-lease --force-if-includes'
+	expect 'deny: *one branch*' 'git push --force-with-lease --force-if-includes origin'
+	expect 'deny: *one branch*' "$form feature other"
+	expect 'deny: *one branch*' 'git push --force-with-lease --force-if-includes fork feature'
+	expect 'deny: *one branch*' 'git push --force-with-lease --force-if-includes --all origin'
+	expect 'deny: *own folder*' "cd ../other && $form feature"
+	expect 'deny: *own folder*' "GIT_DIR=../other/.git $form feature"
+	expect 'deny: *exactly git push*' 'git -C ../other push --force-with-lease --force-if-includes origin feature'
+	expect 'deny: *exactly git push*' 'git -c core.sshCommand=x push --force-with-lease --force-if-includes origin feature'
+	# Every force push of the command counts.
+	expect 'deny: *both flags*' "$form feature; git push --force origin other"
+	expect 'deny: *default branch*' "$form feature && $form master"
+}
+
+@test "below autonomous even the allowed force push is denied" {
+	local form='git push --force-with-lease --force-if-includes origin feature' level
+	for level in branch draft; do
+		policy_conf 'profile Personal' "default-policy $level"
+		expect 'deny: *pushed history is never rewritten*' "$form"
+	done
+	policy_conf 'profile Personal' 'default-policy readonly'
+	expect 'deny: *, readonly)*' "$form"
+	policy_conf 'profile Personal' 'default-policy blocked'
+	expect 'deny: *, blocked)*' "$form"
 }
 
 @test "a plain push while the default branch is checked out is denied, naming a feature branch is not" {
@@ -301,4 +407,39 @@ always_allowed() {
 	expect 'deny: *is blocked*' '' Read "$FEATURE" "$GUARD" PreToolUse
 	policy_conf 'profile Personal' 'default-owner Personal' 'owns Work github.com/myuser/*' 'autonomous github.com/myuser/myproject'
 	expect 'block: *belongs to the Work AI profile*' '' Bash "$FEATURE" "$GUARD" UserPromptSubmit
+}
+
+@test "ai-ownership-guard.sh: who owns a repository, and the conf lines it reads" {
+	policy_conf 'profile Personal' 'default-owner Work'
+	expect 'block: *belongs to the Work AI profile*' '' Bash "$FEATURE" "$GUARD" UserPromptSubmit
+	expect 'deny: *belongs to the Work AI profile*' '' Bash "$FEATURE" "$GUARD" PreToolUse
+	expect allow '' Bash "$OUTSIDE" "$GUARD" PreToolUse
+	# A shared line beats an owns line, patterns in any case, and the first owns line wins.
+	policy_conf 'profile Personal' 'default-owner Work' 'owns Work github.com/myuser/*' 'shared github.com/MYUSER/*'
+	expect allow '' Bash "$FEATURE" "$GUARD" PreToolUse
+	policy_conf 'profile Personal' 'owns Personal github.com/myuser/myproject' 'owns Work github.com/myuser/*'
+	expect allow '' Bash "$FEATURE" "$GUARD" PreToolUse
+	policy_conf 'profile Personal' 'owns Work github.com/myuser/*' 'owns Personal github.com/myuser/myproject'
+	expect 'deny: *belongs to the Work AI profile*' '' Bash "$FEATURE" "$GUARD" PreToolUse
+	# A value ends at whitespace or #, the last line counts, and only a line starting with the key is read.
+	policy_conf 'profile Work' 'profile Personal # now' 'default-owner Personal'
+	expect allow '' Bash "$FEATURE" "$GUARD" PreToolUse
+	policy_conf '  profile Personal' 'default-owner Work'
+	expect allow '' Bash "$FEATURE" "$GUARD" PreToolUse
+	policy_conf 'profile Personal' 'default-owner Personal' '  default-policy blocked'
+	expect allow '' Bash "$OUTSIDE" "$GUARD" PreToolUse
+}
+
+@test "ai-ownership-guard.sh: a verdict cached for the session and folder holds after the conf changes" {
+	POLICY_SESSION="guard-$BATS_TEST_NUMBER-$$"
+	policy_conf 'profile Personal' 'default-owner Work'
+	expect 'deny: *belongs to the Work AI profile*' '' Bash "$FEATURE" "$GUARD" PreToolUse
+	policy_conf 'profile Personal' 'default-owner Personal'
+	expect 'deny: *belongs to the Work AI profile*' '' Bash "$FEATURE" "$GUARD" PreToolUse
+	expect 'block: *belongs to the Work AI profile*' '' Bash "$FEATURE" "$GUARD" UserPromptSubmit
+	# Another folder of the session has its own verdict, which is cached in turn.
+	expect allow '' Bash "$OUTSIDE" "$GUARD" PreToolUse
+	policy_conf 'profile Personal' 'default-policy blocked'
+	expect allow '' Bash "$OUTSIDE" "$GUARD" PreToolUse
+	unset POLICY_SESSION
 }

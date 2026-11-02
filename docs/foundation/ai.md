@@ -117,7 +117,7 @@ repository a session works in. The levels are a closed set, from most to least t
 
 | Level | Agents may | Agents may not |
 | --- | --- | --- |
-| `autonomous` | everything `branch` allows, plus `gh pr merge` when every CI check of the pull request passed | merge with a failing or pending check, or with no check reported (unless a `merge-without-checks` line names the repository) |
+| `autonomous` | everything `branch` allows, plus `gh pr merge` when every CI check of the pull request passed, and one form of force push to a named non-default branch | merge with a failing or pending check, or with no check reported (unless a `merge-without-checks` line names the repository) |
 | `branch` | commit, push a non-default branch, open and ready pull requests | merge |
 | `draft` | commit, push a non-default branch, open draft pull requests (`gh pr create --draft`) | `gh pr ready`, merge, a pull request without `--draft` |
 | `readonly` | read, search and explain: the reading tools | any Bash or PowerShell call, and the Edit, Write, MultiEdit and NotebookEdit tools |
@@ -127,7 +127,8 @@ Every level keeps the always-denied list: a push to the default branch (an expli
 `master`/`main`/default refspec, `refs/heads/` or not, or a push naming no branch or `HEAD` while it
 is checked out), a push naming no branch after a folder change (`cd`, `git -C`), whose branch the
 hook cannot see, a push of every branch (`--all`, `--mirror`, a glob refspec), a force push
-(`--force`, `--force-with-lease`, `-f`, `+refspec`), deleting a branch, changing remotes, upstream
+(`--force`, `--force-with-lease`, `-f`, `+refspec`; the `autonomous` exception is below), deleting a
+branch, changing remotes, upstream
 tracking or git configuration (`git -c` push, remote, branch and url settings included), a branch
 cut from a remote branch without `--no-track`, a merge, ref update or file commit through the
 GitHub API (`gh api` writes to `pulls/N/merge`, `merges`, `git/refs`, `contents/`, `branches/` and
@@ -139,6 +140,16 @@ the subcommand (`gh -R x pr merge`, `gh pr --repo x merge`) do not hide a call. 
 command text: it stops the ways an agent reaches a default branch by accident or habit, not a
 script file it writes and runs, so GitHub branch protection, where the plan offers it, stays the
 backstop.
+
+The one force push `autonomous` allows is exactly
+`git push --force-with-lease --force-if-includes origin <branch>`, the two flags in either order, so
+a worker can rebase the feature branch it owns. `<branch>` must be a local branch of the repository,
+by its plain name, and not the default branch; the command must run in the repository's own folder,
+with no `cd`, `git -C` or `GIT_` variable. A refused call is told which part failed.
+`--force-if-includes` (Git 2.30 or newer) is required because `--force-with-lease` alone compares
+against the remote-tracking ref, and any `git fetch` moves that ref, which removes the protection
+without a word. Merging the default branch into the feature branch stays allowed at every level that
+pushes.
 
 - `policy LEVEL PATTERN...` gives the repositories matching any PATTERN that level (patterns as
   for `owns`). `autonomous PATTERN...` is a synonym of `policy autonomous PATTERN...`, and both may
