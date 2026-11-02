@@ -505,7 +505,7 @@ step_repository_update() {
 	repositories=$(conf_path repositories.conf) || repositories=''
 	while IFS= read -r group; do groups+=("$group"); done < <(repo_scope_groups "$repositories" repository-scope "${words[@]}")
 	[ ${#groups[@]} -gt 0 ] || return 1
-	run_command '' Update-Repositories "${groups[@]}"
+	run_command '' Update-Repositories --group "${groups[@]}"
 }
 
 # ObsidianSettings (the Obsidian link of SymbolicLinkMaker): the vault's .obsidian becomes a link

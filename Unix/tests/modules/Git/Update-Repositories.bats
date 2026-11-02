@@ -39,7 +39,7 @@ update() { run "${BASH:-bash}" "$bin/Update-Repositories" "$@"; }
 
 @test "a group clones what is missing and leaves a non-checkout folder alone" {
 	printf '[Demo]\nFresh  %s  %s/fresh\nOther  %s  %s/notrepo\n' "$(origin_url Fresh)" "$BATS_TEST_TMPDIR" "$(origin_url Other)" "$BATS_TEST_TMPDIR" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
-	update Demo
+	update --group Demo
 	[ -f "$BATS_TEST_TMPDIR/fresh/file.txt" ]
 	[ -f "$BATS_TEST_TMPDIR/notrepo/mine.txt" ]
 	[ ! -e "$BATS_TEST_TMPDIR/notrepo/.git" ]
@@ -56,9 +56,137 @@ update() { run "${BASH:-bash}" "$bin/Update-Repositories" "$@"; }
 
 @test "quiet lines of one group follow each other without blank lines" {
 	printf '[Demo]\nRepo  %s  %s\nSecond  %s  %s/second\n' "$(origin_url Repo)" "$REPO" "$(origin_url Second)" "$BATS_TEST_TMPDIR" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
-	update Demo --quiet --no-clone
+	update --group Demo --quiet --no-clone
 	[[ $output == *$'up to date\n=> [Second] not cloned'* ]]
 	[[ $output != *"Stashes"* ]]
+}
+
+@test "every run opens with the Windows title of its selection, a blank line before the first quiet line" {
+	printf '[Demo]\nRepo  %s  %s\nSecond  %s  %s/second\n[Empty]\n' "$(origin_url Repo)" "$REPO" "$(origin_url Second)" "$BATS_TEST_TMPDIR" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
+	update Repo,Second --quiet --no-clone
+	[[ $output == *$'[Updating Selected Repositories]\n\n=> [Repo] master - up to date\n=> [Second] not cloned'* ]]
+	update --repositories Repo --quiet --no-clone
+	[[ $output == *"[Updating Selected Repositories]"* ]]
+	update --repositories Nope --quiet
+	[[ $output == *"[Updating Selected Repositories]"*"Error: Repository [Nope] not found in configuration!"* ]]
+	update --group demo --quiet --no-clone
+	[[ $output == *$'[Updating [Demo] Repositories]\n\n=> [Repo]'* ]]
+	update --group Demo,Empty --no-clone
+	[[ $output == *"[Updating [Demo] Repositories]"* ]]
+	update --group empty --no-clone
+	[[ $output == *"[Updating [empty] Repositories]"* ]]
+	update --group Demo,Nope --quiet
+	[[ $output != *"[Updating"* ]]
+	update --all --no-clone
+	[[ $output == *"[Updating All Repositories]"* ]]
+	update --repository-url "$(origin_url Repo)" --local-path "$REPO" --quiet
+	[[ $output == *$'[Updating Specified Repository]\n\n=> [Repo]'* ]]
+}
+
+@test "a heading per group prints with or without --quiet, the totals line only with it" {
+	printf '[One]\nRepo  %s  %s\n[Two]\nFresh  %s  %s/fresh\n' "$(origin_url Repo)" "$REPO" "$(origin_url Fresh)" "$BATS_TEST_TMPDIR" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
+	update --all --no-clone
+	[[ $output == *"[One]"*"[Two]"* ]]
+	[[ $output != *"Repositories =>"* ]]
+	update --all --no-clone --quiet
+	[[ $output == *"[One]"*"[Two]"* ]]
+	[[ $output == *"Repositories => "* ]]
+}
+
+@test "an archive run prints no group headings and no totals line, quiet or not" {
+	printf '[One]\nRepo  %s  %s\n[Two]\nSecond  %s  %s/second\n' "$(origin_url Repo)" "$REPO" "$(origin_url Second)" "$BATS_TEST_TMPDIR" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
+	update --all --archive
+	[[ $output != *"[One]"* ]]
+	[[ $output != *"Repositories =>"* ]]
+	update --all --archive --quiet
+	[[ $output != *"[One]"* ]]
+	[[ $output != *"Repositories =>"* ]]
+}
+
+@test "the menu nests repositories under groups and titles one picked group by name, anything else as selected" {
+	printf '[Demo]\nRepo  %s  %s\nSecond  %s  %s/second\n[Other]\nThird  %s  %s/third\n' "$(origin_url Repo)" "$REPO" "$(origin_url Second)" "$BATS_TEST_TMPDIR" "$(origin_url Third)" "$BATS_TEST_TMPDIR" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
+	printf 'demo\n' >"$BATS_TEST_TMPDIR/answers"
+	FOUNDATION_TTY=$BATS_TEST_TMPDIR/answers update --quiet --no-clone
+	[[ $output == *"[Available Repositories]"* ]]
+	[[ $output == *"[Updating [Demo] Repositories]"* ]]
+	[[ $output == *"[Second] not cloned"* ]]
+	[[ $output != *"[Third]"* ]]
+	printf '1.1\n' >"$BATS_TEST_TMPDIR/answers"
+	FOUNDATION_TTY=$BATS_TEST_TMPDIR/answers update --quiet --no-clone
+	[[ $output == *"[Updating Selected Repositories]"* ]]
+	[[ $output == *"[Repo] master - up to date"* ]]
+	[[ $output != *"[Second]"* ]]
+	# Groups run before single repositories, and a repository of a picked group runs once.
+	printf 'Third,Demo,Repo\n' >"$BATS_TEST_TMPDIR/answers"
+	FOUNDATION_TTY=$BATS_TEST_TMPDIR/answers update --quiet --no-clone
+	[[ $output == *"[Updating Selected Repositories]"* ]]
+	order=$(grep -oE '\[(Second|Repo|Third)\]' <<<"$output" | tr '\n' ' ')
+	[ "$order" = "[Repo] [Second] [Third] " ]
+}
+
+@test "a bare name is a repository, never a group" {
+	update Demo --quiet
+	[[ $output == *"[Updating Selected Repositories]"* ]]
+	[[ $output == *"Error: Repository [Demo] not found in configuration!"* ]]
+	[[ $output != *"[Repo]"* ]]
+	update --all Repo
+	[ "$status" -eq 1 ]
+	[[ $output == *"--all and --repositories are separate modes"* ]]
+}
+
+@test "a clone prints the Windows lines and git's output, with --quiet too, and a failed one needs attention" {
+	rm -rf "$REPO"
+	update --group Demo --quiet
+	[ "$status" -eq 0 ]
+	[[ $output == *"Repository [Repo] not found at [$REPO]"* ]]
+	[[ $output == *"[Initializing [Repo] Repository]"* ]]
+	[[ $output == *"  Cloning [Repo] to [$REPO]"* ]]
+	[[ $output == *"Cloning into"* ]]
+	[[ $output == *"[Repo] cloned"* ]]
+	printf '[Demo]\nGone  file://%s/nothing-here.git  %s/gone\n' "$BATS_TEST_TMPDIR" "$BATS_TEST_TMPDIR" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
+	update --group Demo --quiet
+	[ "$status" -eq 1 ]
+	[[ $output == *"[nothing-here] failed"* ]]
+	[[ $output == *"1 need attention"* ]]
+}
+
+@test "an existing empty folder is reported, not cloned into" {
+	rm -rf "$REPO"
+	mkdir -p "$REPO"
+	update --group Demo --quiet
+	[ "$status" -eq 1 ]
+	[[ $output == *"[Repo] not the top of a git repository, nothing touched"* ]]
+	[ ! -e "$REPO/file.txt" ]
+}
+
+@test "an archive prints the Windows lines with or without --quiet, ignores --no-clone, and a failed one exits 1" {
+	rm -rf "$REPO"
+	update --group Demo --archive --quiet --no-clone
+	[ "$status" -eq 0 ]
+	[[ $output == *" Archiving [Repo] to [$HOME/Desktop/Repo]"* ]]
+	[[ $output == *" Removed .git directory"* ]]
+	[[ $output == *"Downloaded [Repo] without git history!"* ]]
+	[[ $output != *"[Repo] cloned"* ]]
+	[ -f "$HOME/Desktop/Repo/file.txt" ]
+	[ ! -e "$HOME/Desktop/Repo/.git" ]
+	update --group Demo --archive --quiet
+	[ "$status" -eq 0 ]
+	[[ $output == *"Skipping [Repo] => Already exists at [$HOME/Desktop/Repo]"* ]]
+	printf '[Demo]\nGone  file://%s/nothing-here.git  %s/gone\n' "$BATS_TEST_TMPDIR" "$BATS_TEST_TMPDIR" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
+	update --group Demo --archive
+	[ "$status" -eq 1 ]
+	[[ $output == *"Failed to download [nothing-here]!"* ]]
+}
+
+@test "a normal update prints the Windows step lines" {
+	upstream new.txt hello
+	update --group Demo
+	[ "$status" -eq 0 ]
+	[[ $output == *" Checking status of [Repo]"* ]]
+	[[ $output == *" Current branch => [master]"* ]]
+	[[ $output == *" Updating [Repo] on branch [master]"* ]]
+	[[ $output == *"Fetching latest changes..."* ]]
+	[[ $output == *"Pulling latest changes..."* ]]
 }
 
 @test "quiet colors each line and count by its bucket: updated green, up to date white, skipped yellow" {
@@ -66,12 +194,12 @@ update() { run "${BASH:-bash}" "$bin/Update-Repositories" "$@"; }
 	upstream new.txt hello
 	unset NO_COLOR
 	export LOG_FORCE_COLOR=1 TERM=xterm-256color
-	update Demo --quiet --no-clone
+	update --group Demo --quiet --no-clone
 	[ "$status" -eq 0 ]
 	[[ $output == *$'\033[32m=> [Repo] master - updated\033[0m'* ]]
 	[[ $output == *$'\033[33m=> [Second] not cloned on this machine - skipped\033[0m'* ]]
 	[[ $output == *$'=> Repositories => \033[32m1 updated\033[0m, 0 up to date, \033[31m0 need attention\033[0m, \033[33m1 skipped\033[0m'* ]]
-	update Demo --quiet --no-clone
+	update --group Demo --quiet --no-clone
 	[[ $output == *$'=> [Repo] master - up to date\n'* ]]
 	[[ $output != *$'m=> [Repo]'* ]]
 }
@@ -81,7 +209,7 @@ update() { run "${BASH:-bash}" "$bin/Update-Repositories" "$@"; }
 	upstream new.txt hello
 	unset NO_COLOR
 	export LOG_FORCE_COLOR=1 TERM=xterm-256color
-	update Demo --quiet
+	update --group Demo --quiet
 	[ "$status" -eq 1 ]
 	[[ $output == *$'\033[31m=> [Repo] master - could not fast-forward'* ]]
 	[[ $output == *$'\033[31m1 need attention\033[0m'* ]]
@@ -93,7 +221,7 @@ update() { run "${BASH:-bash}" "$bin/Update-Repositories" "$@"; }
 	git -C "$REPO" stash push -q -m mine
 	echo newer >"$REPO/file.txt"
 	git -C "$REPO" stash push -q -m second
-	update Demo --quiet --no-clone
+	update --group Demo --quiet --no-clone
 	[ "$status" -eq 0 ]
 	[[ $output == *$'[Repo] master - up to date\n\n\t* Stashes =>\n\t\t* stash@{0}: On master: second\n\t\t* stash@{1}: On master: mine\n\n=> [Second] not cloned'* ]]
 	[ "$(git -C "$REPO" stash list | wc -l | tr -d ' ')" -eq 2 ]
@@ -102,24 +230,24 @@ update() { run "${BASH:-bash}" "$bin/Update-Repositories" "$@"; }
 @test "the stash list is quiet-only" {
 	echo older >"$REPO/file.txt"
 	git -C "$REPO" stash push -q -m mine
-	update Demo
+	update --group Demo
 	[ "$status" -eq 0 ]
 	[[ $output != *"Stashes =>"* ]]
 }
 
 @test "an unknown group or repository is reported, nothing is cloned" {
 	update NoSuchGroupAnywhere
-	[[ $output == *"No group or repository named [NoSuchGroupAnywhere]"* ]]
+	[[ $output == *"Error: Repository [NoSuchGroupAnywhere] not found in configuration!"* ]]
 }
 
 @test "a clean checkout is fast-forwarded, quiet prints one line and the totals" {
 	upstream new.txt hello
-	update Demo --quiet
+	update --group Demo --quiet
 	[ "$status" -eq 0 ]
 	[ -f "$REPO/new.txt" ]
 	[[ $output == *"[Repo] master - updated"* ]]
 	[[ $output == *"Repositories => 1 updated, 0 up to date, 0 need attention, 0 skipped"* ]]
-	update Demo --quiet
+	update --group Demo --quiet
 	[[ $output == *"[Repo] master - up to date"* ]]
 }
 
@@ -129,7 +257,7 @@ update() { run "${BASH:-bash}" "$bin/Update-Repositories" "$@"; }
 	git -C "$REPO" add staged.txt
 	echo changed >"$REPO/file.txt"
 	echo untracked >"$REPO/untracked.txt"
-	update Demo
+	update --group Demo
 	[ "$status" -eq 0 ]
 	[ -f "$REPO/new.txt" ]
 	[ "$(cat "$REPO/file.txt")" = changed ]
@@ -144,7 +272,7 @@ update() { run "${BASH:-bash}" "$bin/Update-Repositories" "$@"; }
 	echo mine >"$REPO/local.cfg"
 	upstream local.cfg theirs
 	before=$(git -C "$REPO" rev-parse HEAD)
-	update Demo --quiet
+	update --group Demo --quiet
 	[ "$status" -eq 1 ]
 	[ "$(cat "$REPO/local.cfg")" = mine ]
 	[ "$(git -C "$REPO" rev-parse HEAD)" = "$before" ]
@@ -155,7 +283,7 @@ update() { run "${BASH:-bash}" "$bin/Update-Repositories" "$@"; }
 	upstream new.txt hello
 	git -C "$REPO" rev-parse HEAD >"$REPO/.git/MERGE_HEAD"
 	before=$(git -C "$REPO" rev-parse HEAD)
-	update Demo --quiet
+	update --group Demo --quiet
 	[ "$status" -eq 1 ]
 	[[ $output == *"operation in progress, nothing touched"* ]]
 	[ "$(git -C "$REPO" rev-parse HEAD)" = "$before" ]
@@ -165,7 +293,7 @@ update() { run "${BASH:-bash}" "$bin/Update-Repositories" "$@"; }
 @test "a detached HEAD is skipped and stays where it is" {
 	git -C "$REPO" checkout -q --detach
 	upstream new.txt hello
-	update Demo --quiet
+	update --group Demo --quiet
 	[ "$status" -eq 0 ]
 	[[ $output == *"detached HEAD, nothing to pull"* ]]
 	[ "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)" = HEAD ]
@@ -175,7 +303,7 @@ update() { run "${BASH:-bash}" "$bin/Update-Repositories" "$@"; }
 	mkdir -p "$REPO/sub" && echo x >"$REPO/sub/x.txt"
 	printf '[Demo]\nSub  %s  %s/sub\n' "$(origin_url Sub)" "$REPO" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
 	upstream new.txt hello
-	update Demo --quiet
+	update --group Demo --quiet
 	[ "$status" -eq 1 ]
 	[[ $output == *"not the top of a git repository"* ]]
 	[ ! -f "$REPO/new.txt" ]
@@ -184,7 +312,7 @@ update() { run "${BASH:-bash}" "$bin/Update-Repositories" "$@"; }
 @test "a branch origin does not have is skipped, local changes restored" {
 	git -C "$REPO" checkout -q -b local-only
 	echo wip >"$REPO/wip.txt"
-	update Demo --quiet
+	update --group Demo --quiet
 	[ "$status" -eq 0 ]
 	[[ $output == *"[Repo] local-only - not on origin, nothing to pull"* ]]
 	[ -f "$REPO/wip.txt" ]
@@ -194,7 +322,7 @@ update() { run "${BASH:-bash}" "$bin/Update-Repositories" "$@"; }
 @test "an unreachable origin is reported, not taken for up to date" {
 	mv "$ORIGIN" "$ORIGIN.gone"
 	echo wip >"$REPO/wip.txt"
-	update Demo --quiet
+	update --group Demo --quiet
 	[ "$status" -eq 1 ]
 	[[ $output == *"could not fetch from origin"* ]]
 	[ -f "$REPO/wip.txt" ]
@@ -205,7 +333,7 @@ update() { run "${BASH:-bash}" "$bin/Update-Repositories" "$@"; }
 	git -C "$REPO" stash push -q -m "mine"
 	upstream new.txt hello
 	echo current >"$REPO/untracked.txt"
-	update Demo
+	update --group Demo
 	[ "$status" -eq 0 ]
 	[ "$(git -C "$REPO" stash list | wc -l | tr -d ' ')" -eq 1 ]
 	git -C "$REPO" stash list | grep -q mine
@@ -216,7 +344,7 @@ update() { run "${BASH:-bash}" "$bin/Update-Repositories" "$@"; }
 @test "a stash that cannot be restored cleanly is kept and named" {
 	echo mine >"$REPO/file.txt"
 	upstream file.txt theirs
-	update Demo --quiet
+	update --group Demo --quiet
 	[ "$status" -eq 1 ]
 	[[ $output == *"are kept in stash [master_"* ]]
 	git -C "$REPO" stash list | grep -q "master_"
@@ -227,7 +355,7 @@ update() { run "${BASH:-bash}" "$bin/Update-Repositories" "$@"; }
 	git -C "$REPO" push -q origin feature 2>/dev/null
 	echo wip >"$REPO/wip.txt"
 	upstream new.txt hello
-	update Demo --quiet --include-default-branch
+	update --group Demo --quiet --include-default-branch
 	[ "$status" -eq 0 ]
 	[[ $output == *"[Repo] feature - up to date, master fast-forwarded"* ]]
 	[ "$(git -C "$REPO" rev-parse master)" = "$(git -C "$ORIGIN" rev-parse master)" ]
@@ -244,10 +372,10 @@ update() { run "${BASH:-bash}" "$bin/Update-Repositories" "$@"; }
 	git -C "$REPO" checkout -q feature
 	upstream new.txt hello
 	conf "include-default-branch on"
-	update Demo --quiet
+	update --group Demo --quiet
 	[ "$status" -eq 1 ]
 	[[ $output == *"master has local commits, left untouched"* ]]
-	update Demo --quiet --no-include-default-branch
+	update --group Demo --quiet --no-include-default-branch
 	[ "$status" -eq 0 ]
 	[[ $output != *"master"* ]]
 }
@@ -275,7 +403,7 @@ update() { run "${BASH:-bash}" "$bin/Update-Repositories" "$@"; }
 
 @test "--archive writes a history-less copy to the Desktop, never the configured path" {
 	rm -rf "$REPO"
-	update Demo --archive
+	update --group Demo --archive
 	[ "$status" -eq 0 ]
 	[ -f "$HOME/Desktop/Repo/file.txt" ]
 	[ ! -e "$HOME/Desktop/Repo/.git" ]
@@ -286,13 +414,13 @@ update() { run "${BASH:-bash}" "$bin/Update-Repositories" "$@"; }
 	rm -rf "$REPO"
 	mkdir -p "$BATS_TEST_TMPDIR/here"
 	cd "$BATS_TEST_TMPDIR/here"
-	update Demo --in-current-directory
+	update --group Demo --in-current-directory
 	[ "$status" -eq 0 ]
 	[ -d "$BATS_TEST_TMPDIR/here/Repo/.git" ]
 	[ ! -e "$REPO" ]
 	mkdir -p "$BATS_TEST_TMPDIR/there"
 	cd "$BATS_TEST_TMPDIR/there"
-	update Demo --archive --in-current-directory
+	update --group Demo --archive --in-current-directory
 	[ "$status" -eq 0 ]
 	[ -f "$BATS_TEST_TMPDIR/there/Repo/file.txt" ]
 	[ ! -e "$BATS_TEST_TMPDIR/there/Repo/.git" ]
@@ -326,7 +454,7 @@ git_wrapper() {
 @test "a repository line ending in shallow is cloned --depth 1 and keeps its .git; an unmarked one gets the history" {
 	upstream second.txt two
 	printf '[Demo]\nNotes  %s  %s/notes  shallow\nFull  %s  %s/full\n' "$(origin_url Notes)" "$BATS_TEST_TMPDIR" "$(origin_url Full)" "$BATS_TEST_TMPDIR" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
-	update Demo --quiet
+	update --group Demo --quiet
 	[ "$status" -eq 0 ]
 	[ "$(git -C "$BATS_TEST_TMPDIR/notes" rev-parse --is-shallow-repository)" = true ]
 	[ "$(git -C "$BATS_TEST_TMPDIR/notes" rev-list --count HEAD)" -eq 1 ]
@@ -339,7 +467,7 @@ git_wrapper() {
 	upstream new.txt hello
 	update --group Demo,Nope --quiet
 	[ "$status" -eq 1 ]
-	[[ $output == *"Unknown repository group [Nope] in --group - nothing updated. Configured groups => [Demo]"* ]]
+	[[ $output == *"Unknown repository group [Nope]. Configured groups => [Demo]"* ]]
 	[[ $output != *"[Repo]"* ]]
 	[ ! -f "$REPO/new.txt" ]
 	update -Group Repo --quiet
@@ -347,7 +475,7 @@ git_wrapper() {
 	[[ $output == *"Unknown repository group [Repo]"* ]]
 }
 
-@test "--group picks a group, --repositories a repository of the same name, a bare name the group" {
+@test "--group picks a group, --repositories and a bare name a repository of the same name" {
 	printf '[Repo]\nSecond  %s  %s/second\n[Demo]\nRepo  %s  %s\n' "$(origin_url Second)" "$BATS_TEST_TMPDIR" "$(origin_url Repo)" "$REPO" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
 	update --group repo --quiet --no-clone
 	[[ $output == *"[Second] not cloned"* ]]
@@ -357,9 +485,10 @@ git_wrapper() {
 	[[ $output == *"[Repo] master - up to date"* ]]
 	[[ $output != *"[Second]"* ]]
 	update Repo --quiet --no-clone
-	[[ $output == *"[Second] not cloned"* ]]
+	[[ $output == *"[Repo] master - up to date"* ]]
+	[[ $output != *"[Second]"* ]]
 	update --repositories Nope --quiet
-	[[ $output == *"No repository named [Nope]"* ]]
+	[[ $output == *"Error: Repository [Nope] not found in configuration!"* ]]
 }
 
 @test "--repository-url with --local-path clones one repository outside the file, then updates it" {
@@ -415,7 +544,7 @@ git_wrapper() {
 	git -C "$REPO" add file.txt
 	before=$(git -C "$REPO" rev-parse HEAD)
 	upstream new.txt hello
-	update Demo --quiet
+	update --group Demo --quiet
 	[ "$status" -eq 1 ]
 	[[ $output == *"operation in progress, nothing touched"* ]]
 	[ "$(git -C "$REPO" rev-parse HEAD)" = "$before" ]
@@ -430,7 +559,7 @@ git_wrapper() {
 	upstream new.txt hello
 	git -C "$REPO" checkout -q side
 	! git -C "$REPO" rebase master >/dev/null 2>&1 || false
-	update Demo --quiet
+	update --group Demo --quiet
 	[ "$status" -eq 1 ]
 	[[ $output == *"operation in progress, nothing touched"* ]]
 	[ -d "$REPO/.git/rebase-merge" ] || [ -d "$REPO/.git/rebase-apply" ]
@@ -438,13 +567,13 @@ git_wrapper() {
 	git -C "$REPO" checkout -q master
 	! git -C "$REPO" cherry-pick side >/dev/null 2>&1 || false
 	before=$(git -C "$REPO" rev-parse HEAD)
-	update Demo --quiet
+	update --group Demo --quiet
 	[ "$status" -eq 1 ]
 	[ -f "$REPO/.git/CHERRY_PICK_HEAD" ]
 	[ "$(git -C "$REPO" rev-parse HEAD)" = "$before" ]
 	git -C "$REPO" cherry-pick --abort
 	git -C "$REPO" bisect start >/dev/null 2>&1
-	update Demo --quiet
+	update --group Demo --quiet
 	[ "$status" -eq 1 ]
 	[[ $output == *"operation in progress, nothing touched"* ]]
 	[ ! -f "$REPO/new.txt" ]
@@ -458,7 +587,7 @@ git_wrapper() {
 	! git -C "$REPO" stash pop >/dev/null 2>&1 || false
 	[ -n "$(git -C "$REPO" ls-files --unmerged)" ]
 	upstream new.txt hello
-	update Demo --quiet
+	update --group Demo --quiet
 	[ "$status" -eq 1 ]
 	[[ $output == *"operation in progress, nothing touched"* ]]
 	[ "$(git -C "$REPO" stash list | wc -l | tr -d ' ')" -eq 1 ]
@@ -468,7 +597,7 @@ git_wrapper() {
 @test "S07: an untracked file where upstream adds the same path is kept" {
 	echo mine >"$REPO/added.txt"
 	upstream added.txt theirs
-	update Demo --quiet
+	update --group Demo --quiet
 	if [ "$(cat "$REPO/added.txt")" != mine ]; then
 		[[ $output == *"are kept in stash [master_"* ]]
 		[ "$(git -C "$REPO" show 'stash@{0}^3:added.txt')" = mine ]
@@ -480,7 +609,7 @@ git_wrapper() {
 	echo mine >"$REPO/b.txt"
 	upstream new.txt hello
 	before=$(git -C "$REPO" rev-parse HEAD)
-	update Demo --quiet
+	update --group Demo --quiet
 	[ "$status" -eq 1 ]
 	[[ $output == *"[Repo] master - could not fast-forward, nothing changed"* ]]
 	[ "$(git -C "$REPO" rev-parse HEAD)" = "$before" ]
@@ -492,7 +621,7 @@ git_wrapper() {
 @test "S10: a branch that is only ahead keeps its unpushed commit and is up to date" {
 	local_commit lc.txt "local commit"
 	before=$(git -C "$REPO" rev-parse HEAD)
-	update Demo --quiet
+	update --group Demo --quiet
 	[ "$status" -eq 0 ]
 	[[ $output == *"[Repo] master - up to date"* ]]
 	[ "$(git -C "$REPO" rev-parse HEAD)" = "$before" ]
@@ -507,7 +636,7 @@ git_wrapper() {
 	echo changed >"$wt/file.txt"
 	wt_before=$(git -C "$wt" rev-parse HEAD)
 	upstream new.txt hello
-	update Demo --quiet --include-default-branch
+	update --group Demo --quiet --include-default-branch
 	[[ $output == *"[Repo] feature - up to date"* ]]
 	[ "$(git -C "$wt" rev-parse HEAD)" = "$wt_before" ]
 	[ "$(cat "$wt/b.txt")" = mine ]
@@ -523,7 +652,7 @@ git_wrapper() {
 	echo intruder >"$2/intruder.txt"
 	"$real" -C "$2" stash push -q --include-untracked -m "INTRUDER STASH"
 fi'
-	update Demo --quiet
+	update --group Demo --quiet
 	[ "$status" -eq 0 ]
 	[[ $output == *"[Repo] master - updated"* ]]
 	[ "$(cat "$REPO/b.txt")" = mine ]
@@ -537,7 +666,7 @@ fi'
 	echo mine >"$REPO/b.txt"
 	upstream new.txt hello
 	git_wrapper 'if [ "$1" = -C ] && [ "$3" = fetch ]; then "$real" -C "$2" stash pop -q; fi'
-	update Demo --quiet
+	update --group Demo --quiet
 	[ "$status" -eq 1 ]
 	[[ $output == *"its stash was taken by another git command"* ]]
 	[ "$(cat "$REPO/b.txt")" = mine ]
@@ -549,7 +678,7 @@ fi'
 	upstream new.txt hello
 	before=$(git -C "$REPO" rev-parse HEAD)
 	git_wrapper 'case " $* " in *" stash push "*) exit 1 ;; esac'
-	update Demo --quiet
+	update --group Demo --quiet
 	[ "$status" -eq 1 ]
 	[[ $output == *"local changes could not be stashed - skipped"* ]]
 	[ "$(git -C "$REPO" rev-parse HEAD)" = "$before" ]
@@ -562,7 +691,7 @@ fi'
 	git -C "$REPO" checkout -q -b feature
 	git -C "$REPO" push -q origin feature 2>/dev/null
 	git -C "$REPO" branch -q -D master
-	update Demo --quiet --include-default-branch
+	update --group Demo --quiet --include-default-branch
 	[ "$status" -eq 0 ]
 	[[ $output == *"[Repo] feature - up to date, no local master"* ]]
 	! git -C "$REPO" show-ref --verify --quiet refs/heads/master || false
@@ -572,9 +701,9 @@ fi'
 	mkdir -p "$HOME/Desktop"
 	git clone -q "$ORIGIN" "$HOME/Desktop/Repo" 2>/dev/null
 	echo mine >"$HOME/Desktop/Repo/mine.txt"
-	update Demo --archive
+	update --group Demo --archive
 	[ "$status" -eq 0 ]
-	[[ $output == *"Skipping [Repo] => already exists at [$HOME/Desktop/Repo]"* ]]
+	[[ $output == *"Skipping [Repo] => Already exists at [$HOME/Desktop/Repo]"* ]]
 	[ -d "$HOME/Desktop/Repo/.git" ]
 	[ "$(cat "$HOME/Desktop/Repo/mine.txt")" = mine ]
 }
@@ -619,7 +748,7 @@ TABLE
 
 @test "an SSH remote is printed under its repository name, like Get-RepositoryName" {
 	printf '[Demo]\nAlias  git@host.invalid:Owner/My_Repo.git  %s/missing\nPlain  ssh://git@host.invalid/Owner/Other  %s/missing-too\n' "$BATS_TEST_TMPDIR" "$BATS_TEST_TMPDIR" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
-	update Demo --quiet --no-clone
+	update --group Demo --quiet --no-clone
 	[ "$status" -eq 0 ]
 	[[ $output == *"[My_Repo] not cloned"* ]]
 	[[ $output == *"[Other] not cloned"* ]]

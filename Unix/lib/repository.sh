@@ -36,9 +36,9 @@ repo__git() {
 	fi
 }
 
-repo__say() { # FUNCTION MESSAGE - log only when not quiet
+repo__say() { # FUNCTION [-n] MESSAGE - log only when not quiet
 	[ "${REPO__QUIET:-0}" -eq 1 ] && return 0
-	"$1" "$2"
+	"$@"
 }
 
 # Re-applies exactly the stash COMMIT (staged changes staged again) and drops it only after a
@@ -90,7 +90,7 @@ repo_update_default_branch() {
 		return 0
 	fi
 	before=$(git -C "$REPO_DIR" rev-parse --verify --quiet "refs/heads/$default")
-	repo__say log_step "Fast-forwarding default branch [$default]"
+	repo__say log_step " Fast-forwarding default branch [$default]"
 	if ! repo__git fetch origin "$default:$default"; then
 		# A rejected fast-forward and a failed fetch exit alike; the refs tell them apart.
 		REPO_DEFAULT_OUTCOME=Failed
@@ -127,7 +127,7 @@ repo_update() {
 	REPO_DEFAULT_OUTCOME=''
 	REPO_STASH_NAME=''
 	local stash_commit='' operation='' git_dir marker
-	repo__say log_step "Checking status of [$REPO_NAME]"
+	repo__say log_step " Checking status of [$REPO_NAME]"
 
 	# 1. The path must be the top of its own working tree, or every command below would act on
 	# whatever repository encloses it.
@@ -155,7 +155,7 @@ repo_update() {
 	fi
 
 	REPO_BRANCH=$(git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null)
-	repo__say log_step "Current branch => [$REPO_BRANCH]"
+	repo__say log_step " Current branch => [$REPO_BRANCH]"
 
 	if [ "$REPO_BRANCH" = HEAD ]; then
 		# 3. Detached HEAD: no branch to pull into, and moving HEAD would lose the position.
@@ -180,7 +180,7 @@ repo_update() {
 					[ "$REPO_RESTORE" = Restored ] || REPO_STASH_NAME=$stash_name
 				fi
 				repo__say log_error "Failed to stash changes in [$REPO_NAME]. Skipping update."
-				[ -n "$REPO_STASH_NAME" ] && repo__say log_warning "Part of the changes are kept in stash => [$stash_name]"
+				[ -n "$REPO_STASH_NAME" ] && repo__say log_warning "Part of the changes could not be put back and are kept in stash => [$stash_name]"
 				return 0
 			fi
 			if [ -n "$stash_commit" ]; then
@@ -188,13 +188,14 @@ repo_update() {
 				repo__say log_success "Changes stashed as [$stash_name]"
 			else
 				# Nothing git can stash (a submodule's new commits): nothing to restore later.
-				repo__say log_step "Nothing stashable among the local changes - continuing"
+				repo__say log_step " Nothing stashable among the local changes - continuing"
 			fi
 		fi
 
 		# 5. Fetch, then fast-forward without ever overwriting an ignored file.
 		local fetch_status behind
-		repo__say log_step "Updating [$REPO_NAME] on branch [$REPO_BRANCH]"
+		repo__say log_step " Updating [$REPO_NAME] on branch [$REPO_BRANCH]"
+		repo__say log_warning "Fetching latest changes..."
 		repo__git fetch origin "$REPO_BRANCH"
 		fetch_status=$?
 		if ! git -C "$REPO_DIR" rev-parse --verify --quiet "refs/remotes/origin/$REPO_BRANCH" >/dev/null; then
@@ -208,14 +209,17 @@ repo_update() {
 			if [ "$behind" = 0 ]; then
 				REPO_OUTCOME=UpToDate
 				repo__say log_success "Repository is already up to date!"
-			elif repo__git merge --ff-only --no-overwrite-ignore "origin/$REPO_BRANCH"; then
+			else
+				repo__say log_warning "Pulling latest changes..."
 				# Not `git pull`: its merge silently replaces an ignored local file at a path the
 				# incoming commits start tracking; a refused --ff-only merge changes nothing.
-				REPO_OUTCOME=Updated
-				repo__say log_success "Updated repository"
-			else
-				REPO_OUTCOME=Conflict
-				repo__say log_error "Could not fast-forward [$REPO_BRANCH] - it has local commits origin does not, or the update would overwrite an ignored file. Nothing was changed."
+				if repo__git merge --ff-only --no-overwrite-ignore "origin/$REPO_BRANCH"; then
+					REPO_OUTCOME=Updated
+					repo__say log_success "Updated repository"
+				else
+					REPO_OUTCOME=Conflict
+					repo__say log_error "Could not fast-forward [$REPO_BRANCH] - it has local commits origin does not, or the update would overwrite an ignored file. Nothing was changed."
+				fi
 			fi
 		fi
 	fi
@@ -251,7 +255,8 @@ repo_update() {
 			*)
 				REPO_OUTCOME=StashConflict
 				repo__say log_error "Conflicts occurred while restoring stashed changes in [$REPO_NAME]"
-				repo__say log_warning "Changes are preserved in stash: $REPO_STASH_NAME - resolve with [git stash list] and [git stash apply]"
+				repo__say log_warning "Changes are preserved in stash: $REPO_STASH_NAME"
+				repo__say log_warning -n "Please resolve conflicts manually with [git stash list] and [git stash apply]"
 				;;
 		esac
 	fi
@@ -320,7 +325,9 @@ repo_format_result() {
 # repository-scope of bootstrap.conf), one per line as written in FILE. Group names only, as on
 # Windows: when any NAME is no group (a repository's name included) it logs the unknown names with
 # the configured groups and fails without printing any, so the caller updates nothing instead of
-# half the scope. Needs lib/config.sh. Usage: repo_scope_groups FILE SETTING NAME...
+# half the scope; SETTING is named in that message unless it is empty (the --group of
+# Update-Repositories, worded as Resolve-RepositoryTargets). Needs lib/config.sh.
+# Usage: repo_scope_groups FILE SETTING NAME...
 repo_scope_groups() {
 	local file=$1 setting=$2 word group names configured groups=() unknown=()
 	shift 2
@@ -335,7 +342,11 @@ repo_scope_groups() {
 		names=$(printf '%s, ' "${unknown[@]}")
 		configured=''
 		[ -n "$file" ] && configured=$(conf_sections "$file" | awk 'NR > 1 { printf ", " } { printf "%s", $0 }')
-		log_error "Unknown repository group [${names%, }] in $setting - nothing updated. Configured groups => [$configured]"
+		if [ -n "$setting" ]; then
+			log_error "Unknown repository group [${names%, }] in $setting - nothing updated. Configured groups => [$configured]"
+		else
+			log_error "Unknown repository group [${names%, }]. Configured groups => [$configured]"
+		fi
 		return 1
 	fi
 	[ ${#groups[@]} -eq 0 ] || printf '%s\n' "${groups[@]}"
