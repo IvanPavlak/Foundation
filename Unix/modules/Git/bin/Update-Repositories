@@ -33,13 +33,18 @@
 #                                mode): cloned into DIR when missing, updated safely otherwise
 #                                (shallow when a `shallow` line of the file has the same URL)
 #   --archive                    clone without history (shallow, .git removed) into
-#                                ~/Desktop/<name>, never the configured path, as on Windows; one
-#                                whose folder exists is skipped with a warning; an archive run
-#                                prints its own lines, no group headings, summaries or totals,
-#                                with or without --quiet, and never honors --no-clone
+#                                <root>/<archive=FOLDER>/<name>, never the configured path, as on
+#                                Windows: the root is ~/Desktop, or `archive-root` of
+#                                repositories.conf (absolute, or relative to ~/Desktop), and the
+#                                FOLDER of a repository line is a relative path of any depth,
+#                                absent meaning the root itself; one whose folder exists is
+#                                skipped with a warning; an archive run prints its own lines, no
+#                                group headings, summaries or totals, with or without --quiet, and
+#                                never honors --no-clone
 #   --in-current-directory       clone (and update) into ./<name> instead of the configured
-#                                paths; with --archive the copies land there instead of the
-#                                Desktop (the Windows -InCurrentDirectory)
+#                                paths; with --archive the current folder is the root and each
+#                                line's archive=FOLDER still applies (the Windows
+#                                -InCurrentDirectory)
 #   --no-clone                   report missing repositories as skipped instead of cloning them
 #   --quiet                      the title, then one line per repository plus a totals line, git
 #                                silenced except for a clone; each line and count colored by its
@@ -141,6 +146,20 @@ if [ -z "$include_default" ]; then
 fi
 REPO_DEFAULT_CONFIGURED=$(setting default-branch '')
 export REPO_DEFAULT_CONFIGURED
+
+# Where an archive run lands: --in-current-directory wins over `archive-root`, which is absolute
+# or relative to the Desktop.
+archive_base=$HOME/Desktop
+if [ "$in_current" -eq 1 ]; then
+	archive_base=$PWD
+else
+	archive_root=$(foundation_expand_path "$(setting archive-root '')")
+	case $archive_root in
+		'') ;;
+		/*) archive_base=$archive_root ;;
+		*) archive_base=$archive_base/$archive_root ;;
+	esac
+fi
 
 groups=()
 while IFS= read -r group; do groups+=("$group"); done < <(conf_sections "$file")
@@ -258,11 +277,11 @@ while read -r group line; do
 	name=${name%.git}
 	[ -n "$name" ] || name=$repo
 	# As on Windows: an archive never lands in the configured path (a later normal run expects a
-	# clone there) but on the Desktop, and --in-current-directory puts everything here.
-	if [ "$in_current" -eq 1 ]; then
+	# clone there) but under its root and folder, and --in-current-directory puts everything here.
+	if [ "$archive" -eq 1 ]; then
+		dir=$archive_base/${REPO_ENTRY_ARCHIVE:+$REPO_ENTRY_ARCHIVE/}$name
+	elif [ "$in_current" -eq 1 ]; then
 		dir=$PWD/$name
-	elif [ "$archive" -eq 1 ]; then
-		dir=$HOME/Desktop/$name
 	fi
 	if [ "$archive" -eq 0 ] && [ "$distinct_groups" -gt 1 ] && [ "$group" != "$current_group" ]; then
 		current_group=$group
@@ -304,7 +323,7 @@ while read -r group line; do
 		log_step "  Cloning [$name] to [$dir]"
 		mkdir -p "$(dirname "$dir")"
 		clone=(git clone)
-		# A shallow entry (the Windows Obsidian rule) keeps its .git: a clone that can commit and push.
+		# A shallow entry (`Shallow` on Windows) keeps its .git: a clone that can commit and push.
 		[ "$shallow" -eq 1 ] && clone+=(--depth 1)
 		outcome=Error
 		"${clone[@]}" "$url" "$dir" </dev/null && outcome=Cloned

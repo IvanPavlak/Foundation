@@ -352,10 +352,11 @@ repo_scope_groups() {
 	[ ${#groups[@]} -eq 0 ] || printf '%s\n' "${groups[@]}"
 }
 
-# One repository line of repositories.conf (`NAME PATH-OR-URL [DIR] [shallow]`) split into
-# REPO_ENTRY_NAME, REPO_ENTRY_SOURCE, REPO_ENTRY_DIR (as written, unexpanded; empty when the line
-# has none) and REPO_ENTRY_SHALLOW (1 when the last word is `shallow`: cloned --depth 1, the
-# Windows Obsidian rule as a setting). Usage: repo_entry LINE
+# One repository line of repositories.conf (`NAME PATH-OR-URL [DIR] [archive=FOLDER] [shallow]`)
+# split into REPO_ENTRY_NAME, REPO_ENTRY_SOURCE, REPO_ENTRY_DIR (as written, unexpanded; empty when
+# the line has none), REPO_ENTRY_ARCHIVE (FOLDER, the place under the archive root; empty when the
+# line has none) and REPO_ENTRY_SHALLOW (1 when the last word is `shallow`: cloned --depth 1, the
+# Windows `Shallow`). Usage: repo_entry LINE
 repo_entry() {
 	local rest last
 	read -r REPO_ENTRY_NAME REPO_ENTRY_SOURCE rest <<<"$1"
@@ -366,6 +367,14 @@ repo_entry() {
 		rest=${rest%"$last"}
 		rest=${rest%"${rest##*[![:space:]]}"}
 	fi
+	REPO_ENTRY_ARCHIVE=''
+	case " $rest" in
+		*[[:space:]]archive=*)
+			REPO_ENTRY_ARCHIVE=${rest##*archive=}
+			rest=${rest%archive=*}
+			rest=${rest%"${rest##*[![:space:]]}"}
+			;;
+	esac
 	REPO_ENTRY_DIR=$rest
 }
 

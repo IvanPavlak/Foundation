@@ -435,6 +435,9 @@ ai_repository_dir() {
 				rest=${rest%"$last"}
 				rest=$(foundation_trim "$rest")
 			fi
+			case " $rest" in
+				*[[:space:]]archive=*) rest=$(foundation_trim "${rest%archive=*}") ;;
+			esac
 			[ -n "$rest" ] || return 1
 			foundation_expand_path "$rest"
 			return 0

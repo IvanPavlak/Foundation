@@ -688,3 +688,15 @@ merge-without-checks github.com/me/mine" ]
 	[ "$(grep -cx '/.claude/skills/design' "$target/.git/info/exclude")" -eq 1 ]
 	[ -z "$(git -C "$target" status --porcelain)" ]
 }
+
+@test "a repo: row finds its repository's folder on a line that also has archive= and shallow" {
+	export FOUNDATION_AI_MANIFEST_CACHE=$BATS_TEST_TMPDIR/cache
+	cached_skill up design design design
+	target=$BATS_TEST_TMPDIR/MyRepo
+	git init -q "$target"
+	printf '[Private]\nMyRepo /me/MyRepo.git %s archive=Deep/er shallow\n' "$target" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
+	manifest "design	skills	repo:MyRepo	https://github.com/up/design	$SHA	design	clone"
+	run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	[ -L "$target/.claude/skills/design" ]
+}
