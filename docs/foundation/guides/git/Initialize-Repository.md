@@ -12,7 +12,7 @@ already is a checkout; a URL that `repositories.conf` marks `shallow` is cloned 
 
 | File | Line | Default (base) | What it controls |
 | ---- | ---- | -------------- | ---------------- |
-| [`repositories.conf`](../../configuration.md#repositoriesconf) | `NAME PATH-OR-URL [DIR] shallow` | no line is `shallow` | A clone of the same URL (case, a user name, a trailing slash and `.git` ignored) is made `--depth 1` and keeps its `.git` - the Windows rule for the Obsidian repository, as a setting |
+| [`repositories.conf`](../../configuration.md#repositoriesconf) | `NAME PATH-OR-URL [DIR] [archive=FOLDER] shallow` | no line is `shallow` | A clone of the same URL (case, a user name, a trailing slash and `.git` ignored) is made `--depth 1` and keeps its `.git` - the Windows `Shallow` |
 | [`repositories.conf`](../../configuration.md#repositoriesconf) | `base URL` | `https://github.com` | The prefix a relative path of such a line gets before the URLs are compared |
 
 ## Decisions

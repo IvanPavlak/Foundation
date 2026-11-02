@@ -391,19 +391,28 @@ MyRepo    /MyUser/MyRepo.git    $DEV/MyRepo
 A relative path is appended to `base`; a full URL (`http(s)://`, `git@`, `ssh://`, `git://`, or `file://` for a local mirror) is used as is.
 A repository line may end in `shallow` (`MyNotes  /MyUser/MyNotes.git  $DEV/MyNotes  shallow`):
 it is cloned `--depth 1`, a clone that keeps its `.git` and can still commit and push, by
-Update-Repositories and by Initialize-Repository for the same URL - the setting form of the
-Windows rule that clones the Obsidian repository shallow because of its large history.
+Update-Repositories and by Initialize-Repository for the same URL - the `Shallow` of a
+`RepositoryGroups` entry on Windows.
+
+`archive=FOLDER` before it (`MyTool  /MyUser/MyTool.git  $DEV/MyTool  archive=Projects/Tools`)
+places the repository under `archive-root` in an `Update-Repositories --archive` run: a relative
+path of any depth, spaces allowed, and only `shallow` may follow it on the line. It changes no
+other run. The copy lands in `<root>/<FOLDER>/<name>`, directly in the root without one.
 
 Top-level lines before the first group set the repository update (the `RepositoryUpdate`
 section of Windows; `@TYPE` lines per machine type):
 
 ```
 include-default-branch on
+archive-root repos
 startup on
 startup-schedule daily
 startup-day-start-hour 6
 @Test startup-scope Private
 ```
+
+`archive-root` is where an `--archive` run lands: absolute, or relative to `~/Desktop`, which is also
+the default (`RepositoryUpdate.ArchiveRoot` on Windows). `--in-current-directory` replaces it for one run.
 
 `include-default-branch` makes Update-Repositories also fast-forward each default branch
 (`default-branch NAME` names one for every repository, otherwise `origin/HEAD` does); `startup`

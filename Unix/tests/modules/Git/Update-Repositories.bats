@@ -427,6 +427,44 @@ update() { run "${BASH:-bash}" "$bin/Update-Repositories" "$@"; }
 	[ ! -e "$HOME/Desktop/Repo" ]
 }
 
+@test "--archive nests a copy under archive-root and the line's archive=FOLDER; other runs ignore both" {
+	rm -rf "$REPO"
+	printf 'archive-root repos\n[Demo]\nRepo  %s  %s archive=Deep/er/Still  shallow\nFlat  %s  %s/flat\n' "$(origin_url Repo)" "$REPO" "$(origin_url Flat)" "$BATS_TEST_TMPDIR" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
+	update --group Demo --archive
+	[ "$status" -eq 0 ]
+	[ -f "$HOME/Desktop/repos/Deep/er/Still/Repo/file.txt" ]
+	[ ! -e "$HOME/Desktop/repos/Deep/er/Still/Repo/.git" ]
+	[ -f "$HOME/Desktop/repos/Flat/file.txt" ]
+	[ ! -e "$REPO" ]
+	update --group Demo --quiet
+	[ "$status" -eq 0 ]
+	[ "$(git -C "$REPO" rev-parse --is-shallow-repository)" = true ]
+	[ -d "$BATS_TEST_TMPDIR/flat/.git" ]
+}
+
+@test "an absolute archive-root is used as it is; --in-current-directory replaces it but keeps the folder" {
+	rm -rf "$REPO"
+	printf 'archive-root %s/mirror\n[Demo]\nRepo  %s  %s archive=Deep\n' "$BATS_TEST_TMPDIR" "$(origin_url Repo)" "$REPO" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
+	update --group Demo --archive
+	[ "$status" -eq 0 ]
+	[ -f "$BATS_TEST_TMPDIR/mirror/Deep/Repo/file.txt" ]
+	mkdir -p "$BATS_TEST_TMPDIR/here"
+	cd "$BATS_TEST_TMPDIR/here"
+	update --group Demo --archive --in-current-directory
+	[ "$status" -eq 0 ]
+	[ -f "$BATS_TEST_TMPDIR/here/Deep/Repo/file.txt" ]
+}
+
+@test "a line without a folder takes archive=FOLDER as no local path, not as its DIR" {
+	printf '[Demo]\nRepo  %s  archive=Deep\n' "$(origin_url Repo)" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
+	update --group Demo --quiet
+	[ "$status" -eq 0 ]
+	[[ $output == *"[Repo] no local path"* ]]
+	update --group Demo --archive
+	[ "$status" -eq 0 ]
+	[ -f "$HOME/Desktop/Deep/Repo/file.txt" ]
+}
+
 # Commit FILE with CONTENT on the checked-out branch of the sandbox clone (not pushed).
 local_commit() {
 	printf '%s\n' "$2" >"$REPO/$1"

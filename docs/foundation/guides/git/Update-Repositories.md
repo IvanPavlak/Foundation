@@ -3,7 +3,8 @@
 Clones the missing repositories of `repositories.conf` and updates the existing ones without ever
 losing local work, by group, by repository name, `--all`, from a menu or for one URL and folder
 outside the file (`--repository-url URL --local-path DIR`). The configured folder
-(`DIR`) is used except with `--archive` (history-less copies on the Desktop) and
+(`DIR`) is used except with `--archive` (history-less copies under `archive-root`, the Desktop by
+default) and
 `--in-current-directory` (everything in `./<name>`), as on Windows.
 
 > [!NOTE]
@@ -17,7 +18,8 @@ outside the file (`--repository-url URL --local-path DIR`). The configured folde
 | ---- | ---- | -------------- | ---------------- |
 | [`repositories.conf`](../../configuration.md#repositoriesconf) | `base URL` | `https://github.com` | The prefix of every relative repository path; the last `base` line wins, so the overlay's replaces the base one |
 | [`repositories.conf`](../../configuration.md#repositoriesconf) | `[Group]` | `[Private]` | A repository group: a menu entry and `Update-Repositories --group GROUP`; `--all` runs every group |
-| [`repositories.conf`](../../configuration.md#repositoriesconf) | `NAME PATH-OR-URL [DIR] [shallow]` | the repository itself, in `$DOTFILES_ROOT` | One repository: a path under `base` (`/MyUser/MyRepo.git`) or a full URL (`http(s)://`, `git@`, `ssh://`, `git://`, `file://`), cloned into DIR when missing and updated otherwise; a line without DIR is skipped as having no local path on this machine; `shallow` clones it `--depth 1`, keeping its `.git` |
+| [`repositories.conf`](../../configuration.md#repositoriesconf) | `NAME PATH-OR-URL [DIR] [archive=FOLDER] [shallow]` | the repository itself, in `$DOTFILES_ROOT` | One repository: a path under `base` (`/MyUser/MyRepo.git`) or a full URL (`http(s)://`, `git@`, `ssh://`, `git://`, `file://`), cloned into DIR when missing and updated otherwise; a line without DIR is skipped as having no local path on this machine; `archive=FOLDER` is its place under `archive-root` in an `--archive` run, a relative path of any depth; `shallow` clones it `--depth 1`, keeping its `.git` |
+| [`repositories.conf`](../../configuration.md#repositoriesconf) | `archive-root PATH` | `~/Desktop` | Where an `--archive` run lands: absolute, or relative to `~/Desktop`; `--in-current-directory` replaces it for one run |
 | [`repositories.conf`](../../configuration.md#repositoriesconf) | `include-default-branch on\|off` | off | Also fast-forward each default branch while another branch is checked out; `--include-default-branch` and `--no-include-default-branch` override it for one run |
 | [`repositories.conf`](../../configuration.md#repositoriesconf) | `default-branch NAME` | unset: each repository's `origin/HEAD` | The default branch of every repository, for `include-default-branch` |
 
@@ -43,11 +45,15 @@ outside the file (`--repository-url URL --local-path DIR`). The configured folde
     - Options: `include-default-branch on` (`git fetch origin <default>:<default>`, never touching the working tree; one with local commits is left alone); `default-branch NAME` when every repository's default is the same and `origin/HEAD` is not set.
     - Default: off.
     - More detail: [`repositories.conf`](../../configuration.md#repositoriesconf)
+6. Where should `--archive` put its copies?
+    - Options: `archive-root repos` for a folder on the Desktop, or an absolute path, and `archive=FOLDER` on a repository line for its folder under that root, a relative path of any depth (`archive=Projects/Tools`). A copy lands in `<root>/<FOLDER>/<name>`, so `Update-Repositories --all --archive` rebuilds a whole tree. It goes after DIR and before `shallow`.
+    - Default: every copy directly on the Desktop.
+    - More detail: [`repositories.conf`](../../configuration.md#repositoriesconf)
 
 ## Where to Put Values
 
 `Unix/config/repositories.local.conf`, created by hand when missing. Its lines before the first
-section are added after the base ones (the last `base`, `include-default-branch` and
+section are added after the base ones (the last `base`, `include-default-branch`, `archive-root` and
 `default-branch` line for this machine type wins); a `[Group]` replaces a base group of the same
 name whole; `-LINE` takes a base top-level line back. `@TYPE` limits any line to machine types.
 
@@ -100,11 +106,12 @@ cat Unix/config/repositories.local.conf
 base https://MyUser@github.com
 include-default-branch on
 default-branch master
+archive-root repos
 
 [Private]
 Dotfiles   /MyUser/Dotfiles.git   $DOTFILES_ROOT
-MyRepo     /MyUser/MyRepo.git     $DEV/MyRepo
-@Laptop MyNotes   /MyUser/MyNotes.git   ~/Documents/MyNotes   shallow
+MyRepo     /MyUser/MyRepo.git     $DEV/MyRepo   archive=Projects/Tools
+@Laptop MyNotes   /MyUser/MyNotes.git   ~/Documents/MyNotes   archive=Vault   shallow
 
 [Work]
 @Work MyWorkRepo   https://git.example.com/MyTeam/MyWorkRepo.git   $DEV/MyWorkRepo
