@@ -159,7 +159,7 @@ setup() {
 	: >"$BATS_TEST_TMPDIR/tool.log"
 	FOUNDATION_MACHINE_TYPE=Laptop run "${BASH:-bash}" "$cmd" --only RepositoryUpdate
 	[ "$status" -eq 0 ]
-	[ "$(calls cmd)" = "cmd Update-Repositories Private Work" ]
+	[ "$(calls cmd)" = "cmd Update-Repositories --group Private Work" ]
 	: >"$BATS_TEST_TMPDIR/tool.log"
 	conf
 	run "${BASH:-bash}" "$cmd" --only RepositoryUpdate

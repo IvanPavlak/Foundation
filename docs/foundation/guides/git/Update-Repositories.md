@@ -16,7 +16,7 @@ outside the file (`--repository-url URL --local-path DIR`). The configured folde
 | File | Line | Default (base) | What it controls |
 | ---- | ---- | -------------- | ---------------- |
 | [`repositories.conf`](../../configuration.md#repositoriesconf) | `base URL` | `https://github.com` | The prefix of every relative repository path; the last `base` line wins, so the overlay's replaces the base one |
-| [`repositories.conf`](../../configuration.md#repositoriesconf) | `[Group]` | `[Private]` | A repository group: a menu entry and `Update-Repositories GROUP`; `--all` runs every group |
+| [`repositories.conf`](../../configuration.md#repositoriesconf) | `[Group]` | `[Private]` | A repository group: a menu entry and `Update-Repositories --group GROUP`; `--all` runs every group |
 | [`repositories.conf`](../../configuration.md#repositoriesconf) | `NAME PATH-OR-URL [DIR] [shallow]` | the repository itself, in `$DOTFILES_ROOT` | One repository: a path under `base` (`/MyUser/MyRepo.git`) or a full URL (`http(s)://`, `git@`, `ssh://`, `git://`, `file://`), cloned into DIR when missing and updated otherwise; a line without DIR is skipped as having no local path on this machine; `shallow` clones it `--depth 1`, keeping its `.git` |
 | [`repositories.conf`](../../configuration.md#repositoriesconf) | `include-default-branch on\|off` | off | Also fast-forward each default branch while another branch is checked out; `--include-default-branch` and `--no-include-default-branch` override it for one run |
 | [`repositories.conf`](../../configuration.md#repositoriesconf) | `default-branch NAME` | unset: each repository's `origin/HEAD` | The default branch of every repository, for `include-default-branch` |
