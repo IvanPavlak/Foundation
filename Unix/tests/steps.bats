@@ -27,16 +27,16 @@ EOF
 		echo read >>"$reads"
 		real_conf_lines "$@"
 	}
-	# Not through run: its subshell would keep no cache. Not !: bats ignores a negated command's status.
+	# Not through run: its subshell would keep no cache.
 	step_on Alpha
-	if step_on Beta; then return 1; fi
+	! step_on Beta || false
 	step_on gamma
 	[ "$(wc -l <"$reads")" -eq 1 ]
 	echo "step Beta on" >>"$STEP_CONFIG"
 	step_on Beta
 	[ "$(wc -l <"$reads")" -eq 2 ]
 	echo "step Beta off" >"$FOUNDATION_CONFIG_DIR/demo.local.conf"
-	if step_on Beta; then return 1; fi
+	! step_on Beta || false
 	[ "$(wc -l <"$reads")" -eq 3 ]
 }
 
