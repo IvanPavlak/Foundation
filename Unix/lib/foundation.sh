@@ -33,13 +33,17 @@ while [ -L "$foundation__self" ]; do
 	foundation__target=$(readlink "$foundation__self")
 	case $foundation__target in
 		/*) foundation__self=$foundation__target ;;
-		*) foundation__self=$(dirname "$foundation__self")/$foundation__target ;;
+		*) case $foundation__self in */*) foundation__self=${foundation__self%/*}/$foundation__target ;; *) foundation__self=$foundation__target ;; esac ;;
 	esac
 done
-FOUNDATION_UNIX=$(CDPATH='' cd -- "$(dirname -- "$foundation__self")/.." && pwd -P)
+case $foundation__self in */*) foundation__self=${foundation__self%/*} ;; *) foundation__self=. ;; esac
+FOUNDATION_UNIX=$(CDPATH='' cd -- "$foundation__self/.." && pwd -P)
 unset foundation__self foundation__target
 
-DOTFILES_ROOT=${DOTFILES_ROOT:-$(dirname "$FOUNDATION_UNIX")}
+# FOUNDATION_UNIX is absolute: its parent needs no dirname, one process less on every command start.
+foundation__parent=${FOUNDATION_UNIX%/*}
+DOTFILES_ROOT=${DOTFILES_ROOT:-${foundation__parent:-/}}
+unset foundation__parent
 FOUNDATION_CONFIG_DIR=${FOUNDATION_CONFIG_DIR:-$FOUNDATION_UNIX/config}
 FOUNDATION_STATE_DIR=${FOUNDATION_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/foundation}
 export DOTFILES_ROOT FOUNDATION_UNIX FOUNDATION_CONFIG_DIR FOUNDATION_STATE_DIR
@@ -321,13 +325,43 @@ foundation_flag_name() {
 # The long flags a command documents in its header (--include-current ...), one per line.
 # Usage: foundation_command_flags SCRIPT
 foundation_command_flags() {
-	foundation_usage "$1" | grep -oE -- '--[a-z][a-z0-9-]*' | sort -u
+	foundation__read_flags "$1"
+	[ ${#FOUNDATION__FLAGS[@]} -eq 0 ] || printf '%s\n' "${FOUNDATION__FLAGS[@]}" | sort -u
+}
+
+# The long flags of SCRIPT's header, once each and in header order, into the array
+# FOUNDATION__FLAGS. Without a process, since foundation_normalize_args asks on every command
+# start. Reads the block foundation_usage prints.
+foundation__read_flags() {
+	local line first=1 flag seen=' '
+	FOUNDATION__FLAGS=()
+	[ -r "$1" ] || return 0
+	while IFS= read -r line || [ -n "$line" ]; do
+		case $line in
+			'#!'*) [ "$first" -eq 1 ] && {
+				first=0
+				continue
+			} ;;
+			'#'*) ;;
+			*) break ;;
+		esac
+		first=0
+		while [[ $line =~ --[a-z][a-z0-9-]* ]]; do
+			flag=${BASH_REMATCH[0]}
+			line=${line#*"$flag"}
+			case $seen in *" $flag "*) ;; *)
+				FOUNDATION__FLAGS+=("$flag")
+				seen+="$flag "
+				;;
+			esac
+		done
+	done <"$1"
 }
 
 # A flag with every dash removed and lowercased: the case- and dash-insensitive key PowerShell
 # parameter binding effectively uses (-IncludeCurrent, -includecurrent, --include-current).
 foundation__flag_key() {
-	printf '%s' "$1" | tr -d '-' | tr '[:upper:]' '[:lower:]'
+	foundation_lower "${1//-/}"
 }
 
 # Rewrites "$@" into the global array FOUNDATION_ARGS with every Windows-style flag converted. A
@@ -344,15 +378,21 @@ foundation__flag_key() {
 # Usage: foundation_normalize_args "$@"; set -- "${FOUNDATION_ARGS[@]}"
 foundation_normalize_args() {
 	FOUNDATION_ARGS=()
-	local known argument key flag converted
-	known=$(foundation_command_flags "$0" 2>/dev/null)
+	local argument key flag converted read_flags=0
 	for argument in "$@"; do
 		converted=''
 		case $argument in
 			-?*)
+				# Read at the first flag: a command started with plain values never needs them.
+				if [ "$read_flags" -eq 0 ]; then
+					foundation__read_flags "$0"
+					read_flags=1
+				fi
 				key=$(foundation__flag_key "$argument")
-				for flag in $known; do
-					if [ "$(foundation__flag_key "$flag")" = "$key" ]; then
+				# A documented flag is lowercase already (foundation__read_flags), so its key is the
+				# flag without its dashes: no process per flag and argument.
+				for flag in ${FOUNDATION__FLAGS[@]+"${FOUNDATION__FLAGS[@]}"}; do
+					if [ "${flag//-/}" = "$key" ]; then
 						converted=$flag
 						break
 					fi
@@ -360,7 +400,7 @@ foundation_normalize_args() {
 				# -WhatIf:$true, -Confirm:$false: the switch is the part before the colon.
 				[ -n "$converted" ] || case ${key%%:*} in
 					whatif)
-						case " $(printf '%s ' $known)" in
+						case " ${FOUNDATION__FLAGS[*]-} " in
 							*" --dry-run "*) converted=--dry-run ;;
 							*) foundation_die "${0##*/} has no dry run ($argument) - nothing was done" ;;
 						esac
@@ -379,13 +419,13 @@ foundation_normalize_args() {
 							*:*) ;;
 							*)
 								local matches=()
-								for flag in $known; do
-									case $(foundation__flag_key "$flag") in "$key"*) matches+=("$flag") ;; esac
+								for flag in ${FOUNDATION__FLAGS[@]+"${FOUNDATION__FLAGS[@]}"}; do
+									case ${flag//-/} in "$key"*) matches+=("$flag") ;; esac
 								done
 								if [ ${#matches[@]} -eq 1 ]; then
 									converted=${matches[0]}
 								elif [ ${#matches[@]} -gt 1 ]; then
-									foundation_die "${0##*/}: $argument is ambiguous (${matches[*]}) - nothing was done"
+									foundation_die "${0##*/}: $argument is ambiguous ($(printf '%s\n' "${matches[@]}" | sort | paste -sd ' ' -)) - nothing was done"
 								fi
 								;;
 						esac

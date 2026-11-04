@@ -98,9 +98,13 @@ conf_lines() {
 # path, the contents of the file, its overlay and machines.conf (read with builtins, no process)
 # and the machine type variables. Lines kept from an earlier conf_lines hold while it is
 # unchanged, so a file written during the process is read again. Fails when NAME does not exist.
-# Usage: conf_cache_key NAME
+# Usage: conf_cache_key NAME, or conf__cache_key_file PATH for a file named by its path
 conf_cache_key() {
-	local file=$FOUNDATION_CONFIG_DIR/$1 base='' overlay='' machines=''
+	conf__cache_key_file "$FOUNDATION_CONFIG_DIR/$1"
+}
+
+conf__cache_key_file() {
+	local file=$1 base='' overlay='' machines=''
 	[ -r "$file" ] || return 1
 	IFS= read -r -d '' base <"$file" || true
 	[ -r "${file%.conf}.local.conf" ] && { IFS= read -r -d '' overlay <"${file%.conf}.local.conf" || true; }

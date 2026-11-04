@@ -18,12 +18,12 @@
 
 # The text helpers conf_value needs, until foundation.sh defines its own (same behaviour) after
 # sourcing this file; a shell that already has them keeps them.
-if [ "$(type -t foundation_lower)" != function ]; then
+if ! declare -F foundation_lower >/dev/null; then
 	foundation_lower() {
 		printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
 	}
 fi
-if [ "$(type -t foundation_ieq)" != function ]; then
+if ! declare -F foundation_ieq >/dev/null; then
 	foundation_ieq() {
 		[ "$(foundation_lower "$1")" = "$(foundation_lower "$2")" ]
 	}
@@ -266,10 +266,14 @@ logfile_prune() { # [DRY-RUN] [MAX-AGE-DAYS] [MAX-SESSION-FILES] [MAX-TOTAL-SIZE
 
 # Mirror the log.sh voice into the session log: each function keeps its terminal behaviour and
 # appends its message to the file (a leading -n is a layout flag, not part of the message).
-for logfile__fn in log_title log_step log_success log_warning log_error log_debug log_segments; do
-	eval "$(declare -f "$logfile__fn" | sed "1s/^$logfile__fn /logfile__tty_$logfile__fn /")"
-done
-unset logfile__fn
+# One subshell for the seven and no sed, on every command start: declare -f prints NAME first, so
+# the prefix printed before it renames the function.
+eval "$(
+	for logfile__fn in log_title log_step log_success log_warning log_error log_debug log_segments; do
+		printf 'logfile__tty_'
+		declare -f "$logfile__fn"
+	done
+)"
 log_title() {
 	logfile__tty_log_title "$@"
 	[ "${1:-}" = "-n" ] && shift

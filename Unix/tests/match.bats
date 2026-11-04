@@ -171,6 +171,23 @@ flag_command() {
 	[ "$output" = $'--test-name\nlayout' ]
 }
 
+@test "foundation_command_flags: the header's long flags, sorted and once each, and nothing below the header" {
+	local script=$BATS_TEST_TMPDIR/Demo
+	cat >"$script" <<'EOF'
+#!/usr/bin/env bash --not-a-flag
+# Demo - usage: Demo [--zeta] [--alpha-one VALUE] [--zeta]
+#--tight-comment and --UPPER are read as grep -o reads them: --tight-comment only
+echo --below-the-header
+# --also-below
+EOF
+	run foundation_command_flags "$script"
+	[ "$status" -eq 0 ]
+	[ "$output" = $'--alpha-one\n--tight-comment\n--zeta' ]
+	run foundation_command_flags "$BATS_TEST_TMPDIR/no-such-script"
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+}
+
 @test "normalize: a PowerShell abbreviation takes the one flag it starts, an ambiguous one stops" {
 	flag_command Abbrev '[--alongside] [--include-current] [--include-default-branch] [--timeout-seconds N]'
 	run "${BASH:-bash}" "$BATS_TEST_TMPDIR/Abbrev" Example -Along -IncludeC -Time 5

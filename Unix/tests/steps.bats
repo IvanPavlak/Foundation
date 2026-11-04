@@ -20,6 +20,25 @@ EOF
 	STEP_INCLUDES=()
 }
 
+@test "step_on reads its config once, and again when the file or its overlay changes" {
+	local reads=$BATS_TEST_TMPDIR/reads
+	eval "$(declare -f conf_lines | sed '1s/^conf_lines /real_conf_lines /')"
+	conf_lines() {
+		echo read >>"$reads"
+		real_conf_lines "$@"
+	}
+	step_on Alpha
+	! step_on Beta
+	step_on gamma
+	[ "$(wc -l <"$reads")" -eq 1 ]
+	echo "step Beta on" >>"$STEP_CONFIG"
+	step_on Beta
+	[ "$(wc -l <"$reads")" -eq 2 ]
+	echo "step Beta off" >"$FOUNDATION_CONFIG_DIR/demo.local.conf"
+	! step_on Beta
+	[ "$(wc -l <"$reads")" -eq 3 ]
+}
+
 @test "the default applies when the config has no line for the step" {
 	run step_on Delta
 	[ "$status" -ne 0 ]
