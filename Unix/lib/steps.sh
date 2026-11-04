@@ -49,8 +49,8 @@ step_on() {
 # The `step NAME VALUE` lines of STEP_CONFIG into STEP__NAMES and STEP__VALUES, in file order. Read
 # through conf_lines only when conf__cache_key_file changes: a command asks for each of its steps,
 # and one conf_lines costs several processes (Bootstrap has 41 steps). A file written during the
-# run (Bootstrap's first-run step records the machine type) is read again. Kept in the calling
-# shell: a call inside $(...) still answers right but keeps nothing.
+# run (Bootstrap's first-run step records the machine type in machines.local.conf) is read again.
+# Kept in the calling shell: a call inside $(...) still answers right but keeps nothing.
 STEP__CACHE_KEY=''
 STEP__NAMES=()
 STEP__VALUES=()

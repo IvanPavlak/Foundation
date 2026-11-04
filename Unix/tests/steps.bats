@@ -38,6 +38,16 @@ EOF
 	echo "step Beta off" >"$FOUNDATION_CONFIG_DIR/demo.local.conf"
 	! step_on Beta || false
 	[ "$(wc -l <"$reads")" -eq 3 ]
+	# A line taken out goes back to the default, and machines.local.conf counts as a change.
+	rm "$FOUNDATION_CONFIG_DIR/demo.local.conf"
+	echo "step gamma off" >"$STEP_CONFIG"
+	! step_on gamma on || false
+	step_on Alpha on
+	! step_on Alpha off || false
+	[ "$(wc -l <"$reads")" -eq 4 ]
+	echo "type Work" >"$FOUNDATION_CONFIG_DIR/machines.local.conf"
+	step_on Alpha on
+	[ "$(wc -l <"$reads")" -eq 5 ]
 }
 
 @test "the default applies when the config has no line for the step" {

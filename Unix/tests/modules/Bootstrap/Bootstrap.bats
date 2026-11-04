@@ -73,8 +73,9 @@ setup() {
 	unset MACHINE_TYPE
 	stub_tool scutil 'echo bootstrap-test-host'
 	# The fixture maps no host, so the machine type is its default (Laptop) until the stand-in
-	# records this host as Work; NO_RECORD keeps it from writing.
-	printf '#!/bin/sh\necho "cmd Initialize-Configuration $*" >>"%s/tool.log"\n[ -n "$NO_RECORD" ] || echo "host bootstrap-test-host Work" >>"%s/machines.conf"\n' \
+	# records this host as Work, in the overlay as the real command does; NO_RECORD keeps it from
+	# writing.
+	printf '#!/bin/sh\necho "cmd Initialize-Configuration $*" >>"%s/tool.log"\n[ -n "$NO_RECORD" ] || echo "host bootstrap-test-host Work" >>"%s/machines.local.conf"\n' \
 		"$BATS_TEST_TMPDIR" "$FOUNDATION_CONFIG_DIR" >"$BOOTSTRAP_COMMAND_DIR/Initialize-Configuration"
 	{
 		all_off
@@ -89,7 +90,7 @@ setup() {
 	[ "$status" -eq 0 ]
 	[ "$(calls cmd)" = $'cmd Initialize-Configuration --dry-run\ncmd Set-PowerSettings --dry-run' ]
 	# A real run asks for the one password after the type is recorded, as a root step turned on.
-	cp "$FIXTURE_CONFIG/machines.conf" "$FOUNDATION_CONFIG_DIR/machines.conf"
+	rm -f "$FOUNDATION_CONFIG_DIR/machines.local.conf"
 	: >"$BATS_TEST_TMPDIR/tool.log"
 	run "${BASH:-bash}" "$cmd" --with-initial-setup
 	[ "$status" -eq 0 ]

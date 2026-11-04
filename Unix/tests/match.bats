@@ -188,6 +188,22 @@ EOF
 	[ -z "$output" ]
 }
 
+@test "normalize: a flag the header names twice is one flag, and an ambiguous list is sorted" {
+	flag_command Twice '[--alongside] [--zeta] [--include-default-branch] [--include-current] [--alongside]'
+	run "${BASH:-bash}" "$BATS_TEST_TMPDIR/Twice" -Along
+	[ "$status" -eq 0 ]
+	[ "$output" = --alongside ]
+	run "${BASH:-bash}" "$BATS_TEST_TMPDIR/Twice" -Include
+	[ "$status" -eq 1 ]
+	[[ $output == *"-Include is ambiguous (--include-current --include-default-branch)"* ]]
+}
+
+@test "the library finds the repository root above Unix when DOTFILES_ROOT is not set" {
+	run env -u DOTFILES_ROOT "${BASH:-bash}" -c '. "$1/lib/foundation.sh"; printf "%s\n" "$DOTFILES_ROOT"' _ "$UNIX_DIR"
+	[ "$status" -eq 0 ]
+	[ "$output" = "$(dirname "$UNIX_DIR")" ]
+}
+
 @test "normalize: a PowerShell abbreviation takes the one flag it starts, an ambiguous one stops" {
 	flag_command Abbrev '[--alongside] [--include-current] [--include-default-branch] [--timeout-seconds N]'
 	run "${BASH:-bash}" "$BATS_TEST_TMPDIR/Abbrev" Example -Along -IncludeC -Time 5
