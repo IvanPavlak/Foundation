@@ -48,6 +48,16 @@ EOF
 	echo "type Work" >"$FOUNDATION_CONFIG_DIR/machines.local.conf"
 	step_on Alpha on
 	[ "$(wc -l <"$reads")" -eq 5 ]
+	echo "type Home" >"$FOUNDATION_CONFIG_DIR/machines.conf"
+	step_on Alpha on
+	[ "$(wc -l <"$reads")" -eq 6 ]
+}
+
+@test "a line of another kind that names a step leaves the step alone" {
+	echo "keep Delta on" >>"$STEP_CONFIG"
+	! step_on Delta || false
+	echo "keep Alpha off" >>"$STEP_CONFIG"
+	step_on Alpha
 }
 
 @test "the default applies when the config has no line for the step" {
