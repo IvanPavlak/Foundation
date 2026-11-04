@@ -20,6 +20,46 @@ EOF
 	STEP_INCLUDES=()
 }
 
+@test "step_on reads its config once, and again when the file or its overlay changes" {
+	local reads=$BATS_TEST_TMPDIR/reads
+	eval "$(declare -f conf_lines | sed '1s/^conf_lines /real_conf_lines /')"
+	conf_lines() {
+		echo read >>"$reads"
+		real_conf_lines "$@"
+	}
+	# Not through run: its subshell would keep no cache.
+	step_on Alpha
+	! step_on Beta || false
+	step_on gamma
+	[ "$(wc -l <"$reads")" -eq 1 ]
+	echo "step Beta on" >>"$STEP_CONFIG"
+	step_on Beta
+	[ "$(wc -l <"$reads")" -eq 2 ]
+	echo "step Beta off" >"$FOUNDATION_CONFIG_DIR/demo.local.conf"
+	! step_on Beta || false
+	[ "$(wc -l <"$reads")" -eq 3 ]
+	# A line taken out goes back to the default, and machines.local.conf counts as a change.
+	rm "$FOUNDATION_CONFIG_DIR/demo.local.conf"
+	echo "step gamma off" >"$STEP_CONFIG"
+	! step_on gamma on || false
+	step_on Alpha on
+	! step_on Alpha off || false
+	[ "$(wc -l <"$reads")" -eq 4 ]
+	echo "type Work" >"$FOUNDATION_CONFIG_DIR/machines.local.conf"
+	step_on Alpha on
+	[ "$(wc -l <"$reads")" -eq 5 ]
+	echo "type Home" >"$FOUNDATION_CONFIG_DIR/machines.conf"
+	step_on Alpha on
+	[ "$(wc -l <"$reads")" -eq 6 ]
+}
+
+@test "a line of another kind that names a step leaves the step alone" {
+	echo "keep Delta on" >>"$STEP_CONFIG"
+	! step_on Delta || false
+	echo "keep Alpha off" >>"$STEP_CONFIG"
+	step_on Alpha
+}
+
 @test "the default applies when the config has no line for the step" {
 	run step_on Delta
 	[ "$status" -ne 0 ]

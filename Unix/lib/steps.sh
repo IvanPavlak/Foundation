@@ -21,12 +21,12 @@ STEP__WARNED=' '
 
 # Usage: step_on NAME [DEFAULT]   (DEFAULT on|off, off when omitted). Succeeds when NAME runs.
 step_on() {
-	local name=$1 state=${2:-off} line kind step value item skipped=0 included=0
+	local name=$1 state=${2:-off} i item skipped=0 included=0
 	if [ -n "$STEP_CONFIG" ] && [ -r "$STEP_CONFIG" ]; then
-		while IFS= read -r line; do
-			read -r kind step value _ <<<"$line"
-			[ "$kind" = step ] && foundation_ieq "$step" "$name" && state=$(foundation_lower "$value")
-		done < <(conf_lines "$STEP_CONFIG")
+		step__read_config
+		for i in ${STEP__NAMES[@]+"${!STEP__NAMES[@]}"}; do
+			foundation_ieq "${STEP__NAMES[$i]}" "$name" && state=$(foundation_lower "${STEP__VALUES[$i]}")
+		done
 	fi
 	for item in ${STEP_INCLUDES[@]+"${STEP_INCLUDES[@]}"}; do foundation_ieq "$item" "$name" && included=1; done
 	for item in ${STEP_SKIPS[@]+"${STEP_SKIPS[@]}"}; do foundation_ieq "$item" "$name" && skipped=1; done
@@ -44,6 +44,29 @@ step_on() {
 	fi
 	[ "$included" -eq 1 ] && return 0
 	[ "$state" = on ]
+}
+
+# The `step NAME VALUE` lines of STEP_CONFIG into STEP__NAMES and STEP__VALUES, in file order. Read
+# through conf_lines only when conf__cache_key_file changes: a command asks for each of its steps,
+# and one conf_lines costs several processes (Bootstrap has 41 steps). A file written during the
+# run (Bootstrap's first-run step records the machine type in machines.local.conf) is read again.
+# Kept in the calling shell: a call inside $(...) still answers right but keeps nothing.
+STEP__CACHE_KEY=''
+STEP__NAMES=()
+STEP__VALUES=()
+step__read_config() {
+	local line kind step value
+	conf__cache_key_file "$STEP_CONFIG" || return 0
+	[ "$CONF_CACHE_KEY" != "$STEP__CACHE_KEY" ] || return 0
+	STEP__CACHE_KEY=$CONF_CACHE_KEY
+	STEP__NAMES=()
+	STEP__VALUES=()
+	while IFS= read -r line; do
+		read -r kind step value _ <<<"$line"
+		[ "$kind" = step ] || continue
+		STEP__NAMES+=("$step")
+		STEP__VALUES+=("$value")
+	done < <(conf_lines "$STEP_CONFIG")
 }
 
 # Appends the comma- or space-separated names in VALUE to the array named LIST (STEP_SKIPS or

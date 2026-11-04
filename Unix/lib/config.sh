@@ -94,18 +94,24 @@ conf_lines() {
 	conf__lines_raw "$1" | conf_for_machine | conf__apply_removals
 }
 
-# Everything conf_lines reads for Unix/config/NAME, as one string in CONF_CACHE_KEY: the file's
-# path, the contents of the file, its overlay and machines.conf (read with builtins, no process)
-# and the machine type variables. Lines kept from an earlier conf_lines hold while it is
-# unchanged, so a file written during the process is read again. Fails when NAME does not exist.
-# Usage: conf_cache_key NAME
+# What conf_lines reads for Unix/config/NAME, as one string in CONF_CACHE_KEY: the file's path, the
+# contents of the file, its overlay, machines.conf and its overlay (read with builtins, no process)
+# and the machine type variables. Lines kept from an earlier conf_lines hold while it is unchanged,
+# so a file written during the process is read again. The hostname is not in it: a process that
+# renames the Mac and asks again keeps the lines of the old name. Fails when NAME does not exist.
+# Usage: conf_cache_key NAME, or conf__cache_key_file PATH for a file named by its path
 conf_cache_key() {
-	local file=$FOUNDATION_CONFIG_DIR/$1 base='' overlay='' machines=''
+	conf__cache_key_file "$FOUNDATION_CONFIG_DIR/$1"
+}
+
+conf__cache_key_file() {
+	local file=$1 base='' overlay='' machines='' machines_overlay=''
 	[ -r "$file" ] || return 1
 	IFS= read -r -d '' base <"$file" || true
 	[ -r "${file%.conf}.local.conf" ] && { IFS= read -r -d '' overlay <"${file%.conf}.local.conf" || true; }
 	[ -r "$FOUNDATION_CONFIG_DIR/machines.conf" ] && { IFS= read -r -d '' machines <"$FOUNDATION_CONFIG_DIR/machines.conf" || true; }
-	CONF_CACHE_KEY="$file|${CONF_MACHINE_TYPE:-}|${FOUNDATION_MACHINE_TYPE:-}|${MACHINE_TYPE:-}|$base|$overlay|$machines"
+	[ -r "$FOUNDATION_CONFIG_DIR/machines.local.conf" ] && { IFS= read -r -d '' machines_overlay <"$FOUNDATION_CONFIG_DIR/machines.local.conf" || true; }
+	CONF_CACHE_KEY="$file|${CONF_MACHINE_TYPE:-}|${FOUNDATION_MACHINE_TYPE:-}|${MACHINE_TYPE:-}|$base|$overlay|$machines|$machines_overlay"
 }
 
 # conf_lines of Unix/config/zones.conf, read once per process: a layout drawn or checked asks it

@@ -171,6 +171,39 @@ flag_command() {
 	[ "$output" = $'--test-name\nlayout' ]
 }
 
+@test "foundation_command_flags: the header's long flags, sorted and once each, and nothing below the header" {
+	local script=$BATS_TEST_TMPDIR/Demo
+	cat >"$script" <<'EOF'
+#!/usr/bin/env bash --not-a-flag
+# Demo - usage: Demo [--zeta] [--alpha-one VALUE] [--zeta]
+#--tight-comment and --UPPER are read as grep -o reads them: --tight-comment only
+echo --below-the-header
+# --also-below
+EOF
+	run foundation_command_flags "$script"
+	[ "$status" -eq 0 ]
+	[ "$output" = $'--alpha-one\n--tight-comment\n--zeta' ]
+	run foundation_command_flags "$BATS_TEST_TMPDIR/no-such-script"
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+}
+
+@test "normalize: a flag the header names twice is one flag, and an ambiguous list is sorted" {
+	flag_command Twice '[--alongside] [--zeta] [--include-default-branch] [--include-current] [--alongside]'
+	run "${BASH:-bash}" "$BATS_TEST_TMPDIR/Twice" -Along
+	[ "$status" -eq 0 ]
+	[ "$output" = --alongside ]
+	run "${BASH:-bash}" "$BATS_TEST_TMPDIR/Twice" -Include
+	[ "$status" -eq 1 ]
+	[[ $output == *"-Include is ambiguous (--include-current --include-default-branch)"* ]]
+}
+
+@test "the library finds the repository root above Unix when DOTFILES_ROOT is not set" {
+	run env -u DOTFILES_ROOT "${BASH:-bash}" -c '. "$1/lib/foundation.sh"; printf "%s\n" "$DOTFILES_ROOT"' _ "$UNIX_DIR"
+	[ "$status" -eq 0 ]
+	[ "$output" = "$(dirname "$UNIX_DIR")" ]
+}
+
 @test "normalize: a PowerShell abbreviation takes the one flag it starts, an ambiguous one stops" {
 	flag_command Abbrev '[--alongside] [--include-current] [--include-default-branch] [--timeout-seconds N]'
 	run "${BASH:-bash}" "$BATS_TEST_TMPDIR/Abbrev" Example -Along -IncludeC -Time 5
