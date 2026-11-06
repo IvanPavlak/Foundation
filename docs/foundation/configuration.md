@@ -137,7 +137,7 @@ layout file in the set (and the set folder when it is missing, as on Windows).
 | `login-items.conf` | (Windows Startup apps) | Set-LoginItems |
 | `dotnet.conf` | `DotnetEFVersion`, `MachineSpecificPaths.NuGetConfig`, `DotnetProjectsSearchPath`, the .NET 6 SDK of `WinGetApps.local.csv` | Install-DotnetEf, Install-DotnetSdks (`sdk-channel`), Configure-NuGetConfig, Determine-DotnetDependencies |
 | `npm.conf` | `PathTemplates.NpmConfig`, `NpmRegistries` | Configure-NpmConfig |
-| `conda-environments.conf` | `BootstrapConfig.DataFiles.CondaEnvironments` | Install-CondaEnvironments |
+| `conda-environments.conf` | `BootstrapConfig.DataFiles.CondaEnvironments`, `CondaUpdateBase` | Install-CondaEnvironments |
 | `package-pins.conf` | the `Version` column of `WinGetApps.csv`, `ScoopApps.csv` and `ChocolateyApps.csv` | Upgrade-All |
 | `bootstrap.conf` | `BootstrapConfig.Steps`, `BootstrapConfig.RepositoryUpdateScope`, `BootstrapConfig.PersonalSteps` | Bootstrap |
 | `Unix/home/` (not in `config/`: chezmoi's link templates) | `SymbolicLinks` | chezmoi, Bootstrap's Dotfiles step, `Unix/bootstrap.sh`, Add-SymbolicLink - see [Dotfiles with chezmoi](bootstrap.md#dotfiles-with-chezmoi) |
@@ -684,7 +684,7 @@ start at the repository root); without `env` lines every file there is created. 
 exports in `Conda/Environments` carry win-64 builds, so the macOS copies live in
 `Conda/Environments/macOS` and use `conda-forge` with `nodefaults`. conda 26 still checks the Terms of Service of the defaults channels it is
 configured with, even for such a file, so a fresh Mac needs `conda tos accept` once; a refused
-run prints the full command. `update-base on` updates conda from the defaults channel.
+run prints the full command. `update-base on` updates conda from the defaults channel first, on a run without NAME arguments only (the Windows `CondaUpdateBase`).
 
 ### npm.conf
 
