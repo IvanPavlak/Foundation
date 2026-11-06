@@ -2,14 +2,18 @@
 # Install-CondaEnvironments - creates the Conda environments of Unix/config/conda-environments.conf
 # from their environment files, the Unix counterpart of the Windows Create-CondaEnvironments.
 #
-# Usage: Install-CondaEnvironments [--list] [--dry-run]
+# Usage: Install-CondaEnvironments [NAME...] [--recreate] [--list] [--dry-run]
 #
 # Every `env NAME` line creates NAME from NAME.yml in the `directory` of the file (default
-# Conda/Environments/macOS); without env lines every .yml file there is created. The environment
-# is named after its file, and one that already exists is left alone. `update-base on` first
-# updates conda in the base environment (the defaults channel needs its Terms of Service
-# accepted). Without conda on PATH it does nothing. --list shows each file and whether its
-# environment exists; --dry-run prints the conda commands; neither changes anything.
+# Conda/Environments/macOS); without env lines every .yml file there is created. NAME arguments
+# (space- or comma-separated, a trailing .yml dropped) take only those environments instead,
+# each from its NAME.yml in the folder whether or not an env line names it; a name without a
+# file is an error and the others still run. The environment is named after its file, and one
+# that already exists is left alone; --recreate removes it (conda env remove) and creates it
+# again. `update-base on` first updates conda in the base environment (the defaults channel
+# needs its Terms of Service accepted), only on a run without NAME arguments. Without conda on
+# PATH it does nothing. --list shows each file and whether its environment exists; --dry-run
+# prints the conda commands; neither changes anything.
 _foundation=${BASH_SOURCE[0]}
 while [ -L "$_foundation" ]; do
 	_link=$(readlink "$_foundation")
@@ -25,12 +29,16 @@ foundation_common_flags "$@"
 
 dry=0
 list_only=0
+recreate=0
+requested=()
 for argument in "$@"; do
 	case $argument in
 		--dry-run) dry=1 ;;
 		--list) list_only=1 ;;
+		--recreate) recreate=1 ;;
 		-v | --verbose) ;;
-		*) foundation_die "Unknown argument [$argument] - usage: Install-CondaEnvironments [--list] [--dry-run]" ;;
+		-*) foundation_die "Unknown argument [$argument] - usage: Install-CondaEnvironments [NAME...] [--recreate] [--list] [--dry-run]" ;;
+		*) foundation_split_list requested "$argument" ;;
 	esac
 done
 
@@ -78,7 +86,29 @@ if [ ! -d "$directory" ]; then
 	log_warning "Conda environments folder not found => $directory - skipping Conda environments!"
 	exit 0
 fi
-if [ ${#names[@]} -eq 0 ]; then
+failures=0
+if [ ${#requested[@]} -gt 0 ]; then
+	# NAME arguments replace the env lines: each needs its file, matched in any case.
+	names=()
+	for name in "${requested[@]}"; do
+		name=${name%.yml}
+		match=''
+		for file in "$directory"/*.yml; do
+			[ -f "$file" ] || continue
+			if [ "$(foundation_lower "$(basename "$file" .yml)")" = "$(foundation_lower "$name")" ]; then
+				match=$(basename "$file" .yml)
+				break
+			fi
+		done
+		if [ -z "$match" ]; then
+			log_error "No environment file for [$name] in => $directory"
+			failures=$((failures + 1))
+			continue
+		fi
+		case " ${names[*]-} " in *" $match "*) ;; *) names+=("$match") ;; esac
+	done
+	[ ${#names[@]} -gt 0 ] || exit 1
+elif [ ${#names[@]} -eq 0 ]; then
 	for file in "$directory"/*.yml; do
 		[ -f "$file" ] && names+=("$(basename "$file" .yml)")
 	done
@@ -100,11 +130,11 @@ if [ "$list_only" -eq 1 ]; then
 		[ -f "$directory/$name.yml" ] || state="no file"
 		printf '  %-24s %s\n' "$name" "$state"
 	done
-	exit 0
+	exit "$((failures > 0))"
 fi
 
-failures=0
-if [ "$update_base" = on ]; then
+# The base update runs only on a run over every environment, and only when configured.
+if [ "$update_base" = on ] && [ ${#requested[@]} -eq 0 ]; then
 	if [ "$dry" -eq 1 ]; then
 		printf '  conda update -n base -c defaults conda -y\n'
 	elif ! run_conda update -n base -c defaults conda -y; then
@@ -120,14 +150,25 @@ for name in "${names[@]}"; do
 		log_warning "No environment file, skipped => $file"
 		continue
 	fi
-	if exists "$name"; then
-		log_debug "[Install-CondaEnvironments] $name already exists"
+	present=0
+	exists "$name" && present=1
+	if [ "$present" -eq 1 ] && [ "$recreate" -eq 0 ]; then
+		[ "$dry" -eq 1 ] || log_warning "$name already exists (--recreate rebuilds it)"
 		continue
 	fi
 	created=$((created + 1))
 	if [ "$dry" -eq 1 ]; then
+		[ "$present" -eq 0 ] || printf '  conda env remove -n %s -y\n' "$name"
 		printf '  conda env create -n %s -f %s\n' "$name" "$file"
 		continue
+	fi
+	if [ "$present" -eq 1 ]; then
+		log_step "Removing $name"
+		if ! run_conda env remove -n "$name" -y; then
+			log_error "Could not remove $name"
+			failures=$((failures + 1))
+			continue
+		fi
 	fi
 	log_step "Creating $name from $(basename "$file")"
 	if run_conda env create -n "$name" -f "$file"; then

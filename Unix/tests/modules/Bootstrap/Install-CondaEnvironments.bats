@@ -2,7 +2,8 @@
 # Install-CondaEnvironments against a stand-in for conda (its environments come from
 # $CONDA_ENVS, a create or update fails when $CONDA_FAIL is set and prints $CONDA_FAIL) with
 # environment files in the test folder: only missing environments are created and named after
-# their file, env lines select files, update-base is opt-in, a Terms of Service refusal gets the
+# their file, env lines select files, NAME arguments replace them, --recreate removes and creates
+# again, update-base is opt-in and skipped with NAME arguments, a Terms of Service refusal gets the
 # hint, --list and --dry-run create nothing, a missing folder is skipped, no conda is skipped with
 # a warning (hide_tool keeps the real conda out of reach).
 
@@ -25,7 +26,7 @@ setup() {
 }
 
 conf() { printf '%s\n' "$@" >"$FOUNDATION_CONFIG_DIR/conda-environments.conf"; }
-changes() { grep -E '^conda (env create|update)' "$BATS_TEST_TMPDIR/tool.log" 2>/dev/null || true; }
+changes() { grep -E '^conda (env create|env remove|update)' "$BATS_TEST_TMPDIR/tool.log" 2>/dev/null || true; }
 
 @test "without env lines every file is created, an existing environment is left alone" {
 	conf "directory $envs"
@@ -58,6 +59,47 @@ changes() { grep -E '^conda (env create|update)' "$BATS_TEST_TMPDIR/tool.log" 2>
 	conf "directory $envs" "env One" "update-base on"
 	run "${BASH:-bash}" "$cmd"
 	[ "$(changes)" = $'conda update -n base -c defaults conda -y\nconda env create -n One -f '"$envs/One.yml" ]
+}
+
+@test "NAME arguments take only those files, in any case, whatever the env lines say" {
+	conf "directory $envs" "env One"
+	run "${BASH:-bash}" "$cmd" two.yml
+	[ "$status" -eq 0 ]
+	[ "$(changes)" = "conda env create -n Two -f $envs/Two.yml" ]
+}
+
+@test "a NAME without a file is an error and the other names still run" {
+	conf "directory $envs"
+	run "${BASH:-bash}" "$cmd" Missing,Two
+	[ "$status" -ne 0 ]
+	[[ $output == *"No environment file for [Missing]"* ]]
+	[ "$(changes)" = "conda env create -n Two -f $envs/Two.yml" ]
+}
+
+@test "--recreate removes an existing environment and creates it again, without it the environment is left alone" {
+	conf "directory $envs"
+	CONDA_ENVS='One                  /opt/conda/envs/One' run "${BASH:-bash}" "$cmd" One
+	[ "$status" -eq 0 ]
+	[ -z "$(changes)" ]
+	CONDA_ENVS='One                  /opt/conda/envs/One' run "${BASH:-bash}" "$cmd" One -Recreate
+	[ "$status" -eq 0 ]
+	[ "$(changes)" = $'conda env remove -n One -y\nconda env create -n One -f '"$envs/One.yml" ]
+}
+
+@test "--recreate of a missing environment only creates it, --dry-run prints the remove and the create" {
+	conf "directory $envs"
+	run "${BASH:-bash}" "$cmd" Two --recreate
+	[ "$(changes)" = "conda env create -n Two -f $envs/Two.yml" ]
+	rm -f "$BATS_TEST_TMPDIR/tool.log"
+	CONDA_ENVS='One                  /opt/conda/envs/One' run "${BASH:-bash}" "$cmd" One --recreate --dry-run
+	[[ $output == *"conda env remove -n One -y"*"conda env create -n One -f $envs/One.yml"* ]]
+	[ -z "$(changes)" ]
+}
+
+@test "update-base on is skipped on a run with NAME arguments" {
+	conf "directory $envs" "update-base on"
+	run "${BASH:-bash}" "$cmd" One
+	[ "$(changes)" = "conda env create -n One -f $envs/One.yml" ]
 }
 
 @test "a refused Terms of Service fails the run with the accept command" {

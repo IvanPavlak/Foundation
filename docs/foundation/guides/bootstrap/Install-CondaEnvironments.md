@@ -1,7 +1,6 @@
 # Install-CondaEnvironments
 
-Creates the Conda environments of `conda-environments.conf` from their `.yml` files, leaving the
-ones that already exist alone.
+Creates the Conda environments of `conda-environments.conf` from their `.yml` files, leaving the ones that already exist alone (`--recreate` builds them again); NAME arguments take only those environments. Bootstrap runs it as the `CondaEnvironments` step.
 
 > [!NOTE]
 > Every value on this page belongs in the `.local.conf` overlay of its file
@@ -14,7 +13,7 @@ ones that already exist alone.
 | ---- | ---- | -------------- | ---------------- |
 | [`conda-environments.conf`](../../configuration.md#dotnetconf-and-conda-environmentsconf) | `directory PATH` | `Conda/Environments/macOS` | The folder of the environment files; a relative path starts at the repository root |
 | [`conda-environments.conf`](../../configuration.md#dotnetconf-and-conda-environmentsconf) | `env NAME` | none: every `.yml` file in the folder | An environment to create from `NAME.yml` in that folder, named after the file |
-| [`conda-environments.conf`](../../configuration.md#dotnetconf-and-conda-environmentsconf) | `update-base on\|off` | `off` | Whether conda in the base environment is updated from the defaults channel first |
+| [`conda-environments.conf`](../../configuration.md#dotnetconf-and-conda-environmentsconf) | `update-base on\|off` | `off` | Whether conda in the base environment is updated from the defaults channel first, on a run without NAME arguments only |
 
 ## Decisions
 
@@ -50,8 +49,7 @@ env MyEnvironment
 update-base off
 ```
 
-A name without a file in the folder is skipped with a warning; an environment `conda env list`
-already shows is left alone.
+A name without a file in the folder is skipped with a warning; an environment `conda env list` already shows is left alone. To build one environment, or rebuild it, name it: `Install-CondaEnvironments MyEnvironment --recreate`.
 
 ## Step 2: Check the configuration
 
@@ -66,6 +64,7 @@ It lists each environment with `exists`, `missing` or `no file`, and changes not
 ```bash
 Install-CondaEnvironments --list
 Install-CondaEnvironments --dry-run
+Install-CondaEnvironments MyEnvironment --recreate --dry-run
 Bootstrap --only CondaEnvironments --dry-run
 Test-ConfigurationSchema --quiet
 ```
