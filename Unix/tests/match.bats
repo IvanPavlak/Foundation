@@ -204,6 +204,15 @@ EOF
 	[ "$output" = "$(dirname "$UNIX_DIR")" ]
 }
 
+@test "an inherited DOTFILES_ROOT is ignored unless FOUNDATION_KEEP_DOTFILES_ROOT=1 keeps it" {
+	run env -u FOUNDATION_KEEP_DOTFILES_ROOT DOTFILES_ROOT="$BATS_TEST_TMPDIR/other clone" "${BASH:-bash}" -c '. "$1/lib/foundation.sh"; printf "%s\n" "$DOTFILES_ROOT"' _ "$UNIX_DIR"
+	[ "$status" -eq 0 ]
+	[ "$output" = "$(dirname "$UNIX_DIR")" ]
+	run env FOUNDATION_KEEP_DOTFILES_ROOT=1 DOTFILES_ROOT="$BATS_TEST_TMPDIR/other clone" "${BASH:-bash}" -c '. "$1/lib/foundation.sh"; printf "%s\n" "$DOTFILES_ROOT"' _ "$UNIX_DIR"
+	[ "$status" -eq 0 ]
+	[ "$output" = "$BATS_TEST_TMPDIR/other clone" ]
+}
+
 @test "normalize: a PowerShell abbreviation takes the one flag it starts, an ambiguous one stops" {
 	flag_command Abbrev '[--alongside] [--include-current] [--include-default-branch] [--timeout-seconds N]'
 	run "${BASH:-bash}" "$BATS_TEST_TMPDIR/Abbrev" Example -Along -IncludeC -Time 5

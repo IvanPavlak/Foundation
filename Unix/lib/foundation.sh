@@ -41,8 +41,15 @@ FOUNDATION_UNIX=$(CDPATH='' cd -- "$foundation__self/.." && pwd -P)
 unset foundation__self foundation__target
 
 # FOUNDATION_UNIX is absolute: its parent needs no dirname, one process less on every command start.
+# DOTFILES_ROOT is always the checkout this library lives in, whatever the calling shell exported:
+# a command run by path from a second clone must read that clone's config, docs and AI items, not
+# the ones of the clone the shell was started from. FOUNDATION_KEEP_DOTFILES_ROOT=1 keeps an
+# inherited DOTFILES_ROOT instead: the test seam setup_foundation sets (tests/helpers.bash), so a
+# suite can point a command at a fixture repository.
 foundation__parent=${FOUNDATION_UNIX%/*}
-DOTFILES_ROOT=${DOTFILES_ROOT:-${foundation__parent:-/}}
+if [ "${FOUNDATION_KEEP_DOTFILES_ROOT:-}" != 1 ] || [ -z "${DOTFILES_ROOT:-}" ]; then
+	DOTFILES_ROOT=${foundation__parent:-/}
+fi
 unset foundation__parent
 FOUNDATION_CONFIG_DIR=${FOUNDATION_CONFIG_DIR:-$FOUNDATION_UNIX/config}
 FOUNDATION_STATE_DIR=${FOUNDATION_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/foundation}
