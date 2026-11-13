@@ -39,6 +39,41 @@ profiles() {
 	[ "$AI_PROFILE" = Home ] && [ "$AI_PROFILE_HOW" = override ]
 }
 
+@test "the switch file: next to the +managed-settings destination, after the override, before the host line" {
+	profiles 'host my-mac Work' 'default Personal' '[Personal]' '[Work]' '[Home]'
+	# No harness with a +managed-settings destination: no switch file, the host line picks.
+	run ai_profile_switch_file
+	[ "$status" -eq 1 ]
+	printf '[one]\nskills each . ~/one/skills\n[two]\nrules  file  managed-settings.json  +managed-settings  %s/root dir/managed-settings.json\n' "$BATS_TEST_TMPDIR" >"$FOUNDATION_CONFIG_DIR/ai-harnesses.conf"
+	[ "$(ai_profile_switch_file)" = "$BATS_TEST_TMPDIR/root dir/ai-profile.switch" ]
+	ai_profile_load
+	[ "$AI_PROFILE" = Work ] && [ "$AI_PROFILE_HOW" = hostname ]
+	mkdir -p "$BATS_TEST_TMPDIR/root dir"
+	printf 'home\n' >"$BATS_TEST_TMPDIR/root dir/ai-profile.switch"
+	[ "$(ai_profile_switched)" = home ]
+	ai_profile_load
+	[ "$AI_PROFILE" = Home ] && [ "$AI_PROFILE_HOW" = switched ]
+	FOUNDATION_AI_PROFILE=personal
+	ai_profile_load
+	[ "$AI_PROFILE" = Personal ] && [ "$AI_PROFILE_HOW" = override ]
+	unset FOUNDATION_AI_PROFILE
+	# What a reset would pick.
+	AI_PROFILE_IGNORE_SWITCH=1
+	ai_profile_load
+	[ "$AI_PROFILE" = Work ] && [ "$AI_PROFILE_HOW" = hostname ]
+	unset AI_PROFILE_IGNORE_SWITCH
+	# An empty switch file is no switch; one naming no section fails with the way out.
+	: >"$BATS_TEST_TMPDIR/root dir/ai-profile.switch"
+	ai_profile_load
+	[ "$AI_PROFILE_HOW" = hostname ]
+	printf 'Gone' >"$BATS_TEST_TMPDIR/root dir/ai-profile.switch"
+	run ai_profile_load
+	[ "$status" -eq 2 ]
+	ai_profile_load || true
+	[ -z "$AI_PROFILE" ]
+	[[ $AI_PROFILE_ERROR == *"Switch-AiProfile --reset"*"[Gone], which is no section"* ]]
+}
+
 @test "a name that is no section, or nothing picking one, fails with the reason" {
 	profiles 'default Nope' '[Personal]'
 	run ai_profile_load

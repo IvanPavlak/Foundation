@@ -13,6 +13,7 @@ Walks the one-time sign-ins of this Mac's AI profile (Claude Code, the GitHub CL
 | [`ai-profiles.conf`](../../configuration.md#ai-profilesconf) | `plan NAME UUID...` | none | The Plan the Claude Code sign-in must use, named in the instructions |
 | [`ai-profiles.conf`](../../configuration.md#ai-profilesconf) | `mcp NAME...` | every server | Which OAuth servers need their sign-in |
 | [`ai-profiles.conf`](../../configuration.md#ai-profilesconf) | `env NAME...` | none | The environment variables the profile needs set on this Mac |
+| [`ai-harnesses.conf`](../../configuration.md#ai-artifactsconf-and-ai-harnessesconf) | `rules file managed-settings.json +managed-settings PATH` | `/Library/Application Support/ClaudeCode/managed-settings.json` (`claude-code`) | The folder whose `ai-profile.switch` is read: the profile [Switch-AiProfile](Switch-AiProfile.md) set wins over the host and default lines |
 | [`ai-mcp-servers.conf`](../../configuration.md#files) | `[Server]` with a `url` line | none | A remote server without `bearer-token-env` or an `Authorization` header signs in with OAuth |
 
 Nothing is written: every sign-in happens in Claude Code (`/login`, `/mcp`) or `gh auth login` itself, and an environment variable's value goes into `~/.zshenv`, never into the repository.

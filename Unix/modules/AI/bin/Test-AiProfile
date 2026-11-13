@@ -5,8 +5,9 @@
 # Usage: Test-AiProfile
 #
 # Unix counterpart of Test-AiProfile (WinuX AI module). Prints, from Unix/config/ai-profiles.conf:
-#   - the profile and how it was picked: FOUNDATION_AI_PROFILE (override), a `host NAME PROFILE`
-#     line (hostname), else the `default` line;
+#   - the profile and how it was picked: FOUNDATION_AI_PROFILE (override), the profile
+#     Switch-AiProfile set (switched), a `host NAME PROFILE` line (hostname), else the `default`
+#     line;
 #   - the expected Plan (`plan NAME UUID...`) and the logged-in one, the oauthAccount block of
 #     ${CLAUDE_CONFIG_DIR:-~}/.claude.json (organizationUuid, organizationName), read only;
 #   - whether the deployed managed settings (the +managed-settings destination of the harnesses
@@ -65,7 +66,7 @@ mismatch() {
 	mismatches=$((mismatches + 1))
 }
 
-log_step "Profile        : $AI_PROFILE (picked by $AI_PROFILE_HOW)"
+log_step "Profile => [$AI_PROFILE] (picked by $AI_PROFILE_HOW)"
 
 # The Plan: its name, then its org UUIDs.
 plan=()
@@ -74,12 +75,12 @@ expected=" ${plan[*]:1} "
 if [ ${#plan[@]} -lt 2 ]; then
 	mismatch "The profile has no \`plan NAME UUID...\` line - nothing pins its Plan"
 else
-	log_step "Expected Plan  : ${plan[0]} (${plan[*]:1})"
+	log_step "Expected Plan => [${plan[0]} ${plan[*]:1}]"
 fi
 
 if org=$(ai_logged_in_org); then
 	IFS=$'\t' read -r org_uuid org_name <<<"$org"
-	log_step "Logged-in Plan : ${org_name:-unnamed organization} ($org_uuid)"
+	log_step "Logged-in Plan => [${org_name:-unnamed organization} $org_uuid]"
 	if [ ${#plan[@]} -ge 2 ]; then
 		if [[ $(foundation_lower "$expected") == *" $(foundation_lower "$org_uuid") "* ]]; then
 			log_success "Claude Code is signed in to the ${plan[0]} Plan"
@@ -162,21 +163,21 @@ PY
 done
 
 # The OAuth MCP servers: listed, since their sign-in lives in the keychain.
-oauth=$(ai_profile_oauth_servers | paste -sd' ' -)
-[ -z "$oauth" ] || log_step "OAuth MCP      : $oauth (sign in once each with /mcp in Claude Code; not checked)"
+oauth=$(ai_profile_oauth_servers | paste -sd, - | sed 's/,/, /g')
+[ -z "$oauth" ] || log_step "OAuth MCP => [$oauth] (sign in once each with /mcp in Claude Code; not checked)"
 
-if ai_profile_unattended; then log_step "Unattended     : on"; else log_step "Unattended     : off"; fi
+if ai_profile_unattended; then log_step "Unattended => [on]"; else log_step "Unattended => [off]"; fi
 
 # The repository policy: listed, never a mismatch.
 while IFS= read -r message; do
 	[ -z "$message" ] || log_warning "$message"
 done < <(ai_profile_policy_problems)
-log_step "Default policy : $(ai_profile_default_policy)"
+log_step "Default policy => [$(ai_profile_default_policy)]"
 while IFS=$'\t' read -r level pattern; do
-	[ -n "$pattern" ] && log_step "$(printf 'Policy         : %-10s %s' "$level" "$pattern")"
+	[ -n "$pattern" ] && log_step "Policy => [$level] for [$pattern]"
 done < <(ai_profile_policies)
-no_checks=$(ai_profile_words merge-without-checks | paste -sd' ' -)
-[ -z "$no_checks" ] || log_step "No-CI merges   : $no_checks (autonomous repositories that may merge with no CI check reported)"
+no_checks=$(ai_profile_words merge-without-checks | paste -sd, - | sed 's/,/, /g')
+[ -z "$no_checks" ] || log_step "No-CI merges => [$no_checks] (autonomous repositories that may merge with no CI check reported)"
 
 if [ "$mismatches" -eq 0 ]; then
 	log_success "AI profile $AI_PROFILE matches: its Plan, its pin, no pay-per-use credential!"

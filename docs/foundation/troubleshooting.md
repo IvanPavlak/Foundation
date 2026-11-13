@@ -286,7 +286,11 @@ link it, or links another one of the same name.
 3. `... is set in ...`: a pay-per-use credential would bypass the Plan. Remove the line from that
    file (or `launchctl unsetenv NAME`) and open a new shell.
 4. `AI profile: ... is no section`: `FOUNDATION_AI_PROFILE` or a `host` line names a profile that
-   `ai-profiles.conf` does not define; `Test-ConfigurationSchema` reports it too.
+   `ai-profiles.conf` does not define; `Test-ConfigurationSchema` reports it too. When the line
+   names the switch file, the profile `Switch-AiProfile` set was renamed or removed since: run
+   `Switch-AiProfile --reset`, or `Switch-AiProfile PROFILE` with one that exists.
+5. The profile line says `picked by switched` on a Mac that should follow its `host` line: an
+   earlier `Switch-AiProfile` is still in effect; `Switch-AiProfile --reset` undoes it.
 
 ### A Mod Does Not Appear In Claude Code
 

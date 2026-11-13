@@ -5,8 +5,8 @@
 # Usage: Initialize-AiProfile
 #
 # Unix counterpart of Initialize-AiProfile (WinuX AI module). Once per machine, after Bootstrap,
-# for the profile of Unix/config/ai-profiles.conf (FOUNDATION_AI_PROFILE, a host line, else the
-# default), in this order:
+# for the profile of Unix/config/ai-profiles.conf (FOUNDATION_AI_PROFILE, the profile
+# Switch-AiProfile set, a host line, else the default), in this order:
 #   1. Claude Code: when ~/.claude.json is not signed in to the profile's Plan, it names the Plan
 #      and its organization and offers to start `claude`, where /login signs in;
 #   2. GitHub CLI: when `gh auth status` fails, it offers `gh auth login`;
@@ -50,7 +50,7 @@ case $? in
 		;;
 	2) foundation_die "AI profile: $AI_PROFILE_ERROR" ;;
 esac
-log_step "Profile: $AI_PROFILE (picked by $AI_PROFILE_HOW)"
+log_step "Profile => [$AI_PROFILE] (picked by $AI_PROFILE_HOW)"
 
 # Starts a CLI for an interactive sign-in when the user says yes. Usage: offer TITLE QUESTION COMMAND...
 offer() {

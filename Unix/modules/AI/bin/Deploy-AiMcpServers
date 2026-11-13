@@ -73,7 +73,7 @@ if [ -n "$AI_PROFILE" ]; then
 fi
 
 log_title "Deploy-AiMcpServers"
-[ -z "$AI_PROFILE" ] || log_step "AI profile : $AI_PROFILE (by $AI_PROFILE_HOW), servers: ${profile_servers:-none}"
+[ -z "$AI_PROFILE" ] || log_step "AI profile => [$AI_PROFILE] (picked by $AI_PROFILE_HOW), servers => [${profile_servers:-none}]"
 file=$(conf_path ai-mcp-servers.conf) || {
 	log_warning "No MCP servers configured (ai-mcp-servers.conf) - nothing to deploy!"
 	exit 0
