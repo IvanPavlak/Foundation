@@ -494,7 +494,7 @@ manifest() {
 	profiles 'default Work' '[Work]' 'rules Other' 'deploy two' 'include skills/alpha skills/gamma' 'exclude skills/gamma'
 	run "${BASH:-bash}" "$cmd"
 	[ "$status" -eq 0 ]
-	[[ $output == *"AI profile      : Work (by default)"* ]]
+	[[ $output == *"AI profile => [Work] (picked by default)"* ]]
 	[ ! -e "$HOME/one" ]
 	[ "$(readlink "$HOME/two/RULES.md")" = "$ai/Rules/own/Other/RULES.md" ]
 	[ -L "$HOME/two/skills/alpha" ]
@@ -507,7 +507,7 @@ manifest() {
 	profiles 'default Work' '[Work]' '[Home]' 'deploy two'
 	FOUNDATION_AI_PROFILE=home run "${BASH:-bash}" "$cmd"
 	[ "$status" -eq 0 ]
-	[[ $output == *"AI profile      : Home (by override)"* ]]
+	[[ $output == *"AI profile => [Home] (picked by override)"* ]]
 	[ -L "$HOME/two/skills/alpha" ]
 	FOUNDATION_AI_PROFILE=Nope run "${BASH:-bash}" "$cmd"
 	[ "$status" -eq 1 ]

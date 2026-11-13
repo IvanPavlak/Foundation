@@ -114,8 +114,8 @@ layout file in the set (and the set folder when it is missing, as on Windows).
 | `vscode-profiles.conf` | `VSCodeProfiles` | Deploy-VSCodeProfiles (Bootstrap's VSCodeProfiles step), Export-VSCodeProfile |
 | `browser-groups.conf` | `BrowserGroups` | Open-Browser, Invoke-Browser |
 | `ai-artifacts.conf` | `AiArtifacts` | Deploy-AiArtifacts (Bootstrap's AiArtifacts step), Update-AiArtifacts, List-AiArtifacts, Test-ConfigurationSchema |
-| `ai-harnesses.conf` | WinuX's `AiHarnesses` | Deploy-AiArtifacts, List-AiArtifacts, Test-AiProfile, Test-ConfigurationSchema |
-| `ai-profiles.conf` | `AiProfiles` | Deploy-AiArtifacts, Deploy-AiMcpServers, Deploy-AiMarketplaces, List-AiArtifacts, Update-AiArtifacts, Test-AiProfile, Initialize-AiProfile, Test-ConfigurationSchema |
+| `ai-harnesses.conf` | WinuX's `AiHarnesses` | Deploy-AiArtifacts, List-AiArtifacts, Test-AiProfile, Switch-AiProfile, Test-ConfigurationSchema; every command that picks the AI profile (for the folder of the switch file) |
+| `ai-profiles.conf` | `AiProfiles` | Deploy-AiArtifacts, Deploy-AiMcpServers, Deploy-AiMarketplaces, List-AiArtifacts, Update-AiArtifacts, Test-AiProfile, Initialize-AiProfile, Switch-AiProfile, Test-ConfigurationSchema |
 | `ai-marketplaces.conf` | `AiMarketplaces.Marketplaces`, `AiMarketplaces.PluginConfigs` (a `[plugin:NAME]` section for a plugin no marketplace lists) | Deploy-AiMarketplaces (Bootstrap's AiMarketplaces step) |
 | `ai-mcp-servers.conf` | `AiMcpServers.Deploy` (`deploy`), `AiMcpServers.Servers` (one section per server; `machine` for `Machine`) | Deploy-AiMcpServers (Bootstrap's AiMcpServers step), Test-AiProfile, Initialize-AiProfile |
 | `backups.conf` | `Backups.Retention` | Clear-OldBackups, every backup |
@@ -783,7 +783,9 @@ synonym of `policy autonomous`), `default-policy LEVEL` (default `branch`),
 `merge-without-checks PATTERN...` and `env NAME...`; the levels are `autonomous`, `branch`,
 `draft`, `readonly` and `blocked` ([Repository policies](ai.md#repository-policies)). A PATTERN is a shell glob on the `origin` remote
 normalised to `host/owner/name`. With no section, profiles are off and every AI command behaves as
-without the file. `FOUNDATION_AI_PROFILE` overrides the host and default lines for one shell. The
+without the file. `FOUNDATION_AI_PROFILE` overrides the host and default lines for one shell, and
+the profile Switch-AiProfile set (the root-owned `ai-profile.switch` next to the managed settings
+copy, not a `Unix/config` file) overrides them for the whole Mac until `Switch-AiProfile --reset`. The
 mechanism is on [AI on a Mac](ai.md#profiles); Test-ConfigurationSchema reports a `host`, `default`
 or `default-owner` line naming no profile, an unknown line kind, a malformed `plan` UUID, a
 `deploy`, `mcp` or `marketplaces` name that is no section of its file, and a `policy` or

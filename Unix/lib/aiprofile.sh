@@ -6,7 +6,8 @@
 #
 # A profile is a [section] of ai-profiles.conf; with no section, profiles are off and every AI
 # command behaves as it does without this file. The profile is picked once per command by
-# ai_profile_load: FOUNDATION_AI_PROFILE, then the last `host NAME PROFILE` line naming this host
+# ai_profile_load: FOUNDATION_AI_PROFILE, then the profile Switch-AiProfile set (the switch file,
+# ai_profile_switch_file), then the last `host NAME PROFILE` line naming this host
 # (foundation_hostname), then the last `default PROFILE` line. Every line may start with @TYPE.
 # Written to run under bash 3.2 too, like the rest of lib/ (read -a never expands a glob, so a
 # pattern such as github.com/my-org/* stays as written).
@@ -22,20 +23,61 @@ ai_profiles() {
 	conf_sections "$file"
 }
 
+# The switch file: ai-profile.switch in the folder of the first +managed-settings destination of
+# ai-harnesses.conf (/Library/Application Support/ClaudeCode in the base), next to the managed
+# settings copy. One line, the profile name; root-owned, so only Switch-AiProfile (through sudo)
+# changes the pick and every shell reads the same one. Fails when no harness has such a
+# destination. Usage: ai_profile_switch_file
+ai_profile_switch_file() {
+	local file section line rest hook managed
+	file=$(conf_path ai-harnesses.conf) || return 1
+	while IFS= read -r section; do
+		[ -n "$section" ] || continue
+		while IFS= read -r line; do
+			read -r _ _ _ rest <<<"$line"
+			managed=0
+			while [[ $rest == +* ]]; do
+				read -r hook rest <<<"$rest"
+				[ "$hook" != +managed-settings ] || managed=1
+			done
+			[ "$managed" -eq 1 ] && [ -n "$rest" ] || continue
+			printf '%s/ai-profile.switch' "$(dirname "$(foundation_expand_path "$rest")")"
+			return 0
+		done < <(conf_section "$file" "$section")
+	done < <(conf_sections "$file")
+	return 1
+}
+
+# The profile name the switch file holds (its first word); fails without a switch file or a name.
+# Usage: ai_profile_switched
+ai_profile_switched() {
+	local file name=''
+	file=$(ai_profile_switch_file) || return 1
+	[ -f "$file" ] && [ -r "$file" ] || return 1
+	IFS= read -r name <"$file" || [ -n "$name" ] || return 1
+	read -r name _ <<<"${name%$'\r'}"
+	[ -n "$name" ] || return 1
+	printf '%s' "$name"
+}
+
 # Picks this machine's profile. Sets AI_PROFILE (as its section spells it), AI_PROFILE_HOW
-# (override, hostname or default) and AI_PROFILE_ERROR. Returns 0 with a profile, 1 when profiles
-# are off (AI_PROFILE empty), 2 when the name picked is no profile or nothing picks one
-# (AI_PROFILE_ERROR says which; AI_PROFILE is then empty too). Call it directly, not in $(...), so
-# the variables reach the caller. Usage: ai_profile_load
+# (override, switched, hostname or default) and AI_PROFILE_ERROR. Returns 0 with a profile, 1 when
+# profiles are off (AI_PROFILE empty), 2 when the name picked is no profile or nothing picks one
+# (AI_PROFILE_ERROR says which; AI_PROFILE is then empty too). With AI_PROFILE_IGNORE_SWITCH set
+# the switch file is not read (Switch-AiProfile asks what a reset would pick). Call it directly,
+# not in $(...), so the variables reach the caller. Usage: ai_profile_load
 ai_profile_load() {
-	local file name='' how='' line key first second host section
+	local file name='' how='' line key first second host section picker
 	AI_PROFILE='' AI_PROFILE_HOW='' AI_PROFILE_ERROR=''
 	file=$(aiprof__conf) || return 1
 	[ -n "$(conf_sections "$file")" ] || return 1
 	if [ -n "${FOUNDATION_AI_PROFILE:-}" ]; then
 		name=$FOUNDATION_AI_PROFILE
 		how=override
+	elif [ -z "${AI_PROFILE_IGNORE_SWITCH:-}" ] && name=$(ai_profile_switched); then
+		how=switched
 	else
+		name=''
 		host=$(foundation_hostname)
 		local fallback=''
 		while IFS= read -r line; do
@@ -57,7 +99,9 @@ ai_profile_load() {
 		return 2
 	fi
 	if ! section=$(conf_section_name "$file" "$name"); then
-		AI_PROFILE_ERROR="the $how picks profile [$name], which is no section of ai-profiles.conf ($(conf_sections "$file" | paste -sd' ' -))"
+		picker="the $how"
+		[ "$how" != switched ] || picker="the switch file (Switch-AiProfile --reset removes it)"
+		AI_PROFILE_ERROR="$picker picks profile [$name], which is no section of ai-profiles.conf ($(conf_sections "$file" | paste -sd' ' -))"
 		AI_PROFILE_HOW=$how
 		return 2
 	fi
