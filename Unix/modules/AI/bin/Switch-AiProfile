@@ -125,6 +125,7 @@ if [ -n "$wanted" ]; then
 else
 	saved_override=${FOUNDATION_AI_PROFILE:-}
 	unset FOUNDATION_AI_PROFILE
+	# shellcheck disable=SC2034 # read by ai_profile_load (lib/aiprofile.sh)
 	AI_PROFILE_IGNORE_SWITCH=1
 	ai_profile_load
 	[ $? -ne 2 ] || log_warning "After the reset: $AI_PROFILE_ERROR"
