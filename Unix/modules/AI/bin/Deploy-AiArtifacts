@@ -288,6 +288,8 @@ managed_item() {
 # machine is a note; a real file where a link goes is skipped.
 deploy_repository_rows() {
 	local record repository link dir repo_dir folder exclude target line repositories
+	# The repositories whose heading is printed: once per repository, not once per row.
+	local -A announced=()
 	repositories=$(conf_path repositories.conf) || repositories=''
 	while IFS=$'\t' read -r record repository link dir; do
 		case $record in
@@ -308,7 +310,10 @@ deploy_repository_rows() {
 		fi
 		folder=$repo_dir/.claude/skills
 		target=$folder/$link
-		log_step "[repo:$repository] skills => $folder"
+		if [ -z "${announced[$repository]:-}" ]; then
+			log_step "[repo:$repository] skills => $folder"
+			announced[$repository]=1
+		fi
 		if [ -e "$target" ] && [ ! -L "$target" ]; then
 			log_step "SKIPPED $target (a real file or folder of the repository)"
 			failures=$((failures + 1))

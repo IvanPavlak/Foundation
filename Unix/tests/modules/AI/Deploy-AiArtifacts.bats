@@ -700,3 +700,19 @@ merge-without-checks github.com/me/mine" ]
 	[ "$status" -eq 0 ]
 	[ -L "$target/.claude/skills/design" ]
 }
+
+@test "the skills heading of a repository is printed once, however many of its rows there are" {
+	export FOUNDATION_AI_MANIFEST_CACHE=$BATS_TEST_TMPDIR/cache
+	cached_skill up skills skills/alpha alpha
+	cached_skill up skills skills/omega omega
+	target=$BATS_TEST_TMPDIR/MyRepo
+	git init -q "$target"
+	printf '[Private]\nMyRepo /me/MyRepo.git %s\n' "$target" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
+	manifest "alpha	skills	repo:MyRepo	https://github.com/up/skills	$SHA	skills/alpha	clone" \
+		"omega	skills	repo:MyRepo	https://github.com/up/skills	$SHA	skills/omega	clone"
+	run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	[ -L "$target/.claude/skills/alpha" ]
+	[ -L "$target/.claude/skills/omega" ]
+	[ "$(grep -cF "[repo:MyRepo] skills => $target/.claude/skills" <<<"$output")" -eq 1 ]
+}
