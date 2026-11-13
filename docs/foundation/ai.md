@@ -72,9 +72,20 @@ owns          github.com/my-org/*
 ```
 
 Every AI command picks the profile once: `FOUNDATION_AI_PROFILE` (an override for one shell), then
-the last `host NAME PROFILE` line naming this Mac's local hostname, then the last `default` line.
-A machine type cannot pick it: the type is a layout choice. The `@TYPE` forms keep working inside
-and outside the profiles.
+the profile `Switch-AiProfile` set on this Mac, then the last `host NAME PROFILE` line naming this
+Mac's local hostname, then the last `default` line. A machine type cannot pick it: the type is a
+layout choice. The `@TYPE` forms keep working inside and outside the profiles.
+
+`Switch-AiProfile PROFILE` moves a Mac to another profile in one call: it writes the name into the
+switch file, `ai-profile.switch` next to the managed settings copy (`/Library/Application
+Support/ClaudeCode` in the base), through sudo, then runs `Deploy-AiArtifacts --kind rules` and
+`Test-AiProfile`. `--full` also redeploys every artifact kind, the MCP servers and the
+marketplaces; `--reset` removes the switch file and redeploys the Mac's own profile; without
+arguments it reports the profile and how it was picked, then offers the profiles in a menu, by
+their section names (`Personal` and `Work` above are examples, any `[Section]` is a profile). The switch file is root-owned, like the
+Plan pin it moves, so a process without sudo, an agent included, cannot change which profile the
+Mac runs. After a switch restart every open Claude Code session and sign in to the Plan
+`Test-AiProfile` names.
 
 | Line | Effect |
 | ---- | ------ |

@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+# Switch-AiProfile - switches this Mac to another AI profile in one call: records the pick,
+# redeploys the rules and the managed settings, then runs Test-AiProfile.
+#
+# Usage: Switch-AiProfile [PROFILE] [--reset] [--full] [--dry-run]
+#
+# Unix counterpart of Switch-AiProfile (WinuX AI module). A Mac runs the profile its `host` line
+# of Unix/config/ai-profiles.conf names, else the `default` one. Switch-AiProfile PROFILE moves it
+# to another [Profile] section (named without regard to case) and keeps it there:
+#   1. it writes the profile name into the switch file, ai-profile.switch in the folder of the
+#      +managed-settings destination of ai-harnesses.conf (/Library/Application Support/ClaudeCode
+#      in the base), through sudo (root:wheel, 644). Every AI command reads it after
+#      FOUNDATION_AI_PROFILE and before the host and default lines, so every later command in
+#      every shell runs the switched profile; only sudo changes the pick;
+#   2. it runs Deploy-AiArtifacts --kind rules, which links the profile's rules item and rewrites
+#      the managed settings copy (the Plan pin, the ownership guard, the repository policy hook,
+#      ai-profile.conf);
+#   3. with --full it runs Deploy-AiArtifacts for every kind instead, then Deploy-AiMcpServers and
+#      Deploy-AiMarketplaces, so the profile's skills, MCP servers and marketplaces replace the
+#      previous profile's too;
+#   4. it runs Test-AiProfile, which names the Plan to sign in to when Claude Code is still signed
+#      in to the previous profile's.
+# --reset removes the switch file, so the Mac runs the profile of its host line (or the default)
+# again, and redeploys the same way. Without PROFILE and --reset it prints the profile this Mac
+# runs, how it was picked, the profiles and the switch file, then offers the profiles in a menu, by
+# their section names, plus Reset while a switch is in effect: a pick switches as PROFILE or
+# --reset would, Enter changes nothing, and without a terminal nothing is asked. Profile names are
+# free: any [Section] of ai-profiles.conf is a profile.
+# FOUNDATION_AI_PROFILE outranks the switch file: when it is set, the switch still deploys the
+# profile it was given and warns that this shell keeps running the variable's profile until it is
+# unset. --dry-run (the Windows -WhatIf) writes nothing and runs Deploy-AiArtifacts --check as the
+# profile the switch would pick. The Windows-style --name before PROFILE is accepted.
+# After a switch every open Claude Code session must restart: a session keeps the sign-in and the
+# managed settings it started with.
+# Exit code: 0 when the switch was recorded and every deploy succeeded (whatever Test-AiProfile
+# reports: a sign-in to the new Plan is the usual next step), 1 when a deploy failed, 2 when no
+# profile is configured.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config aiprofile
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+reset=0
+full=0
+dry=0
+wanted=''
+while [ $# -gt 0 ]; do
+	case $1 in
+		--reset) reset=1 ;;
+		--full) full=1 ;;
+		--dry-run | --check) dry=1 ;;
+		--name) ;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument: $1 (expected PROFILE, --reset, --full or --dry-run)" ;;
+		*)
+			[ -z "$wanted" ] || foundation_die "One profile at a time: [$wanted] and [$1]"
+			wanted=$1
+			;;
+	esac
+	shift
+done
+if [ -n "$wanted" ] && [ "$reset" -eq 1 ]; then
+	foundation_die "Give a profile or --reset, not both"
+fi
+
+log_title "Switch-AiProfile"
+profiles_file=$(conf_path ai-profiles.conf) || profiles_file=''
+if [ -z "$profiles_file" ] || [ -z "$(ai_profiles)" ]; then
+	log_warning "No AI profile is configured (ai-profiles.conf has no [Profile] section) - nothing to switch"
+	exit 2
+fi
+configured=$(ai_profiles | paste -sd, - | sed 's/,/, /g')
+
+ai_profile_load
+load_status=$?
+current=none
+[ "$load_status" -ne 0 ] || current="[$AI_PROFILE] (picked by $AI_PROFILE_HOW)"
+load_error=$AI_PROFILE_ERROR
+switch_file=$(ai_profile_switch_file) || switch_file=''
+
+# No argument: report, then offer the profiles in a menu.
+if [ -z "$wanted" ] && [ "$reset" -eq 0 ]; then
+	[ "$load_status" -ne 2 ] || log_warning "AI profile: $load_error"
+	log_step "Profile => $current"
+	log_step "Configured => [$configured]"
+	if [ -z "$switch_file" ]; then
+		log_step "Switch file => none (no harness of ai-harnesses.conf has a +managed-settings destination)"
+		exit 0
+	fi
+	options=()
+	while IFS= read -r name; do [ -z "$name" ] || options+=("$name"); done < <(ai_profiles)
+	offer_reset=0
+	if switched=$(ai_profile_switched); then
+		log_step "Switch file => [$switch_file] (set to [$switched])"
+		# Reset while a switch is in effect, unless a profile carries that name (--reset still resets).
+		conf_section_name "$profiles_file" Reset >/dev/null 2>&1 || offer_reset=1
+	else
+		log_step "Switch file => [$switch_file] (not set)"
+	fi
+	[ "$offer_reset" -eq 0 ] || options+=(Reset)
+	# Without a terminal nothing is asked: the report above is the whole answer.
+	foundation_has_terminal || exit 0
+	picked=$(foundation_resolve_selection "[Available AI Profiles]" "Enter the profile to switch to by number or name, or press [Enter] to change nothing" 1 0 "${options[@]}") || picked=''
+	[ -n "$picked" ] || exit 0
+	if [ "$offer_reset" -eq 1 ] && [ "$picked" = Reset ]; then reset=1; else wanted=$picked; fi
+fi
+
+[ -n "$switch_file" ] || foundation_die "No harness of ai-harnesses.conf has a +managed-settings destination - there is no root-owned folder to keep the switch in"
+
+# What this Mac runs once the switch file is written or removed.
+target=''
+after=''
+if [ -n "$wanted" ]; then
+	target=$(conf_section_name "$profiles_file" "$wanted") || foundation_die "[$wanted] is no profile of ai-profiles.conf ($configured)"
+	after=$target
+	log_step "Profile => $current to [$after]"
+else
+	saved_override=${FOUNDATION_AI_PROFILE:-}
+	unset FOUNDATION_AI_PROFILE
+	AI_PROFILE_IGNORE_SWITCH=1
+	ai_profile_load
+	[ $? -ne 2 ] || log_warning "After the reset: $AI_PROFILE_ERROR"
+	after=$AI_PROFILE
+	after_how=$AI_PROFILE_HOW
+	unset AI_PROFILE_IGNORE_SWITCH
+	[ -z "$saved_override" ] || export FOUNDATION_AI_PROFILE=$saved_override
+	if [ -n "$after" ]; then
+		log_step "Profile => $current to [$after] (picked by $after_how)"
+	else
+		log_step "Profile => $current to none"
+	fi
+fi
+
+if [ -n "${FOUNDATION_AI_PROFILE:-}" ]; then
+	log_warning "FOUNDATION_AI_PROFILE is set to [$FOUNDATION_AI_PROFILE] and outranks the switch: this shell keeps running that profile until you run: unset FOUNDATION_AI_PROFILE"
+fi
+
+# Runs a command of the AI module without the override, so it reads the switch file.
+# Usage: run_command NAME [ARGS...]
+run_command() {
+	local name=$1
+	shift
+	env -u FOUNDATION_AI_PROFILE "${BASH:-bash}" "$FOUNDATION_UNIX/modules/AI/bin/$name" "$@"
+}
+
+if [ "$dry" -eq 1 ]; then
+	if [ "$reset" -eq 1 ]; then
+		log_step "Would remove the switch file => [$switch_file]"
+	else
+		log_step "Would write the switch file => [$switch_file] (set to [$target])"
+	fi
+	if [ -z "$after" ]; then
+		log_step "No AI profile would be active - the deploy preview is skipped"
+		exit 0
+	fi
+	# The preview deploys as the profile the switch would pick.
+	if [ "$full" -eq 1 ]; then
+		FOUNDATION_AI_PROFILE=$after "${BASH:-bash}" "$FOUNDATION_UNIX/modules/AI/bin/Deploy-AiArtifacts" --check
+		log_step "Would also run => [Deploy-AiMcpServers, Deploy-AiMarketplaces]"
+	else
+		FOUNDATION_AI_PROFILE=$after "${BASH:-bash}" "$FOUNDATION_UNIX/modules/AI/bin/Deploy-AiArtifacts" --kind rules --check
+	fi
+	exit 0
+fi
+
+# The switch file first: when sudo is refused nothing has changed.
+command -v sudo >/dev/null 2>&1 || foundation_die "sudo is unavailable - the switch file is root-owned ($switch_file); nothing was changed"
+if [ "$reset" -eq 1 ]; then
+	if [ -e "$switch_file" ] || [ -L "$switch_file" ]; then
+		sudo rm -f "$switch_file" || foundation_die "Could not remove $switch_file - nothing was changed"
+	fi
+	log_success "Removed the switch file => [$switch_file]"
+else
+	scratch=$(mktemp) || foundation_die "Could not create a temporary file - nothing was changed"
+	printf '%s\n' "$target" >"$scratch"
+	# Readable before it is copied: the copy takes this mode, so the pick is never root-only.
+	chmod 644 "$scratch"
+	if ! sudo mkdir -p "$(dirname "$switch_file")" ||
+		! sudo cp "$scratch" "$switch_file" ||
+		! sudo chown root:wheel "$switch_file" ||
+		! sudo chmod 644 "$switch_file"; then
+		rm -f "$scratch"
+		foundation_die "Could not write $switch_file - run Switch-AiProfile again"
+	fi
+	rm -f "$scratch"
+	log_success "Wrote the switch file => [$switch_file] (set to [$target])"
+fi
+
+failed=0
+if [ "$full" -eq 1 ]; then
+	run_command Deploy-AiArtifacts || failed=1
+	run_command Deploy-AiMcpServers || failed=1
+	run_command Deploy-AiMarketplaces || failed=1
+else
+	run_command Deploy-AiArtifacts --kind rules || failed=1
+fi
+
+run_command Test-AiProfile
+
+log_warning "Restart every open Claude Code session - a session keeps the sign-in and the managed settings it started with!"
+if [ "$full" -eq 0 ]; then
+	if [ -n "$target" ]; then again="$target --full"; else again="--reset --full"; fi
+	log_step "The skills, MCP servers and marketplaces are still the previous profile's - Switch-AiProfile $again brings them over"
+fi
+if [ "$failed" -ne 0 ]; then
+	log_error "Switched to ${after:-no profile}, but a deploy failed - fix what it reports and run Switch-AiProfile again!"
+	exit 1
+fi
+log_success "This Mac now runs AI profile ${after:-none}!"

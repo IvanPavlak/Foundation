@@ -92,15 +92,15 @@ failures=0
 linked=0
 
 log_title "Deploy-AiArtifacts"
-log_step "Repository root : $DOTFILES_ROOT"
-log_step "Artifacts root  : $root"
-[ -z "$AI_PROFILE" ] || log_step "AI profile      : $AI_PROFILE (by $AI_PROFILE_HOW)"
+log_step "Repository root => [$DOTFILES_ROOT]"
+log_step "Artifacts root => [$root]"
+[ -z "$AI_PROFILE" ] || log_step "AI profile => [$AI_PROFILE] (picked by $AI_PROFILE_HOW)"
 
 if [ -z "$(ai_deployed_harnesses)" ]; then
 	log_warning "No harness to deploy into - add a deploy line to ai-artifacts.conf (see ai-harnesses.conf for the catalogue)!"
 	exit 0
 fi
-log_step "Harnesses       : $(ai_deployed_harnesses | paste -sd' ' -)"
+log_step "Harnesses => [$(ai_deployed_harnesses | paste -sd, - | sed 's/,/, /g')]"
 
 # Runs COMMAND through sudo when ELEVATE is set, else as is. Usage: as_owner ELEVATE COMMAND...
 as_owner() {

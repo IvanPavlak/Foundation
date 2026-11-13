@@ -16,15 +16,15 @@ Checks that this Mac runs the AI profile it should, that Claude Code is signed i
 | [`ai-profiles.conf`](../../configuration.md#ai-profilesconf) | `deploy HARNESS...`, `mcp NAME...`, `unattended on\|off` | the `deploy` line of `ai-artifacts.conf`, every server, off | Where the managed settings are looked for, which OAuth servers are listed, what is printed for unattended runs |
 | [`ai-profiles.conf`](../../configuration.md#ai-profilesconf) | `policy LEVEL PATTERN...`, `autonomous PATTERN...`, `default-policy LEVEL`, `merge-without-checks PATTERN...` | `branch` for every repository, no merge without checks | The repository policy listed (never a mismatch); see [Repository policies](../../ai.md#repository-policies) |
 | [`ai-artifacts.conf`](../../configuration.md#ai-artifactsconf-and-ai-harnessesconf) | `deploy HARNESS...` | none | The harnesses whose `+managed-settings` destination is checked, without a profile `deploy` line |
-| [`ai-harnesses.conf`](../../configuration.md#ai-artifactsconf-and-ai-harnessesconf) | `rules file managed-settings.json +managed-settings PATH` | `/Library/Application Support/ClaudeCode/managed-settings.json` (`claude-code`) | The managed settings file whose `forceLoginOrgUUID` is compared |
+| [`ai-harnesses.conf`](../../configuration.md#ai-artifactsconf-and-ai-harnessesconf) | `rules file managed-settings.json +managed-settings PATH` | `/Library/Application Support/ClaudeCode/managed-settings.json` (`claude-code`) | The managed settings file whose `forceLoginOrgUUID` is compared; `ai-profile.switch` in its folder is the profile [Switch-AiProfile](Switch-AiProfile.md) set |
 | [`ai-mcp-servers.conf`](../../configuration.md#files) | `[Server]` with a `url` line | none | A remote server without `bearer-token-env` or an `Authorization` header is listed as an OAuth server |
 
-`FOUNDATION_AI_PROFILE` overrides the host and default lines. `~/.claude.json` (`$CLAUDE_CONFIG_DIR/.claude.json` when set) is only read, for its `oauthAccount` block.
+`FOUNDATION_AI_PROFILE` overrides everything for one shell; then the profile `Switch-AiProfile` set wins over the host and default lines. `~/.claude.json` (`$CLAUDE_CONFIG_DIR/.claude.json` when set) is only read, for its `oauthAccount` block.
 
 ## Decisions
 
 1. Which profile should this Mac run?
-    - Options: a `host NAME PROFILE` line for this Mac, or the `default` line; `FOUNDATION_AI_PROFILE` for one shell.
+    - Options: a `host NAME PROFILE` line for this Mac, or the `default` line; `Switch-AiProfile PROFILE` to move the Mac to another one; `FOUNDATION_AI_PROFILE` for one shell.
     - Default: none; with no profile section the command exits 2.
     - More detail: [AI on a Mac](../../ai.md#profiles)
 2. Which Plan does each profile use?

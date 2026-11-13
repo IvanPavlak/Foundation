@@ -21,6 +21,7 @@ options their plugins need into `~/.claude/settings.json` and installs the plugi
 | [`ai-marketplaces.conf`](../../configuration.md#files) | `config PLUGIN CHILD VALUE` | none | Any other key of the plugin's entry |
 | [`ai-marketplaces.conf`](../../configuration.md#files) | `[plugin:NAME]` | none | Options (`option KEY VALUE`, `config CHILD VALUE`) of a plugin no marketplace installs, such as a vendored mod, under `pluginConfigs.<NAME>` |
 | [`ai-profiles.conf`](../../configuration.md#ai-profilesconf) | `marketplaces NAME...` of the machine's `[Profile]` | no line: every marketplace | With a profile: the marketplace sections it installs (a bare line: none); `[plugin:NAME]` sections are always written |
+| [`ai-harnesses.conf`](../../configuration.md#ai-artifactsconf-and-ai-harnessesconf) | `rules file managed-settings.json +managed-settings PATH` | `/Library/Application Support/ClaudeCode/managed-settings.json` (`claude-code`) | The folder whose `ai-profile.switch` is read: the profile [Switch-AiProfile](Switch-AiProfile.md) set wins over the host and default lines |
 
 ## Decisions
 

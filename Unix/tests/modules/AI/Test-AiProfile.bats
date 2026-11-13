@@ -36,11 +36,11 @@ signed_in() {
 @test "everything matching exits 0 and names the profile and how it was picked" {
 	run "${BASH:-bash}" "$cmd"
 	[ "$status" -eq 0 ]
-	[[ $output == *"Personal (picked by default)"* ]]
-	[[ $output == *"Logged-in Plan : My Org ($uuid)"* ]]
-	[[ $output == *"Unattended     : on"* ]]
-	[[ $output == *"Default policy : branch"* ]]
-	[[ $output != *"Policy         :"* ]] && [[ $output != *"No-CI merges"* ]]
+	[[ $output == *"Profile => [Personal] (picked by default)"* ]]
+	[[ $output == *"Logged-in Plan => [My Org $uuid]"* ]]
+	[[ $output == *"Unattended => [on]"* ]]
+	[[ $output == *"Default policy => [branch]"* ]]
+	[[ $output != *"Policy => ["* ]] && [[ $output != *"No-CI merges"* ]]
 }
 
 @test "the repository policy is listed in file order and never a mismatch" {
@@ -56,14 +56,14 @@ merge-without-checks github.com/me/a
 ' "$uuid" >"$FOUNDATION_CONFIG_DIR/ai-profiles.conf"
 	run "${BASH:-bash}" "$cmd"
 	[ "$status" -eq 0 ]
-	[[ $output == *"Default policy : readonly"* ]]
+	[[ $output == *"Default policy => [readonly]"* ]]
 	[[ $output == *"default-policy is not a level [nolevel] - readonly is used"* ]]
 	[[ $output == *"unknown level [nolevel]"* ]]
 	[[ $output != *"github.com/me/z"* ]]
-	[ "$(printf '%s\n' "$output" | sed -n 's/.*Policy         : //p' | tr -s ' ')" = "branch github.com/me/*
-branch github.com/x/y
-autonomous github.com/me/a" ]
-	[[ $output == *"No-CI merges   : github.com/me/a"* ]]
+	[ "$(printf '%s\n' "$output" | sed -n 's/.*Policy => //p')" = "[branch] for [github.com/me/*]
+[branch] for [github.com/x/y]
+[autonomous] for [github.com/me/a]" ]
+	[[ $output == *"No-CI merges => [github.com/me/a]"* ]]
 }
 
 @test "no profile configured exits 2" {
@@ -136,7 +136,7 @@ autonomous github.com/me/a" ]
 	printf 'mcp remote keyed\n' >>"$FOUNDATION_CONFIG_DIR/ai-profiles.conf"
 	run "${BASH:-bash}" "$cmd"
 	[ "$status" -eq 0 ]
-	[[ $output == *"OAuth MCP      : remote ("* ]]
+	[[ $output == *"OAuth MCP => [remote] ("* ]]
 }
 
 @test "a host line picks the profile; an unknown override is a mismatch" {
@@ -144,7 +144,7 @@ autonomous github.com/me/a" ]
 	printf 'host my-work-mac Work\ndefault Personal\n[Personal]\nplan Max %s\n[Work]\nplan Team %s\n' "$uuid" "$uuid" >"$FOUNDATION_CONFIG_DIR/ai-profiles.conf"
 	run "${BASH:-bash}" "$cmd"
 	[ "$status" -eq 0 ]
-	[[ $output == *"Work (picked by hostname)"* ]]
+	[[ $output == *"Profile => [Work] (picked by hostname)"* ]]
 	FOUNDATION_AI_PROFILE=Nope run "${BASH:-bash}" "$cmd"
 	[ "$status" -eq 1 ]
 }
