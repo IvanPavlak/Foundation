@@ -26,8 +26,12 @@ setup_foundation() {
 	export FOUNDATION_CONFIG_DIR=$FIXTURE_CONFIG
 	# Nor the machine's AeroSpace configuration: no file means AeroSpace's zero gaps.
 	export FOUNDATION_AEROSPACE_CONFIG=$BATS_TEST_TMPDIR/no-aerospace.toml
+	# The checkout under test is the root, never the one the shell that started bats exported.
+	unset DOTFILES_ROOT
 	# shellcheck source=../lib/foundation.sh
 	. "$UNIX_DIR/lib/foundation.sh"
+	# From here a test may export DOTFILES_ROOT to a fixture repository: the commands it runs keep it.
+	export FOUNDATION_KEEP_DOTFILES_ROOT=1
 	foundation_load config apps layout browser project state
 }
 

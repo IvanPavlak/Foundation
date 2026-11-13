@@ -28,6 +28,10 @@ themselves do (`contract.bats`, the contract below, and the suites that copy `$U
 fixture config in `Unix/tests/fixtures/config` (placeholder workspaces, projects, browser groups
 and layouts), `copy_fixture_config` gives a test a writable copy, and every assertion is about a
 fixture value or a behaviour - so editing your own workspaces or layouts never breaks a test.
+It also sets `DOTFILES_ROOT` to the checkout under test, never the clone the shell that started
+the run exported, and exports `FOUNDATION_KEEP_DOTFILES_ROOT=1`: only with it does `lib/foundation.sh`
+keep an inherited `DOTFILES_ROOT`, so a test that exports one points its commands at a fixture
+repository.
 Whether the committed `Unix/config` is consistent is what `Test-ConfigurationSchema --strict`
 checks.
 

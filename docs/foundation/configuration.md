@@ -52,7 +52,8 @@ To fill them in by interview, run the [FoundationConfigurator](foundation-config
   `onefetch-color` indices of `greeting.conf` - the last line of that name for this machine type
   wins, so an overlay line overrides the base line of the same name without `-LINE`; a menu lists
   each name once.
-- Paths may use `~` and `$VARIABLES`; `$DOTFILES_ROOT` is always set, and `$DEV` is the dev root
+- Paths may use `~` and `$VARIABLES`; `$DOTFILES_ROOT` is always set, to the clone the command
+  runs from (whatever `DOTFILES_ROOT` the shell exported), and `$DEV` is the dev root
   (the `{Dev}` of Windows): the `dev-root` line of `machines.conf` for this machine type, else
   the folder that holds this clone (`$DEV/MyRepo`), whatever `DEV` the environment holds.
 
