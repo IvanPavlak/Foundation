@@ -151,6 +151,23 @@ setup() {
 	calls 'cmd Display-SystemLanguageSettings' | grep -q .
 }
 
+@test "StartupTasks is on by default and runs Set-StartupTasks; a dry run passes --dry-run" {
+	conf
+	run "${BASH:-bash}" "$cmd" --list
+	[[ $output =~ StartupTasks\ +on\ +on ]]
+	{
+		all_off
+		echo "step StartupTasks on"
+	} >"$FOUNDATION_CONFIG_DIR/bootstrap.conf"
+	run "${BASH:-bash}" "$cmd"
+	[ "$status" -eq 0 ]
+	[ "$(calls cmd)" = "cmd Set-StartupTasks " ]
+	: >"$BATS_TEST_TMPDIR/tool.log"
+	run "${BASH:-bash}" "$cmd" --dry-run
+	[ "$status" -eq 0 ]
+	[ "$(calls cmd)" = "cmd Set-StartupTasks --dry-run" ]
+}
+
 @test "RepositoryUpdate updates the repository-scope groups of this machine type, every repository for All" {
 	printf '[Private]\nMine /me/mine.git /tmp/mine\n[Work]\nTheirs /them/theirs.git /tmp/theirs\n' >"$FOUNDATION_CONFIG_DIR/repositories.conf"
 	conf "repository-scope All" "@Laptop repository-scope private, Work"

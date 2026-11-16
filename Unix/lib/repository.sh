@@ -2,9 +2,9 @@
 # Updating one cloned repository without ever losing or misplacing local work - the Unix port of
 # the Windows Update-Repository, Restore-RepositoryStash, Resolve-RepositoryDefaultBranch,
 # Update-RepositoryDefaultBranch and Format-RepositoryUpdateResult (WinuX Git module). Used by
-# Update-Repositories, Initialize-Repository and Invoke-StartupRepositoryUpdate; repo_scope_groups
-# also by Bootstrap. repo_entry, repo_resolve_url and repo_url_shallow read the repository lines of
-# repositories.conf (the end of this file).
+# Update-Repositories and Initialize-Repository; repo_scope_groups also by Bootstrap. repo_entry,
+# repo_resolve_url and repo_url_shallow read the repository lines of repositories.conf (the end of
+# this file).
 #
 # repo_update NAME DIR [INCLUDE-DEFAULT 0|1] [QUIET 0|1] leaves its result in global variables:
 #
@@ -321,9 +321,8 @@ repo_format_result() {
 	return 0
 }
 
-# The repositories.conf groups a scope names (the startup-scope of repositories.conf, the
-# repository-scope of bootstrap.conf), one per line as written in FILE. Group names only, as on
-# Windows: when any NAME is no group (a repository's name included) it logs the unknown names with
+# The repositories.conf groups a scope names (the repository-scope of bootstrap.conf), one per
+# line as written in FILE. Group names only, as on Windows: when any NAME is no group (a repository's name included) it logs the unknown names with
 # the configured groups and fails without printing any, so the caller updates nothing instead of
 # half the scope; SETTING is named in that message unless it is empty (the --group of
 # Update-Repositories, worded as Resolve-RepositoryTargets). Needs lib/config.sh.

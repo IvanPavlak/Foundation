@@ -1,6 +1,6 @@
 # Workflow Module Configuration Guides
 
-Workspaces, projects, their terminals, Docker containers and EF Core migrations; see
+Workspaces, projects, their terminals, startup tasks, Docker containers and EF Core migrations; see
 [the module reference](../../modules/Workflow.md).
 
 ## Configurable Commands
@@ -11,6 +11,8 @@ Workspaces, projects, their terminals, Docker containers and EF Core migrations;
 | `Docker-Cleanup` | `docker.conf` | [Docker-Cleanup](Docker-Cleanup.md) |
 | `DockerWizard` | `docker.conf` | [DockerWizard](DockerWizard.md) |
 | `Get-WorkspaceBenchmark` | `workspaces.conf` | [Get-WorkspaceBenchmark](Get-WorkspaceBenchmark.md) |
+| `Invoke-StartupTask` | `startup.conf`, `machines.conf` | [Invoke-StartupTask](Invoke-StartupTask.md) |
+| `Invoke-StartupTasks` | `startup.conf`, `machines.conf` | [Invoke-StartupTasks](Invoke-StartupTasks.md) |
 | `Measure-WorkspaceOpen` | `workspaces.conf`, `workspace-templates.conf` | [Measure-WorkspaceOpen](Measure-WorkspaceOpen.md) |
 | `Open-DnD` | `dnd.conf` | [Open-DnD](Open-DnD.md) |
 | `Open-Project` | `projects.conf` | [Open-Project](Open-Project.md) |

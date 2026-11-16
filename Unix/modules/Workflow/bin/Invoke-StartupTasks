@@ -1,0 +1,197 @@
+#!/usr/bin/env bash
+# Invoke-StartupTasks - runs the configured startup tasks of one trigger: sign-in or a newly opened terminal.
+#
+# Usage: Invoke-StartupTasks --trigger SignIn|TerminalOpen [--name NAME]... [--dry-run]
+#
+# The runner the sign-in LaunchAgent (Set-StartupTasks) and the shell rc call. It reads the tasks of
+# Unix/config/startup.conf, takes the ones that have the trigger, in the order they are written,
+# and hands each to the runner of Invoke-StartupTask with the task's own lines. The file is read at
+# every run, so an edited task takes effect at the next trigger with nothing to register again.
+# SignIn: started by the LaunchAgent with no window. Each task runs in its own WezTerm tab (the
+# FoundationStartup window) or hidden process; the runner waits for a task before it starts the
+# next (up to its timeout), except a `parallel` one, which is started and collected at the end,
+# its timeout counted from its start. One task failing never stops the next.
+# TerminalOpen: started by the shell rc before the first prompt, and at the first prompt after a
+# new day starts in a shell left open (a once-per-day task). Every task runs inline in that shell,
+# whatever its window says; a condition is tested once, never waited for, and a task whose
+# condition is not met is skipped silently and is due again in a later shell. Nothing runs in a
+# shell that belongs to a startup task (FOUNDATION_STARTUP_TASK_SHELL).
+# A task that is not valid is reported at every run and never started. After a SignIn run in which
+# a task failed, was skipped or timed out, one terminal tab lists them, unless startup.conf says
+# `failure-report none`. Every line also goes to the session log. Each run records when the next
+# terminal-open task is due, so a shell starts without a process until then.
+# --name runs only the named tasks. --dry-run runs nothing and lists, per task, what would happen
+# now: WouldRun (with the conditions it would wait for), NotDue, OutOfScope, Disabled, or Failed
+# for a task that is not valid.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config daystart startup
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+usage="usage: Invoke-StartupTasks --trigger ${STARTUP_TRIGGERS// /|} [--name NAME]... [--dry-run]"
+trigger=''
+names=()
+dry=0
+while [ $# -gt 0 ]; do
+	case $1 in
+		--trigger)
+			[ -n "${2:-}" ] || foundation_die "--trigger needs a value - $usage"
+			case $(startup__norm "$2") in
+				unlock | wake) foundation_die "Trigger [$2] has no native trigger on macOS - $usage" ;;
+			esac
+			trigger=$(startup_canon "$2" $STARTUP_TRIGGERS) || foundation_die "Unknown trigger [$2] - $usage"
+			shift
+			;;
+		--name)
+			[ -n "${2:-}" ] || foundation_die "--name needs a value - $usage"
+			foundation_split_list names "$2"
+			shift
+			;;
+		--dry-run) dry=1 ;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument [$1] - $usage" ;;
+	esac
+	shift
+done
+[ -n "$trigger" ] || foundation_die "--trigger is required - $usage"
+
+inline=0
+[ "$trigger" = TerminalOpen ] && inline=1
+# A shell a startup task runs in is not a newly opened terminal.
+if [ "$inline" -eq 1 ] && [ -n "${FOUNDATION_STARTUP_TASK_SHELL:-}" ]; then
+	exit 0
+fi
+
+wanted() {
+	local item
+	[ ${#names[@]} -gt 0 ] || return 0
+	for item in "${names[@]}"; do foundation_ieq "$item" "$1" && return 0; done
+	return 1
+}
+
+results_name=()
+results_status=()
+results_reason=()
+waiting=()
+skipped=()
+dir=$(startup_state_dir)
+
+while IFS= read -r task; do
+	[ -n "$task" ] || continue
+	wanted "$task" || continue
+	startup_task_load "$task" || continue
+	if [ "$ST_VALID" != 1 ]; then
+		problem=$(printf '%s' "$ST_ERRORS" | paste -sd ';' - | sed 's/;/; /g')
+		# Reported in a terminal only where its trigger runs, or always when it has none.
+		if [ -z "$ST_TRIGGERS" ] || startup_has_trigger "$trigger"; then
+			[ "$inline" -eq 0 ] || [ "$dry" -eq 1 ] || log_error "Startup task [$ST_NAME] is not valid and never runs - $problem"
+			results_name+=("$ST_NAME")
+			results_status+=(Failed)
+			results_reason+=("Not valid: $problem")
+		fi
+		continue
+	fi
+	startup_has_trigger "$trigger" || continue
+
+	# A terminal-open run is inline, tests each condition once and never waits for a task.
+	# shellcheck disable=SC2034 # read by startup_run (lib/startup.sh)
+	{
+		ST_RUN_TRIGGER=$trigger
+		ST_FORCE=0
+		ST_DRY_RUN=$dry
+		ST_RESULT_FILE=''
+		ST_CHECK_SCOPE=1
+		if [ "$inline" -eq 1 ]; then
+			ST_RUN_WINDOW=Current
+			ST_NO_WAIT=1
+			ST_PARALLEL=0
+		else
+			ST_RUN_WINDOW=$ST_WINDOW
+			ST_NO_WAIT=0
+		fi
+	}
+	started=$(startup_now)
+	startup_run
+	if [ "$ST_STATUS" = Started ]; then
+		waiting+=("${#results_name[@]}|$ST_TIMEOUT|$started")
+	fi
+	[ "$inline" -eq 0 ] || [ "$ST_STATUS" != Skipped ] || skipped+=("$ST_NAME")
+	results_name+=("$ST_NAME")
+	results_status+=("$ST_STATUS")
+	results_reason+=("$ST_REASON")
+done < <(startup_task_names)
+
+# The tasks that were started and left running: collected now, each up to what is left of its
+# timeout, counted from when it started (0 stays "no limit").
+for entry in ${waiting[@]+"${waiting[@]}"}; do
+	IFS='|' read -r index timeout since <<<"$entry"
+	remaining=${timeout%%.*}
+	if [ "$remaining" -gt 0 ]; then
+		remaining=$((remaining - ($(startup_now) - since)))
+		[ "$remaining" -ge 1 ] || remaining=1
+	fi
+	name=${results_name[index]}
+	startup_wait_result "$dir/.startup-task-$name.result" "$remaining" "$dir/.startup-task-$name.stamp"
+	results_status[index]=$ST_STATUS
+	results_reason[index]=$ST_REASON
+done
+
+if [ "$dry" -eq 1 ]; then
+	log_title "Startup tasks ($trigger) - what would run now"
+	if [ ${#results_name[@]} -eq 0 ]; then
+		log_step "No startup task has the trigger $trigger"
+		exit 0
+	fi
+	for i in "${!results_name[@]}"; do
+		printf '  %-24s %-12s %s\n' "${results_name[i]}" "${results_status[i]}" "${results_reason[i]}"
+	done
+	exit 0
+fi
+
+# Inline runs print as they go (the command's own output, a failure). Runs in other shells are
+# only visible here, so each gets its line - in the session log, since the runner has no window.
+problems=()
+if [ "$inline" -eq 0 ]; then
+	for i in ${results_name[@]+"${!results_name[@]}"}; do
+		name=${results_name[i]}
+		status=${results_status[i]}
+		reason=${results_reason[i]}
+		startup_status_ok "$status" || problems+=("[$name] $status - $reason")
+		case $status in
+			Succeeded | Ended) log_success "Startup task [$name] finished ($trigger)" ;;
+			Failed) log_error "Startup task [$name] failed ($trigger) - $reason" ;;
+			TimedOut) log_error "Startup task [$name] timed out ($trigger) - $reason" ;;
+			Skipped) log_warning "Startup task [$name] skipped ($trigger) - $reason" ;;
+			*) log_debug "[Invoke-StartupTasks] [$name] $status ($trigger)${reason:+ - $reason}" ;;
+		esac
+	done
+fi
+
+startup_write_gate ${skipped[@]+"${skipped[@]}"}
+
+if [ ${#problems[@]} -gt 0 ] && ! foundation_ieq "$(startup_setting failure-report tab)" none; then
+	report=$dir/.startup-report-$trigger.txt
+	{
+		printf 'Startup tasks (%s, %s) - %s did not finish:\n\n' "$trigger" "$(date '+%Y-%m-%d %H:%M')" "${#problems[@]}"
+		printf '  %s\n' "${problems[@]}"
+		printf '\nSession log: %s\n' "${FOUNDATION_LOG_FILE:-$dir}"
+	} >"$report"
+	foundation_load drivers/wezterm terminal
+	ST_NAME=StartupReport
+	target=$(term_named_window "$STARTUP_WINDOW") || target=new
+	pane=$(printf '%s\t%s\t%s\n' 'Startup report' "$HOME" "cat $(printf '%q' "$report")" | term_open_tabs "$target" 0) ||
+		log_error "Could not show the startup task report => $report"
+	if [ "$target" = new ] && [ -n "${pane:-}" ]; then
+		window=$(wt_pane_window "${pane%%$'\n'*}")
+		[ -z "$window" ] || term_remember_window "$STARTUP_WINDOW" "$window" || true
+	fi
+fi
+exit 0

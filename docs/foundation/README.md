@@ -200,7 +200,7 @@ runs `brew shellenv` before). Then, interactive shells only, these stages in ord
 | Plugins | zsh-syntax-highlighting when installed (the prediction plugins zsh-autosuggestions and zsh-autocomplete are not loaded until the line editing is ported) |
 | Icons | `ls`, `ll`, `la` through `eza --icons` when eza is installed (the Terminal-Icons analog), in the `list-color` colours of `theme.conf` (`EZA_COLORS`) |
 | Greeting | Show-TerminalGreeting: clear, the fastfetch panel, onefetch inside a repository (`greeting.conf`) |
-| RepositoryUpdate | Invoke-StartupRepositoryUpdate when it is due (off unless `repositories.conf` says `startup on`) |
+| StartupTasks | The startup tasks of `startup.conf` with the TerminalOpen trigger ([Invoke-StartupTasks](modules/Workflow.md#invoke-startuptasks) `--trigger TerminalOpen`), when one is due. A gate file in the log folder records when the next one is due, so a shell starts without a process until then; a shell left open into the next day runs a once-per-day task at its first prompt. Not in tabs a workspace open spawns, and not in the shell a startup task runs in. Nothing without a task (the base ships none) |
 
 Between Plugins and Icons the modules' shell functions load (each `functions.sh`, e.g.
 Reload-Profile), and `~/.shellrc.local` is sourced right before the Greeting: this machine's own
@@ -208,7 +208,7 @@ exports and aliases, never committed. `FOUNDATION_STARTUP_SKIP` leaves stages ou
 (names separated by commas or spaces, or `All`):
 
 ```bash
-FOUNDATION_STARTUP_SKIP=Greeting,RepositoryUpdate zsh
+FOUNDATION_STARTUP_SKIP=Greeting,StartupTasks zsh
 ```
 
 [Measure-ShellStartup](modules/System.md#measure-shellstartup) times each stage.

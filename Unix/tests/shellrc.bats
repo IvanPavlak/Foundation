@@ -3,8 +3,8 @@
 # a source sets up (mise's shims folder once, only when it exists), and the completion setup -
 # Docker's completions on fpath before the completion system starts, no second compinit in zshrc,
 # and the line-editing settings of shell.conf (in zsh nothing without a line: no key, no history
-# option); the startup stages (the skip list, the trace), the
-# Windows aliases, the Greeting stage and the typed fastfetch and onefetch.
+# option); the startup stages (the skip list, the trace), the StartupTasks stage (its gate and
+# prompt hook), the Windows aliases, the Greeting stage and the typed fastfetch and onefetch.
 # A non-interactive source stops before the interactive part, so nothing but PATH work runs.
 
 load helpers
@@ -60,7 +60,7 @@ rc_path() {
 # runs SCRIPT. Usage: rc_interactive SCRIPT
 rc_interactive() {
 	env -i HOME="$HOME" PATH=/usr/bin:/bin TERM=dumb DOTFILES_ROOT="$(dirname "$UNIX_DIR")" FOUNDATION_TTY=/dev/null \
-		FOUNDATION_STARTUP_SKIP=LineEditing,Prompt,Plugins,Icons,Greeting,RepositoryUpdate \
+		FOUNDATION_STARTUP_SKIP=LineEditing,Prompt,Plugins,Icons,Greeting,StartupTasks \
 		"${BASH:-bash}" -i -c ". \"\$1\" >/dev/null 2>&1; $1" _ "$rc" </dev/null 2>/dev/null
 }
 
@@ -94,7 +94,7 @@ rc_interactive() {
 	# in a real shell (Homebrew's).
 	run env -i HOME="$HOME" PATH="$(dirname "$BASH"):/usr/bin:/bin" TERM=dumb DOTFILES_ROOT="$(dirname "$UNIX_DIR")" FOUNDATION_TTY=/dev/null \
 		FOUNDATION_CONFIG_DIR="$cfg" FOUNDATION_MACHINE_TYPE=Work \
-		FOUNDATION_STARTUP_SKIP=Aliases,Prompt,Plugins,Icons,Greeting,RepositoryUpdate \
+		FOUNDATION_STARTUP_SKIP=Aliases,Prompt,Plugins,Icons,Greeting,StartupTasks \
 		"${BASH:-bash}" -i -c '. "$1" >/dev/null 2>&1; echo "$HISTSIZE $HISTFILESIZE $HISTFILE"; set -o | grep "^vi "' _ "$rc" </dev/null
 	[[ $output == *"123 123 $HOME/my_history"* ]]
 	[[ $output == *"vi"*"on"* ]]
@@ -106,7 +106,7 @@ zsh_line_editing() {
 	: >"$HOME/.zshrc"
 	env -i HOME="$HOME" PATH="$(dirname "$BASH"):/usr/bin:/bin" TERM=dumb DOTFILES_ROOT="$(dirname "$UNIX_DIR")" FOUNDATION_TTY=/dev/null \
 		FOUNDATION_CONFIG_DIR="$cfg" FOUNDATION_MACHINE_TYPE=Work \
-		FOUNDATION_STARTUP_SKIP=Aliases,Prompt,Plugins,Icons,Greeting,RepositoryUpdate \
+		FOUNDATION_STARTUP_SKIP=Aliases,Prompt,Plugins,Icons,Greeting,StartupTasks \
 		"$(command -v zsh)" -i -c '. "$1" >/dev/null 2>&1; bindkey "^[[A"; bindkey "^[[H"; bindkey "^@"; bindkey "^I"
 			[[ -o HIST_FIND_NO_DUPS ]] && echo nodups; [[ -o INC_APPEND_HISTORY ]] && echo incappend; [[ -o HIST_IGNORE_DUPS ]] && echo ignoredups
 			[[ -o AUTO_LIST ]] || echo noautolist; zstyle -L ":completion:*" matcher-list; zmodload | grep -x zsh/complist
@@ -163,7 +163,7 @@ zsh_line_editing() {
 @test "every apps.conf token without a command of its own becomes an Open-<TOKEN> alias" {
 	run env -i HOME="$HOME" PATH="$(dirname "$BASH"):/usr/bin:/bin" TERM=dumb DOTFILES_ROOT="$(dirname "$UNIX_DIR")" FOUNDATION_TTY=/dev/null \
 		FOUNDATION_CONFIG_DIR="$FIXTURE_CONFIG" FOUNDATION_MACHINE_TYPE=Work \
-		FOUNDATION_STARTUP_SKIP=Prompt,Plugins,Icons,Greeting,RepositoryUpdate \
+		FOUNDATION_STARTUP_SKIP=Prompt,Plugins,Icons,Greeting,StartupTasks \
 		"${BASH:-bash}" -i -c '. "$1" >/dev/null 2>&1; alias' _ "$rc" </dev/null
 	[[ $output == *"alias Open-Slack='Open-Application Slack'"* ]]
 	[[ $output == *"alias Open-Steam='Open-Application Steam'"* ]]
@@ -176,66 +176,51 @@ zsh_line_editing() {
 	run -127 rc_interactive "_foundation_command_not_found Open-NoSuchAppAnywhere"
 }
 
-# The repository-update prompt hook (the RepositoryUpdate stage): SHELL -i sources the rc with
-# only that stage left in, the config and log folders under the test folder, and a stand-in
-# Invoke-StartupRepositoryUpdate shell function (it shadows the command) that logs `ran` and
-# records the next run an hour away, as the command does; then runs SCRIPT.
-# Usage: rc_hook SHELL SCRIPT   (REPOSITORIES: the repositories.conf lines; SKIP_PANEL=1: a tab a
-# workspace open spawns, which skips the run at start)
+# The startup-tasks stage (StartupTasks): SHELL -i sources the rc with only that stage left in, the
+# config and log folders under the test folder (a startup.conf from 2000 in the config folder) and a
+# stand-in Invoke-StartupTasks shell function (it shadows the command) that logs `ran ARGS` and
+# records the gate as a run does: the next terminal-open task an hour away, no day boundary (with
+# NO_GATE=1 it records nothing, as a run that failed); then runs SCRIPT.
+# Usage: rc_hook SHELL SCRIPT   (SKIP_PANEL=1: a tab a workspace open spawns, which skips the run at
+# start; TASK_SHELL=1: a shell a startup task runs in)
 rc_hook() {
 	local cfg=$BATS_TEST_TMPDIR/config logs=$BATS_TEST_TMPDIR/logs
 	mkdir -p "$cfg" "$logs"
-	printf '%s\n' "${REPOSITORIES:-startup on}" >"$cfg/repositories.conf"
+	if [ ! -e "$cfg/startup.conf" ]; then
+		printf '[Task]\ncommand true\ntrigger TerminalOpen\n' >"$cfg/startup.conf"
+		touch -t 200001010000 "$cfg/startup.conf"
+	fi
 	env -i HOME="$HOME" PATH="$(dirname "$BASH"):/usr/bin:/bin" TERM=dumb DOTFILES_ROOT="$(dirname "$UNIX_DIR")" FOUNDATION_TTY=/dev/null \
-		FOUNDATION_CONFIG_DIR="$cfg" FOUNDATION_LOG_DIR="$logs" FOUNDATION_MACHINE_TYPE=Work \
+		FOUNDATION_CONFIG_DIR="$cfg" FOUNDATION_LOG_DIR="${LOG_DIR_ENV-$logs}" FOUNDATION_MACHINE_TYPE=Work RAN_LOG="$logs/ran.log" GATE_FILE="$logs/.startup-terminal-open" \
 		FOUNDATION_STARTUP_SKIP=LineEditing,Aliases,Prompt,Plugins,Icons,Greeting ${SKIP_PANEL:+FOUNDATION_SKIP_STARTUP_PANEL=1} \
-		"$1" -i -c 'Invoke-StartupRepositoryUpdate() { echo ran >>"$FOUNDATION_LOG_DIR/ran.log"; echo "$(($(date +%s) + 3600)) daily" >"$FOUNDATION_LOG_DIR/.next-repository-update"; }
+		${TASK_SHELL:+FOUNDATION_STARTUP_TASK_SHELL=1} ${NO_GATE:+NO_GATE=1} \
+		"$1" -i -c 'Invoke-StartupTasks() { echo "ran $*" >>"$RAN_LOG"; [ -n "${NO_GATE:-}" ] || echo "$(($(date +%s) + 3600)) 0" >"$GATE_FILE"; }
 . "$1" >/dev/null 2>&1
 '"$2" _ "$rc" </dev/null 2>/dev/null
 }
-# Records the next run as EPOCH SCHEDULE, as Invoke-StartupRepositoryUpdate does. Usage: next_run EPOCH SCHEDULE
-next_run() {
+# Writes the gate as a run of the tasks does: line 1 `NEXT DAILY`, then one stamp path per line.
+# Usage: gate NEXT DAILY [STAMP...]
+gate() {
+	local next=$1 daily=$2
+	shift 2
 	mkdir -p "$BATS_TEST_TMPDIR/logs"
-	echo "$1 $2" >"$BATS_TEST_TMPDIR/logs/.next-repository-update"
+	{
+		echo "$next $daily"
+		[ $# -eq 0 ] || printf '%s\n' "$@"
+	} >"$BATS_TEST_TMPDIR/logs/.startup-terminal-open"
 }
 # How many times the stand-in ran.
 runs() {
 	if [ -f "$BATS_TEST_TMPDIR/logs/ran.log" ]; then wc -l <"$BATS_TEST_TMPDIR/logs/ran.log" | tr -d ' '; else echo 0; fi
 }
+# An hour from now.
+later() { echo $(($(date +%s) + 3600)); }
 
 @test "bash: the hook is registered once after a second source and keeps the last exit status" {
-	next_run $(($(date +%s) + 3600)) daily
-	run rc_hook "${BASH:-bash}" '. "$1" >/dev/null 2>&1; printf "%s\n" "${PROMPT_COMMAND[*]}"; false; _foundation_repository_update_prompt; echo "status=$?"'
-	[ "$(grep -o _foundation_repository_update_prompt <<<"$output" | wc -l | tr -d ' ')" -eq 1 ]
+	gate "$(later)" 0
+	run rc_hook "${BASH:-bash}" '. "$1" >/dev/null 2>&1; printf "%s\n" "${PROMPT_COMMAND[*]}"; false; _foundation_startup_prompt; echo "status=$?"'
+	[ "$(grep -o _foundation_startup_prompt <<<"$output" | wc -l | tr -d ' ')" -eq 1 ]
 	[[ $output == *"status=1"* ]]
-	[ "$(runs)" -eq 0 ]
-}
-
-@test "a new shell runs the update once it is due; one before that moment runs nothing" {
-	next_run 1 daily
-	run rc_hook "${BASH:-bash}" ':'
-	[ "$(runs)" -eq 1 ]
-	run rc_hook "${BASH:-bash}" ':'
-	[ "$(runs)" -eq 1 ]
-}
-
-@test "daily: the prompt runs the update only once the recorded due time has passed" {
-	next_run 1 daily
-	SKIP_PANEL=1 run rc_hook "${BASH:-bash}" '[ -e "$FOUNDATION_LOG_DIR/ran.log" ] || echo "none at start"; _foundation_repository_update_prompt; _foundation_repository_update_prompt'
-	[[ $output == *"none at start"* ]]
-	[ "$(runs)" -eq 1 ]
-	next_run $(($(date +%s) + 3600)) daily
-	SKIP_PANEL=1 run rc_hook "${BASH:-bash}" '_foundation_repository_update_prompt'
-	[ "$(runs)" -eq 1 ]
-}
-
-@test "the interval schedule never runs from the prompt, and without startup on nothing is registered" {
-	next_run 1 interval
-	SKIP_PANEL=1 run rc_hook "${BASH:-bash}" '_foundation_repository_update_prompt'
-	[ "$(runs)" -eq 0 ]
-	next_run 1 daily
-	REPOSITORIES='startup off' run rc_hook "${BASH:-bash}" 'printf "%s\n" "${PROMPT_COMMAND[*]}"'
-	[[ $output != *_foundation_repository_update_prompt* ]]
 	[ "$(runs)" -eq 0 ]
 }
 
@@ -243,11 +228,105 @@ runs() {
 	command -v zsh >/dev/null 2>&1 || skip "zsh is not installed"
 	# An empty zshrc: no new-user setup prompt in a HOME without one.
 	: >"$HOME/.zshrc"
-	next_run $(($(date +%s) + 3600)) daily
-	run rc_hook "$(command -v zsh)" '. "$1" >/dev/null 2>&1; print -l -- $precmd_functions; false; _foundation_repository_update_prompt; echo "status=$?"'
-	[ "$(grep -cx _foundation_repository_update_prompt <<<"$output")" -eq 1 ]
+	gate "$(later)" 0
+	run rc_hook "$(command -v zsh)" '. "$1" >/dev/null 2>&1; print -l -- $precmd_functions; false; _foundation_startup_prompt; echo "status=$?"'
+	[ "$(grep -cx _foundation_startup_prompt <<<"$output")" -eq 1 ]
 	[[ $output == *"status=1"* ]]
 	[ "$(runs)" -eq 0 ]
+}
+
+@test "a new shell runs the terminal-open tasks once NEXT has passed; one before that moment runs nothing" {
+	gate 1 0
+	run rc_hook "${BASH:-bash}" ':'
+	[ "$(runs)" -eq 1 ]
+	grep -qx 'ran --trigger TerminalOpen' "$BATS_TEST_TMPDIR/logs/ran.log"
+	# The run recorded the next task an hour away: the next shell starts no run.
+	run rc_hook "${BASH:-bash}" ':'
+	[ "$(runs)" -eq 1 ]
+}
+
+@test "none never runs: no terminal-open task applies to this Mac" {
+	gate none 0
+	run rc_hook "${BASH:-bash}" ':'
+	run rc_hook "${BASH:-bash}" '_foundation_startup_prompt'
+	[ "$(runs)" -eq 0 ]
+}
+
+@test "without FOUNDATION_LOG_DIR the gate is read from the directory line of logging.conf" {
+	logs=$BATS_TEST_TMPDIR/logs
+	mkdir -p "$BATS_TEST_TMPDIR/config"
+	printf '[Task]\ncommand true\ntrigger TerminalOpen\n' >"$BATS_TEST_TMPDIR/config/startup.conf"
+	printf 'directory %s\n' "$logs" >"$BATS_TEST_TMPDIR/config/logging.conf"
+	touch -t 200001010000 "$BATS_TEST_TMPDIR/config/startup.conf" "$BATS_TEST_TMPDIR/config/logging.conf"
+	gate "$(later)" 0
+	LOG_DIR_ENV='' run rc_hook "${BASH:-bash}" ':'
+	[ "$(runs)" -eq 0 ]
+}
+
+@test "no gate, a listed stamp that is gone, or a config file newer than the gate makes the tasks due" {
+	logs=$BATS_TEST_TMPDIR/logs
+	cfg=$BATS_TEST_TMPDIR/config
+	# No gate yet.
+	run rc_hook "${BASH:-bash}" ':'
+	[ "$(runs)" -eq 1 ]
+	# A listed stamp that still exists keeps the gate; once it is gone the tasks are due.
+	mkdir -p "$logs" && date >"$logs/.startup-task-Task.stamp"
+	gate "$(later)" 0 "$logs/.startup-task-Task.stamp"
+	run rc_hook "${BASH:-bash}" ':'
+	[ "$(runs)" -eq 1 ]
+	rm "$logs/.startup-task-Task.stamp"
+	run rc_hook "${BASH:-bash}" ':'
+	[ "$(runs)" -eq 2 ]
+	# startup.conf newer than the gate.
+	gate "$(later)" 0
+	touch -t 200101010000 "$logs/.startup-terminal-open"
+	run rc_hook "${BASH:-bash}" ':'
+	[ "$(runs)" -eq 2 ]
+	touch "$cfg/startup.conf"
+	touch -t 200101010000 "$logs/.startup-terminal-open"
+	run rc_hook "${BASH:-bash}" ':'
+	[ "$(runs)" -eq 3 ]
+	# An overlay counts too: machines.local.conf newer than the gate.
+	touch -t 200001010000 "$cfg/startup.conf"
+	gate "$(later)" 0
+	: >"$cfg/machines.local.conf"
+	touch -t 203001010000 "$cfg/machines.local.conf"
+	run rc_hook "${BASH:-bash}" ':'
+	[ "$(runs)" -eq 4 ]
+}
+
+@test "a tab a workspace open spawns skips the run at start but still gets the prompt hook" {
+	gate 1 0
+	SKIP_PANEL=1 run rc_hook "${BASH:-bash}" 'printf "%s\n" "${PROMPT_COMMAND[*]}"'
+	[[ $output == *_foundation_startup_prompt* ]]
+	[ "$(runs)" -eq 0 ]
+}
+
+@test "a shell a startup task runs in runs no task at start and registers no hook" {
+	TASK_SHELL=1 run rc_hook "${BASH:-bash}" 'printf "%s\n" "${PROMPT_COMMAND[*]}"; _foundation_startup_prompt'
+	[[ $output != *_foundation_startup_prompt* ]]
+	[ "$(runs)" -eq 0 ]
+}
+
+@test "the prompt runs the tasks only once DAILY has passed, and once per day boundary" {
+	gate 1 1
+	SKIP_PANEL=1 run rc_hook "${BASH:-bash}" '[ -e "$FOUNDATION_LOG_DIR/ran.log" ] || echo "none at start"; _foundation_startup_prompt; _foundation_startup_prompt'
+	[[ $output == *"none at start"* ]]
+	[ "$(runs)" -eq 1 ]
+	# DAILY still ahead: nothing, even though NEXT has passed.
+	gate 1 "$(later)"
+	SKIP_PANEL=1 run rc_hook "${BASH:-bash}" '_foundation_startup_prompt'
+	[ "$(runs)" -eq 1 ]
+	# No once-per-day task (DAILY 0): the prompt never runs the tasks.
+	gate 1 0
+	SKIP_PANEL=1 run rc_hook "${BASH:-bash}" '_foundation_startup_prompt'
+	[ "$(runs)" -eq 1 ]
+}
+
+@test "a prompt run that could not record the gate moves the day boundary on: it is not repeated at every prompt" {
+	gate 1 1
+	SKIP_PANEL=1 NO_GATE=1 run rc_hook "${BASH:-bash}" '_foundation_startup_prompt; _foundation_startup_prompt; _foundation_startup_prompt'
+	[ "$(runs)" -eq 1 ]
 }
 
 # An interactive bash that sources the rc with FOUNDATION_STARTUP_SKIP=$SKIP (default: every
@@ -264,13 +343,13 @@ rc_local() {
 	mkdir -p "$BATS_TEST_TMPDIR/tools"
 	env -i HOME="$HOME" PATH="${SYSTEM_PATH:-$(dirname "$BASH"):/usr/bin:/bin}:$BATS_TEST_TMPDIR/tools" TERM=dumb DOTFILES_ROOT="$(dirname "$UNIX_DIR")" FOUNDATION_TTY=/dev/null \
 		FOUNDATION_CONFIG_DIR="$FIXTURE_CONFIG" FOUNDATION_MACHINE_TYPE=Work \
-		FOUNDATION_STARTUP_SKIP="${SKIP-LineEditing,Aliases,Prompt,Plugins,Icons,RepositoryUpdate}" "$@" \
+		FOUNDATION_STARTUP_SKIP="${SKIP-LineEditing,Aliases,Prompt,Plugins,Icons,StartupTasks}" "$@" \
 		"${BASH:-bash}" -i -c ". \"\$1\" 2>&1; $script" _ "$rc" </dev/null 2>&1
 }
 
 @test "FOUNDATION_STARTUP_SKIP is read in any case, split on commas, semicolons and spaces; the trace gets one line per stage run" {
 	trace=$BATS_TEST_TMPDIR/trace
-	SKIP='prompt; plugins icons,GREETING;repositoryupdate' run rc_local 'alias w' FOUNDATION_STARTUP_TRACE="$trace"
+	SKIP='prompt; plugins icons,GREETING;startuptasks' run rc_local 'alias w' FOUNDATION_STARTUP_TRACE="$trace"
 	[[ $output == *"alias w='Open-Workspace'"* ]]
 	[ "$(cut -f1 "$trace" | paste -sd' ' -)" = "LineEditing Aliases" ]
 	! cut -f2 "$trace" | grep -qv '^[0-9][0-9]*$' || false

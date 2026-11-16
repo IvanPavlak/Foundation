@@ -54,6 +54,8 @@
 #                      when any of them ran, Display-SystemLanguageSettings reads them back
 #   DockPins           Set-DockPins
 #   LoginItems         Set-LoginItems
+#   StartupTasks       Set-StartupTasks: the LaunchAgent behind the SignIn startup tasks of
+#                      startup.conf (registers nothing while no task has that trigger)
 #   FirefoxProfile     Deploy-FirefoxProfile (off)
 #   VSCodeProfiles     Deploy-VSCodeProfiles (off)
 #   AiArtifacts        Deploy-AiArtifacts: the skills, mods, rules, prompts and agents into the
@@ -136,6 +138,7 @@ CATALOG=(
 	"KeyboardLayouts on"
 	"DockPins on"
 	"LoginItems on"
+	"StartupTasks on"
 	"FirefoxProfile off"
 	"VSCodeProfiles off"
 	"AiArtifacts off sudo-optional"
@@ -732,6 +735,7 @@ run_step() {
 		KeyboardLayouts) step_language Set-KeyboardLayouts keyboard-set ;;
 		DockPins) run_command --dry-run Set-DockPins ;;
 		LoginItems) run_command --dry-run Set-LoginItems ;;
+		StartupTasks) run_command --dry-run Set-StartupTasks ;;
 		FirefoxProfile) run_command --check Deploy-FirefoxProfile ;;
 		VSCodeProfiles) run_command --check Deploy-VSCodeProfiles ;;
 		AiArtifacts) run_command --check Deploy-AiArtifacts ;;

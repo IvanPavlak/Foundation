@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# Set-StartupTasks - writes the LaunchAgent that runs the configured sign-in startup tasks, and removes it when no task needs it.
+#
+# Usage: Set-StartupTasks [--list] [--remove] [--dry-run]
+#
+# Startup tasks (Unix/config/startup.conf) are run by Invoke-StartupTasks; this command is what makes
+# macOS call it at sign-in. It keeps ONE LaunchAgent per trigger in use, not one per task:
+# ~/Library/LaunchAgents/foundation.StartupTasks-SignIn.plist runs `Invoke-StartupTasks --trigger
+# SignIn` with no window when you sign in, under Homebrew bash, its own output in the log folder
+# (.startup-agent-SignIn.log). The tasks are read when it fires, so editing startup.conf needs no
+# second run - only starting or stopping to use the SignIn trigger does. The TerminalOpen trigger
+# needs no agent: the shell rc runs it.
+# Only valid, enabled tasks in this Mac's scope count. The agent file is written, not loaded:
+# macOS loads it at the next sign-in, since loading it now would run the sign-in tasks at once (to
+# try it, `launchctl bootstrap gui/$UID` with the file, as the guide shows). A LaunchAgent of the
+# foundation.StartupTasks-* pattern that nothing needs any more is unloaded and removed, so a Mac
+# whose last sign-in task was deleted ends up with none. Running it again changes nothing.
+# A task started at sign-in cannot script other apps through Apple Events (macOS refuses the
+# Automation consent to an agent): a task that drives AeroSpace windows or a browser needs a tab.
+# --list shows each agent with its state (Registered, Outdated - the file differs from what would be
+# written, Missing or Stale) and whether launchd has it loaded, and changes nothing. --remove
+# removes every startup agent, whatever startup.conf says. --dry-run prints what would change.
+# Bootstrap runs it as the step StartupTasks.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config daystart startup
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+list_only=0
+remove_all=0
+dry=0
+for argument in "$@"; do
+	case $argument in
+		--list) list_only=1 ;;
+		--remove) remove_all=1 ;;
+		--dry-run) dry=1 ;;
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument [$argument] - usage: Set-StartupTasks [--list] [--remove] [--dry-run]" ;;
+	esac
+done
+
+command -v launchctl >/dev/null 2>&1 || foundation_die "launchctl was not found - startup agents need macOS (the TerminalOpen trigger works without one)"
+agents=$(startup_agents_dir)
+domain=gui/$(id -u)
+# Homebrew bash by its stable path, never the versioned Cellar folder the next upgrade removes.
+bash_path=$(command -v bash) || foundation_die "bash was not found on PATH"
+
+# The triggers that need an agent (SignIn: the only one with one on macOS), from the valid,
+# enabled tasks in this Mac's scope.
+needed=' '
+if [ "$remove_all" -eq 0 ]; then
+	while IFS= read -r task; do
+		[ -n "$task" ] || continue
+		startup_task_load "$task" || continue
+		[ "$ST_VALID" = 1 ] && [ "$ST_ENABLED" = 1 ] && [ "$ST_IN_SCOPE" = 1 ] || continue
+		startup_has_trigger SignIn && needed=' SignIn '
+	done < <(startup_task_names)
+fi
+
+loaded() {
+	launchctl print "$domain/$1" >/dev/null 2>&1
+}
+
+# The agent files of the foundation.StartupTasks-* pattern, one trigger per line.
+present() {
+	local file
+	for file in "$agents"/foundation.StartupTasks-*.plist; do
+		[ -e "$file" ] || continue
+		file=${file##*/foundation.StartupTasks-}
+		printf '%s\n' "${file%.plist}"
+	done
+}
+
+if [ "$list_only" -eq 1 ]; then
+	log_title "Startup agents"
+	rows=0
+	for trigger in $({
+		echo SignIn
+		present
+	} | awk '!seen[$0]++'); do
+		label=$(startup_agent_label "$trigger")
+		file=$agents/$label.plist
+		case $needed in
+			*" $trigger "*)
+				if [ ! -e "$file" ]; then
+					state=Missing
+				elif [ "$(cat "$file")" = "$(startup_agent_plist "$trigger" "$bash_path")" ]; then
+					state=Registered
+				else
+					state=Outdated
+				fi
+				;;
+			*)
+				[ -e "$file" ] || continue
+				state=Stale
+				;;
+		esac
+		load=no
+		loaded "$label" && load=yes
+		printf '  %-32s %-12s %-11s loaded: %s\n' "$label" "$trigger" "$state" "$load"
+		rows=$((rows + 1))
+	done
+	[ "$rows" -gt 0 ] || log_step "No startup task needs an agent and none is registered"
+	exit 0
+fi
+
+changes=0
+# The agent each needed trigger runs.
+for trigger in $needed; do
+	label=$(startup_agent_label "$trigger")
+	file=$agents/$label.plist
+	content=$(startup_agent_plist "$trigger" "$bash_path")
+	if [ -e "$file" ] && [ "$(cat "$file")" = "$content" ]; then
+		log_debug "[Set-StartupTasks] $label is up to date"
+		continue
+	fi
+	changes=$((changes + 1))
+	if [ "$dry" -eq 1 ]; then
+		printf '  write %s\n' "$file"
+		continue
+	fi
+	# The agent's output goes to the log folder; launchd does not create a missing one.
+	mkdir -p "$agents" "$(logfile_dir)" || foundation_die "Could not create $agents"
+	printf '%s\n' "$content" >"$file" || foundation_die "Could not write $file"
+	log_step "Wrote $label - it runs at the next sign-in"
+done
+
+# The agents nothing needs any more.
+for trigger in $(present); do
+	case $needed in *" $trigger "*) continue ;; esac
+	label=$(startup_agent_label "$trigger")
+	file=$agents/$label.plist
+	changes=$((changes + 1))
+	if [ "$dry" -eq 1 ]; then
+		printf '  remove %s\n' "$file"
+		continue
+	fi
+	loaded "$label" && launchctl bootout "$domain/$label" >/dev/null 2>&1
+	rm -f "$file" || foundation_die "Could not remove $file"
+	log_step "Removed $label"
+done
+
+if [ "$changes" -eq 0 ]; then
+	log_success "Startup agents are up to date!"
+elif [ "$dry" -eq 0 ]; then
+	log_success "Startup agents applied!"
+fi

@@ -100,7 +100,7 @@ esac
 # list, or All) leaves stages out, read as Test-StartupStage reads WINUX_STARTUP_SKIP: names in any
 # case, separated by commas, semicolons or spaces; FOUNDATION_STARTUP_TRACE names a file that gets
 # NAME<TAB>MS per stage that ran. Stages, in order: LineEditing, Aliases, Prompt, Plugins, Icons,
-# Greeting, RepositoryUpdate. What comes before them (PATH, the module functions, the local
+# Greeting, StartupTasks. What comes before them (PATH, the module functions, the local
 # overrides) always runs. Two more names are read by the greeting commands, not here:
 # FastfetchImageLogo (Invoke-Fastfetch keeps the text logo) and OnefetchStyle (Invoke-Onefetch
 # prints onefetch unstyled), so Measure-ShellStartup can time them apart from the panels.
@@ -110,7 +110,7 @@ _foundation_startup_skip=,
 if [ -n "${FOUNDATION_STARTUP_SKIP:-}" ]; then
 	_foundation_startup_skip=$(printf '%s\n' "$FOUNDATION_STARTUP_SKIP" | tr ',; \t' '\n\n\n\n' | awk '
 		BEGIN {
-			n = split("All LineEditing Aliases Prompt Plugins Icons Greeting RepositoryUpdate", k, " ")
+			n = split("All LineEditing Aliases Prompt Plugins Icons Greeting StartupTasks", k, " ")
 			for (i = 1; i <= n; i++) name[tolower(k[i])] = k[i]
 			printf ","
 		}
@@ -573,81 +573,123 @@ fi
 _foundation_stage_done
 
 # ---------------------------------------------------------------------------
-# Repository update - the RepositoryUpdate profile stage of Windows. Off unless repositories.conf
-# says `startup on`. Invoke-StartupRepositoryUpdate decides everything (schedule, machine type,
-# stamp, lock) and records when the next run is due in .next-repository-update (`EPOCH SCHEDULE`);
-# this shell only reads that file with a builtin, so a start or a prompt before that moment runs
-# no extra process. A new shell runs the command once it is due. With the daily schedule a shell
-# that stays open into the next day (a Mac woken from sleep) runs it at its first prompt after the
-# day starts, from a precmd / PROMPT_COMMAND hook that keeps the last command's exit status.
-# Skipped for one shell with FOUNDATION_STARTUP_SKIP=RepositoryUpdate (or All). The tabs a workspace
-# open spawns skip the run at start (another shell runs it, and their windows are still being
-# placed) but still get the prompt hook.
+# Startup tasks - the StartupTasks profile stage of Windows: the tasks of startup.conf with the
+# TerminalOpen trigger (Invoke-StartupTasks --trigger TerminalOpen). Every run of the tasks records
+# in .startup-terminal-open when the next one is due (`NEXT DAILY`, then the stamp files it read;
+# see startup_write_gate in Unix/lib/startup.sh), and this shell reads that file with builtins
+# only, so a start or a prompt before that moment runs no process. A new shell runs the tasks once
+# NEXT has passed, a stamp listed there is gone, startup.conf or machines.conf (or an overlay) is
+# newer than the gate, or there is no gate yet; `none` means no terminal-open task applies to
+# this Mac. A shell that stays open into the next day (a Mac woken from sleep) runs them at its
+# first prompt after DAILY, the day boundary of a once-per-day task, from a precmd /
+# PROMPT_COMMAND hook that keeps the last command's exit status. Skipped for one shell with
+# FOUNDATION_STARTUP_SKIP=StartupTasks (or All). The tabs a workspace open spawns skip the run at
+# start (another shell runs it, and their windows are still being placed) but still get the
+# prompt hook; a shell a startup task runs in (FOUNDATION_STARTUP_TASK_SHELL) runs neither.
 # ---------------------------------------------------------------------------
-# The gate reads repositories.conf where every command does: FOUNDATION_CONFIG_DIR when set.
-_foundation_repositories="${FOUNDATION_CONFIG_DIR:-$DOTFILES_ROOT/Unix/config}/repositories.conf"
-_foundation_repository_update_file="${FOUNDATION_LOG_DIR:-$DOTFILES_ROOT/Unix/logs}/.next-repository-update"
+# The gate reads the config where every command does: FOUNDATION_CONFIG_DIR when set.
+_foundation_startup_config="${FOUNDATION_CONFIG_DIR:-$DOTFILES_ROOT/Unix/config}"
+# The gate lives in the log folder (logfile_dir of Unix/lib/logfile.sh): FOUNDATION_LOG_DIR, else
+# the last `directory` line of logging.conf and its overlay (read with builtins; an @TYPE line is
+# not told apart), else Unix/logs.
+_foundation_startup_logs=${FOUNDATION_LOG_DIR:-}
+if [ -z "$_foundation_startup_logs" ]; then
+	for _foundation_startup_file in "$_foundation_startup_config/logging.conf" "$_foundation_startup_config/logging.local.conf"; do
+		[ -r "$_foundation_startup_file" ] || continue
+		while read -r _foundation_startup_key _foundation_startup_value; do
+			[ "$_foundation_startup_key" = directory ] && _foundation_startup_logs=$_foundation_startup_value
+		done <"$_foundation_startup_file"
+	done
+	case $_foundation_startup_logs in
+		'') _foundation_startup_logs=$DOTFILES_ROOT/Unix/logs ;;
+		'~') _foundation_startup_logs=$HOME ;;
+		\~/*) _foundation_startup_logs=$HOME/${_foundation_startup_logs#\~/} ;;
+		/*) ;;
+		*) _foundation_startup_logs=$DOTFILES_ROOT/$_foundation_startup_logs ;;
+	esac
+	unset _foundation_startup_file _foundation_startup_key _foundation_startup_value
+fi
+_foundation_startup_gate=$_foundation_startup_logs/.startup-terminal-open
+unset _foundation_startup_logs
 
-# Loads the next due time the command recorded; 0 (due now) when there is none yet.
-_foundation_repository_update_read() {
-	_foundation_repository_update_next=0
-	_foundation_repository_update_schedule=
-	[ -r "$_foundation_repository_update_file" ] &&
-		read -r _foundation_repository_update_next _foundation_repository_update_schedule <"$_foundation_repository_update_file"
-	case $_foundation_repository_update_next in '' | *[!0-9]*) _foundation_repository_update_next=0 ;; esac
+# Loads the gate: _foundation_startup_next (an epoch second, or none), _foundation_startup_daily
+# (0 when no once-per-day task applies) and _foundation_startup_stale (1 when the tasks must run
+# whatever the times say: no gate, a newer config file, a stamp that is gone).
+_foundation_startup_read() {
+	_foundation_startup_next=0
+	_foundation_startup_daily=0
+	_foundation_startup_stale=1
+	[ -r "$_foundation_startup_gate" ] || return 0
+	_foundation_startup_stale=0
+	for _foundation_startup_file in startup.conf startup.local.conf machines.conf machines.local.conf; do
+		[ "$_foundation_startup_config/$_foundation_startup_file" -nt "$_foundation_startup_gate" ] &&
+			_foundation_startup_stale=1
+	done
+	{
+		read -r _foundation_startup_next _foundation_startup_daily
+		while IFS= read -r _foundation_startup_file; do
+			[ -z "$_foundation_startup_file" ] || [ -e "$_foundation_startup_file" ] || _foundation_startup_stale=1
+		done
+	} <"$_foundation_startup_gate"
+	unset _foundation_startup_file
+	case $_foundation_startup_next in none) ;; '' | *[!0-9]*) _foundation_startup_next=0 ;; esac
+	case $_foundation_startup_daily in '' | *[!0-9]*) _foundation_startup_daily=0 ;; esac
 }
 
-# Is the next run due? zsh (zsh/datetime) and bash 5 know the time without a process.
-_foundation_repository_update_due() {
-	[ "${EPOCHSECONDS:-$(date +%s)}" -ge "$_foundation_repository_update_next" ]
+# Are the tasks due in a new shell? zsh (zsh/datetime) and bash 5 know the time without a process.
+_foundation_startup_due() {
+	[ "$_foundation_startup_stale" = 1 ] && return 0
+	[ "$_foundation_startup_next" != none ] && [ "${EPOCHSECONDS:-$(date +%s)}" -ge "$_foundation_startup_next" ]
 }
 
-_foundation_repository_update_run() {
-	command -v Invoke-StartupRepositoryUpdate >/dev/null 2>&1 && Invoke-StartupRepositoryUpdate
-	_foundation_repository_update_read
+_foundation_startup_run() {
+	command -v Invoke-StartupTasks >/dev/null 2>&1 && Invoke-StartupTasks --trigger TerminalOpen
+	_foundation_startup_read
 }
 
-# The prompt hook. Another shell may have run it already, so the file is read again first.
-_foundation_repository_update_prompt() {
-	_foundation_repository_update_status=$?
-	if [ "$_foundation_repository_update_schedule" = daily ] && _foundation_repository_update_due; then
-		_foundation_repository_update_read
-		_foundation_repository_update_due && _foundation_repository_update_run
+# The prompt hook. Another shell may have run the tasks already, so the gate is read again first;
+# the day boundary moves on even when the run could not record it, so a failing run is not
+# repeated at every prompt.
+_foundation_startup_prompt() {
+	_foundation_startup_status=$?
+	if [ -z "${FOUNDATION_STARTUP_TASK_SHELL:-}" ] && [ "$_foundation_startup_daily" != 0 ] &&
+		[ "${EPOCHSECONDS:-$(date +%s)}" -ge "$_foundation_startup_daily" ]; then
+		_foundation_startup_read
+		if [ "$_foundation_startup_daily" != 0 ] && [ "${EPOCHSECONDS:-$(date +%s)}" -ge "$_foundation_startup_daily" ]; then
+			_foundation_startup_run
+			[ "${EPOCHSECONDS:-$(date +%s)}" -lt "$_foundation_startup_daily" ] ||
+				_foundation_startup_daily=$((${EPOCHSECONDS:-$(date +%s)} + 86400))
+		fi
 	fi
-	return "$_foundation_repository_update_status"
+	return "$_foundation_startup_status"
 }
 
 case $_foundation_startup_skip in
-	*,RepositoryUpdate,* | *,All,*) ;;
+	*,StartupTasks,* | *,All,*) ;;
 	*)
-		_foundation_stage RepositoryUpdate
-		# A cheap gate before any process: any `startup on` line (an @TYPE one or one in the
-		# overlay included) registers the stage; Invoke-StartupRepositoryUpdate then reads the
-		# setting properly (overlay, @TYPE, the last line winning) and does nothing when it is off.
-		if [ -r "$_foundation_repositories" ] &&
-			cat "$_foundation_repositories" "${_foundation_repositories%.conf}.local.conf" 2>/dev/null |
-			grep -Eiq '^[[:space:]]*(@[^[:space:]]+[[:space:]]+)?startup[[:space:]]+(on|true|yes|1)[[:space:]]*$'; then
+		_foundation_stage StartupTasks
+		if [ -z "${FOUNDATION_STARTUP_TASK_SHELL:-}" ]; then
 			[ -n "${ZSH_VERSION:-}" ] && zmodload zsh/datetime 2>/dev/null
-			_foundation_repository_update_read
-			if [ -z "${FOUNDATION_SKIP_STARTUP_PANEL:-}" ] && _foundation_repository_update_due; then
-				_foundation_repository_update_run
+			_foundation_startup_read
+			if [ -z "${FOUNDATION_SKIP_STARTUP_PANEL:-}" ] && _foundation_startup_due; then
+				_foundation_startup_run
 			fi
 			# Registered once, even when this file is sourced again.
 			if [ -n "${ZSH_VERSION:-}" ]; then
 				case " ${precmd_functions[*]} " in
-					*" _foundation_repository_update_prompt "*) ;;
-					*) precmd_functions+=(_foundation_repository_update_prompt) ;;
+					*" _foundation_startup_prompt "*) ;;
+					*) precmd_functions+=(_foundation_startup_prompt) ;;
 				esac
 			elif [ -n "${BASH_VERSION:-}" ]; then
 				case "${PROMPT_COMMAND[*]}" in
-					*_foundation_repository_update_prompt*) ;;
+					*_foundation_startup_prompt*) ;;
 					*)
 						# Oh My Posh may have made PROMPT_COMMAND an array (bash 5.1+); the second
 						# branch is the string form, so SC2178/SC2128 do not apply.
 						# shellcheck disable=SC2178,SC2128
 						case $(declare -p PROMPT_COMMAND 2>/dev/null) in
-							'declare -a'*) PROMPT_COMMAND+=(_foundation_repository_update_prompt) ;;
-							*) PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND; }_foundation_repository_update_prompt" ;;
+							'declare -a'*) PROMPT_COMMAND+=(_foundation_startup_prompt) ;;
+							*) PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND; }_foundation_startup_prompt" ;;
 						esac
 						;;
 				esac
@@ -656,7 +698,7 @@ case $_foundation_startup_skip in
 		_foundation_stage_done
 		;;
 esac
-unset _foundation_repositories _foundation_startup_skip
+unset _foundation_startup_skip
 
 # After Reload-Profile the new shell lists the modules it loaded, as Reload-WinuXModules does
 # on Windows. Printed last, because the startup panel clears the screen.

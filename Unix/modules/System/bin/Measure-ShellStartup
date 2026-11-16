@@ -5,7 +5,7 @@
 #                             [--stages NAME...] [--shell PATH] [--pass-thru]
 #
 # The Unix twin of the Windows Measure-ShellStartup. Unix/shell/shellrc.sh runs its optional parts as
-# named stages (LineEditing, Aliases, Prompt, Plugins, Icons, Greeting, RepositoryUpdate); a shell
+# named stages (LineEditing, Aliases, Prompt, Plugins, Icons, Greeting, StartupTasks); a shell
 # leaves out the ones FOUNDATION_STARTUP_SKIP names and writes what each stage it ran cost to the file
 # FOUNDATION_STARTUP_TRACE names. Two more names belong to the greeting: FastfetchImageLogo (the
 # image logo of Invoke-Fastfetch) and OnefetchStyle (the restyle of Invoke-Onefetch), walked after
@@ -30,8 +30,8 @@
 # One warm-up start that is not counted comes first (a cold start pays for loading the binaries).
 # InShell is the median the stage measured for itself (- for the greeting names, which the rc does
 # not trace). The shells draw nothing (output goes to /dev/null and FOUNDATION_TTY to /dev/null, so
-# the greeting cannot resize this terminal's font), but the stages run for real: a RepositoryUpdate
-# that is due runs during the measurement.
+# the greeting cannot resize this terminal's font), but the stages run for real: a terminal-open
+# startup task that is due runs during the measurement.
 # Windows-style names: --additive (-Additive) is the default mode, accepted for parity.
 _foundation=${BASH_SOURCE[0]}
 while [ -L "$_foundation" ]; do
@@ -45,7 +45,7 @@ foundation_normalize_args "$@"
 set -- "${FOUNDATION_ARGS[@]}"
 foundation_common_flags "$@"
 
-STAGES=(LineEditing Aliases Prompt Plugins Icons Greeting FastfetchImageLogo OnefetchStyle RepositoryUpdate)
+STAGES=(LineEditing Aliases Prompt Plugins Icons Greeting FastfetchImageLogo OnefetchStyle StartupTasks)
 runs=5
 mode=additive
 shell=${SHELL:-/bin/zsh}

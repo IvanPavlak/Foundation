@@ -22,7 +22,7 @@ docs/foundation/
 ├── ai.md                                   # macOS paths and checks of the AI layers
 ├── software-list.md                        # The base Unix/Brewfile and Brewfile.local
 ├── backups.md                              # Backups/Unix: writers, retention, restore
-├── troubleshooting.md                      # Bootstrap, Homebrew, chezmoi, workspaces, AI on a Mac
+├── troubleshooting.md                      # Bootstrap, Homebrew, chezmoi, workspaces, startup tasks, AI on a Mac
 ├── fork-model.md                           # Overlays, payloads, Custom area, rooms and hallway, Merge-Upstreams
 ├── roadmap.md                              # The 0.1.0 to 1.0.0 roadmap and what is not scheduled
 └── adr/                                    # Decision records (listed in the Foundation sidebar)

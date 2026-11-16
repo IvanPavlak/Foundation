@@ -9,7 +9,6 @@ Git shorthands and repository cloning and updating, with a link to
 | ------- | ------------------- | ----- |
 | `GitStatus` | `git.conf` | [GitStatus](GitStatus.md) |
 | `Initialize-Repository` | `repositories.conf` | [Initialize-Repository](Initialize-Repository.md) |
-| `Invoke-StartupRepositoryUpdate` | `repositories.conf` | [Invoke-StartupRepositoryUpdate](Invoke-StartupRepositoryUpdate.md) |
 | `Update-Repositories` | `repositories.conf` | [Update-Repositories](Update-Repositories.md) |
 
 ## Commands With No Configuration

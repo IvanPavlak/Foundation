@@ -1,8 +1,8 @@
 # Bootstrap Module Configuration Guides
 
 The Bootstrap module provisions a Mac: the Bootstrap runner and the commands its steps run (the
-first-run identity, system defaults, power, Dock, login items, .NET, Conda, NuGet, npm and Docker
-Desktop's tools). See
+first-run identity, system defaults, power, Dock, login items, the startup task agent, .NET, Conda,
+NuGet, npm and Docker Desktop's tools). See
 [the module reference](../../modules/Bootstrap.md).
 
 ## Configurable Commands
@@ -20,6 +20,7 @@ Desktop's tools). See
 | `Set-DockPins` | `dock.conf` | [Set-DockPins](Set-DockPins.md) |
 | `Set-LoginItems` | `login-items.conf` | [Set-LoginItems](Set-LoginItems.md) |
 | `Set-PowerSettings` | `power.conf` | [Set-PowerSettings](Set-PowerSettings.md) |
+| `Set-StartupTasks` | `startup.conf`, `machines.conf` | [Set-StartupTasks](Set-StartupTasks.md) |
 | `Set-SystemDefaults` | `system-defaults.conf` | [Set-SystemDefaults](Set-SystemDefaults.md) |
 
 ## Commands With No Configuration
