@@ -254,3 +254,11 @@ merge-without-checks github.com/me/b" ]
 	run ai_repository_dir "$FOUNDATION_CONFIG_DIR/repositories.conf" Missing
 	[ "$status" -eq 1 ]
 }
+
+@test "ai_repository_dir: hooks= and archive= are dropped, in either order" {
+	printf '[Group]\nOne /me/One.git $HOME/One archive=Deep hooks=.githooks shallow\nTwo /me/Two.git $HOME/Two hooks=.githooks archive=Deep\nNoDir /me/NoDir.git hooks=.githooks\n' >"$FOUNDATION_CONFIG_DIR/repositories.conf"
+	[ "$(ai_repository_dir "$FOUNDATION_CONFIG_DIR/repositories.conf" One)" = "$HOME/One" ]
+	[ "$(ai_repository_dir "$FOUNDATION_CONFIG_DIR/repositories.conf" Two)" = "$HOME/Two" ]
+	run ai_repository_dir "$FOUNDATION_CONFIG_DIR/repositories.conf" NoDir
+	[ "$status" -eq 1 ]
+}
