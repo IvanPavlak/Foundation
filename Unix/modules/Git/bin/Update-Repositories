@@ -23,6 +23,17 @@
 # never over an ignored local file; a branch origin does not have, or an origin that cannot be
 # reached, is reported instead of pulled. A stash that cannot be restored cleanly is kept.
 #
+# A repository line that carries `hooks=FOLDER` (a folder inside the repository, `.githooks`) has
+# core.hooksPath of its clone set to FOLDER after it was cloned or updated, so the hooks the
+# repository tracks run without a command per clone; only the clone's own configuration is written,
+# never the global or system one, and only when the value differs. A line without the word is
+# never touched, whatever the repository contains. A folder that is missing in the clone, or is
+# not a relative path inside it, is reported and nothing is written; hook files without the
+# executable bit are named, never changed. Once the word is removed, the value is unset where this
+# command set it and it is still that value; one set by hand is left alone and reported once.
+# These are notes: on a --quiet line they follow the result and never change its bucket, its
+# color or the exit status. An --archive run sets nothing. Get-RepositoryHooks lists what is set.
+#
 #   --all                        every repository
 #   --group GROUP...             the Windows -Group: every name is a group; one that is not
 #                                aborts the call with the configured groups, nothing updated
@@ -31,7 +42,8 @@
 #   --repository-url URL --local-path DIR
 #                                one repository outside repositories.conf (the Windows custom
 #                                mode): cloned into DIR when missing, updated safely otherwise
-#                                (shallow when a `shallow` line of the file has the same URL)
+#                                (shallow when a `shallow` line of the file has the same URL,
+#                                its hooks path set when a `hooks=FOLDER` line has it)
 #   --archive                    clone without history (shallow, .git removed) into
 #                                <root>/<archive=FOLDER>/<name>, never the configured path, as on
 #                                Windows: the root is ~/Desktop, or `archive-root` of
@@ -207,7 +219,8 @@ fi
 [ "$mode" = group ] || log_title "$title"
 
 # Collect "GROUP LINE" (LINE as repositories.conf writes it) in file order. The URL/path pair is
-# one entry of its own, under the group `-`, shallow when a `shallow` line has the same URL.
+# one entry of its own, under the group `-`, shallow when a `shallow` line has the same URL and
+# with the hooks folder of a `hooks=FOLDER` line that has it.
 selected=''
 if [ "$mode" = repository-url ]; then
 	custom_name=${custom_url%/}
@@ -215,7 +228,9 @@ if [ "$mode" = repository-url ]; then
 	custom_name=${custom_name%.git}
 	shallow_word=''
 	repo_url_shallow "$file" "$(repo_resolve_url "$custom_url" "$base")" && shallow_word=' shallow'
-	selected="- ${custom_name:-repository} $custom_url $custom_dir$shallow_word"$'\n'
+	hooks_word=''
+	if custom_hooks=$(repo_url_hooks "$file" "$(repo_resolve_url "$custom_url" "$base")"); then hooks_word=" hooks=$custom_hooks"; fi
+	selected="- ${custom_name:-repository} $custom_url $custom_dir$hooks_word$shallow_word"$'\n'
 fi
 for name in ${group_names[@]+"${group_names[@]}"}; do
 	lines=$(conf_section "$file" "$name") || continue
@@ -261,6 +276,7 @@ while read -r group line; do
 	repo_entry "$line"
 	repo=$REPO_ENTRY_NAME
 	shallow=$REPO_ENTRY_SHALLOW
+	hooks=$REPO_ENTRY_HOOKS
 	dir=$(foundation_expand_path "$REPO_ENTRY_DIR")
 	# Each folder once, as Windows dedupes by LocalPath: a repository listed in two groups is
 	# updated once, two entries that only share a name are not merged. Without a folder on this
@@ -329,6 +345,15 @@ while read -r group line; do
 		"${clone[@]}" "$url" "$dir" </dev/null && outcome=Cloned
 		repo_result "$name" "$outcome"
 	fi
+
+	# The tracked hooks of a marked repository, on every clone that is on disk as its own
+	# repository; an unmarked one costs nothing unless an earlier run set its hooks path.
+	# A URL/path pair (the group `-`) names no line: it is set when a marked line has its URL, and
+	# never taken back, as on Windows - a URL spelled another way must not undo a marked clone.
+	case $REPO_OUTCOME in
+		NotConfigured | NotCloned | NotARepository | Error) ;;
+		*) [ "$group" = - ] && [ -z "$hooks" ] || repo_hooks_apply "$name" "$dir" "$hooks" "$quiet" ;;
+	esac
 
 	repo_format_result
 	case $REPO_CATEGORY in

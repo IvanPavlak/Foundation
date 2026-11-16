@@ -3,8 +3,10 @@
 # the Windows Update-Repository, Restore-RepositoryStash, Resolve-RepositoryDefaultBranch,
 # Update-RepositoryDefaultBranch and Format-RepositoryUpdateResult (WinuX Git module). Used by
 # Update-Repositories and Initialize-Repository; repo_scope_groups also by Bootstrap. repo_entry,
-# repo_resolve_url and repo_url_shallow read the repository lines of repositories.conf (the end of
-# this file).
+# repo_resolve_url, repo_url_shallow and repo_url_hooks read the repository lines of
+# repositories.conf (the end of this file). repo_hooks_apply turns the tracked hooks folder of a
+# marked repository on (core.hooksPath of its clone) and undoes only what it set;
+# Get-RepositoryHooks lists what it finds.
 #
 # repo_update NAME DIR [INCLUDE-DEFAULT 0|1] [QUIET 0|1] leaves its result in global variables:
 #
@@ -19,6 +21,11 @@
 #   REPO_DEFAULT_BRANCH, REPO_DEFAULT_OUTCOME   (empty when the step did not run) Current,
 #                         Updated, UpToDate, Missing (no local branch), Diverged, Failed, Unresolved
 #   REPO_STASH_NAME       set while local changes are kept in a stash
+#
+# repo_hooks_apply NAME DIR HOOKS [QUIET 0|1] leaves REPO_HOOKS_OUTCOME (None, Set, AlreadySet,
+# Removed, Kept, MissingFolder, Invalid, NotARepository, Error), REPO_HOOKS_PATH (the configured
+# folder), REPO_HOOKS_FOUND (the core.hooksPath the clone had) and REPO_HOOKS_NOT_EXECUTABLE (the
+# hook files git would skip); repo_update and repo_result clear them.
 #
 # The default branch is REPO_DEFAULT_CONFIGURED when the caller sets it, otherwise origin/HEAD.
 # With QUIET 1 nothing is logged and git's output is dropped; repo_format_result then gives the
@@ -126,6 +133,7 @@ repo_update() {
 	REPO_DEFAULT_BRANCH=''
 	REPO_DEFAULT_OUTCOME=''
 	REPO_STASH_NAME=''
+	repo__hooks_reset
 	local stash_commit='' operation='' git_dir marker
 	repo__say log_step " Checking status of [$REPO_NAME]"
 
@@ -272,12 +280,161 @@ repo_result() {
 	REPO_DEFAULT_BRANCH=''
 	REPO_DEFAULT_OUTCOME=''
 	REPO_STASH_NAME=''
+	repo__hooks_reset
+}
+
+# Clears the result of repo_hooks_apply, so one repository's note never reaches the next line.
+repo__hooks_reset() {
+	REPO_HOOKS_OUTCOME=''
+	REPO_HOOKS_PATH=''
+	REPO_HOOKS_FOUND=''
+	REPO_HOOKS_NOT_EXECUTABLE=''
+}
+
+# The file that records what repo_hooks_apply set: one `DIR<TAB>FOLDER` line per clone whose
+# core.hooksPath it wrote, so a line that loses its hooks=FOLDER is undone only where the value is
+# still the one written here.
+repo__hooks_state_file() {
+	printf '%s/repository-hooks.state' "$FOUNDATION_STATE_DIR"
+}
+
+# The folder recorded for DIR; fails when DIR has no record. Usage: repo_hooks_recorded DIR
+repo_hooks_recorded() {
+	local file
+	file=$(repo__hooks_state_file)
+	[ -r "$file" ] || return 1
+	REPO__KEY=$1 awk -F'\t' '!/^#/ && $1 == ENVIRON["REPO__KEY"] { print $2; found = 1; exit } END { exit !found }' "$file"
+}
+
+# Every record, `DIR<TAB>FOLDER` lines in file order. Usage: repo_hooks_records
+repo_hooks_records() {
+	local file
+	file=$(repo__hooks_state_file)
+	[ -r "$file" ] || return 0
+	awk -F'\t' '!/^#/ && NF >= 2' "$file"
+}
+
+# Records FOLDER for DIR, or forgets DIR without one. The file is rewritten only when what it
+# records changed. Usage: repo__hooks_record DIR [FOLDER]
+repo__hooks_record() {
+	local dir=$1 folder=${2:-} file tmp old new
+	file=$(repo__hooks_state_file)
+	old=$(repo_hooks_records)
+	new=$(printf '%s\n' "$old" | REPO__KEY=$dir awk -F'\t' 'NF && $1 != ENVIRON["REPO__KEY"]')
+	[ -z "$folder" ] || new="${new:+$new$'\n'}$dir"$'\t'"$folder"
+	[ "$new" != "$old" ] || return 0
+	mkdir -p "$FOUNDATION_STATE_DIR" || return 1
+	tmp=$(mktemp "$FOUNDATION_STATE_DIR/.repository-hooks.XXXXXX") || return 1
+	{
+		printf '# Written by Update-Repositories and Initialize-Repository: the clones whose core.hooksPath they set (DIR<TAB>FOLDER). Do not edit.\n'
+		[ -z "$new" ] || printf '%s\n' "$new"
+	} >"$tmp"
+	mv "$tmp" "$file"
+}
+
+# The hook files of DIR/FOLDER git would skip because they lack the executable bit, as `a, b`:
+# files directly in the folder that carry a git hook name. Nothing is changed.
+# Usage: repo_hooks_not_executable DIR FOLDER
+repo_hooks_not_executable() {
+	local hook list=''
+	for hook in applypatch-msg pre-applypatch post-applypatch pre-commit pre-merge-commit prepare-commit-msg \
+		commit-msg post-commit pre-rebase post-checkout post-merge pre-push pre-receive update proc-receive \
+		post-receive post-update reference-transaction push-to-checkout pre-auto-gc post-rewrite \
+		sendemail-validate fsmonitor-watchman post-index-change; do
+		[ -f "$1/$2/$hook" ] && [ ! -x "$1/$2/$hook" ] && list="${list:+$list, }$hook"
+	done
+	printf '%s' "$list"
+}
+
+# Is FOLDER a hooks folder a repository line may name: relative, without a `..` segment?
+# Usage: repo_hooks_folder_valid FOLDER
+repo_hooks_folder_valid() {
+	case $1 in '' | /* | .. | ../* | */.. | */../*) return 1 ;; esac
+	return 0
+}
+
+# Turns the tracked hooks folder of a repository on, or undoes it once its line lost the mark.
+# HOOKS is the hooks=FOLDER of the repository's line (relative to DIR), empty when it has none.
+#
+# Marked: core.hooksPath of DIR's own configuration (--local, never the global or system level,
+# never .git/hooks) is set to HOOKS when it differs, and DIR is recorded. A folder that is absolute
+# or leaves the repository (Invalid) or is missing in the clone (MissingFolder: a branch without
+# it, a typo) is warned about, never created, and nothing is written. Hook files without the
+# executable bit are reported, never changed.
+# Not marked: nothing at all happens unless this function recorded DIR earlier. Then the value is
+# unset when it is still the recorded one (Removed); a value set by hand since is left alone and
+# reported once (Kept), and the record is dropped either way.
+# A DIR that is not the top of its own working tree is never touched (NotARepository).
+# Usage: repo_hooks_apply NAME DIR HOOKS [QUIET 0|1]
+repo_hooks_apply() {
+	local name=$1 dir=$2 hooks=$3 recorded='' has_record=0 current cdup
+	REPO__QUIET=${4:-${REPO__QUIET:-0}}
+	repo__hooks_reset
+	REPO_HOOKS_OUTCOME=None
+	REPO_HOOKS_PATH=$hooks
+	if recorded=$(repo_hooks_recorded "$dir"); then has_record=1; fi
+	[ -n "$hooks" ] || [ "$has_record" -eq 1 ] || return 0
+
+	if ! cdup=$(git -C "$dir" rev-parse --show-cdup 2>/dev/null) || [ -n "$cdup" ]; then
+		REPO_HOOKS_OUTCOME=NotARepository
+		return 0
+	fi
+	# git exits 1 for an unset value; that is an answer, not a failure (a caller under `set -e`).
+	current=$(git -C "$dir" config --local --get core.hooksPath 2>/dev/null) || current=''
+	REPO_HOOKS_FOUND=$current
+
+	if [ -z "$hooks" ]; then
+		if [ -z "$current" ]; then
+			REPO_HOOKS_OUTCOME=Removed
+		elif [ "$current" = "$recorded" ]; then
+			if git -C "$dir" config --local --unset core.hooksPath >/dev/null 2>&1; then
+				REPO_HOOKS_OUTCOME=Removed
+				repo__say log_success "Hooks path of [$name] removed - its repositories.conf line no longer names a hooks folder"
+			else
+				REPO_HOOKS_OUTCOME=Error
+				repo__say log_error "The hooks path of [$name] could not be removed from [$dir]"
+				return 0
+			fi
+		else
+			REPO_HOOKS_OUTCOME=Kept
+			repo__say log_warning "[$name] has core.hooksPath [$current], set by hand - left alone"
+		fi
+		repo__hooks_record "$dir"
+		return 0
+	fi
+
+	if ! repo_hooks_folder_valid "$hooks"; then
+		REPO_HOOKS_OUTCOME=Invalid
+		repo__say log_warning "The hooks folder [$hooks] of [$name] is not a folder inside the repository - core.hooksPath not set"
+		return 0
+	fi
+	if [ ! -d "$dir/$hooks" ]; then
+		REPO_HOOKS_OUTCOME=MissingFolder
+		repo__say log_warning "The hooks folder [$hooks] of [$name] is missing in [$dir] - core.hooksPath not set"
+		return 0
+	fi
+	REPO_HOOKS_NOT_EXECUTABLE=$(repo_hooks_not_executable "$dir" "$hooks")
+	[ -z "$REPO_HOOKS_NOT_EXECUTABLE" ] || repo__say log_warning "Hooks of [$name] that git skips, not executable => $REPO_HOOKS_NOT_EXECUTABLE (fix it in the repository: git update-index --chmod=+x)"
+
+	if [ "$current" = "$hooks" ]; then
+		REPO_HOOKS_OUTCOME=AlreadySet
+		return 0
+	fi
+	if git -C "$dir" config --local core.hooksPath "$hooks" >/dev/null 2>&1; then
+		REPO_HOOKS_OUTCOME=Set
+		repo__hooks_record "$dir" "$hooks"
+		repo__say log_success "Hooks path of [$name] set to [$hooks]"
+	else
+		REPO_HOOKS_OUTCOME=Error
+		repo__say log_error "The hooks path of [$name] could not be written in [$dir]"
+	fi
+	return 0
 }
 
 # One summary line for the current REPO_* result: sets REPO_LINE, REPO_LEVEL (Success|Warning)
 # and REPO_CATEGORY (Updated, UpToDate, Skipped, Attention). Usage: repo_format_result
 repo_format_result() {
-	local text default_text=''
+	local text default_text='' hooks_text=''
 	case $REPO_OUTCOME in
 		Updated) text=updated ;;
 		UpToDate) text="up to date" ;;
@@ -316,6 +473,17 @@ repo_format_result() {
 		REPO_LINE="[$REPO_NAME] $text"
 	fi
 	[ -n "$default_text" ] && REPO_LINE="$REPO_LINE, $default_text"
+	# The hooks note never changes the bucket: a branch without the folder must not turn a run red.
+	case ${REPO_HOOKS_OUTCOME:-} in
+		Set) hooks_text="hooks path set to [$REPO_HOOKS_PATH]" ;;
+		Removed) hooks_text="hooks path removed" ;;
+		MissingFolder) hooks_text="hooks folder [$REPO_HOOKS_PATH] missing" ;;
+		Invalid) hooks_text="hooks folder [$REPO_HOOKS_PATH] is not a folder inside the repository" ;;
+		Kept) hooks_text="hooks path [$REPO_HOOKS_FOUND] was set by hand, left alone" ;;
+		Error) hooks_text="hooks path could not be written" ;;
+	esac
+	[ -n "$hooks_text" ] && REPO_LINE="$REPO_LINE, $hooks_text"
+	[ -n "${REPO_HOOKS_NOT_EXECUTABLE:-}" ] && REPO_LINE="$REPO_LINE, hooks not executable: $REPO_HOOKS_NOT_EXECUTABLE"
 	REPO_LEVEL=Success
 	[ "$REPO_CATEGORY" = Attention ] && REPO_LEVEL=Warning
 	return 0
@@ -351,13 +519,16 @@ repo_scope_groups() {
 	[ ${#groups[@]} -eq 0 ] || printf '%s\n' "${groups[@]}"
 }
 
-# One repository line of repositories.conf (`NAME PATH-OR-URL [DIR] [archive=FOLDER] [shallow]`)
-# split into REPO_ENTRY_NAME, REPO_ENTRY_SOURCE, REPO_ENTRY_DIR (as written, unexpanded; empty when
-# the line has none), REPO_ENTRY_ARCHIVE (FOLDER, the place under the archive root; empty when the
-# line has none) and REPO_ENTRY_SHALLOW (1 when the last word is `shallow`: cloned --depth 1, the
-# Windows `Shallow`). Usage: repo_entry LINE
+# One repository line of repositories.conf
+# (`NAME PATH-OR-URL [DIR] [archive=FOLDER] [hooks=FOLDER] [shallow]`) split into REPO_ENTRY_NAME,
+# REPO_ENTRY_SOURCE, REPO_ENTRY_DIR (as written, unexpanded; empty when the line has none),
+# REPO_ENTRY_ARCHIVE (FOLDER, the place under the archive root; empty when the line has none),
+# REPO_ENTRY_HOOKS (FOLDER, the tracked hooks folder inside the repository, the Windows `Hooks`;
+# empty when the line has none) and REPO_ENTRY_SHALLOW (1 when the last word is `shallow`: cloned
+# --depth 1, the Windows `Shallow`). archive= and hooks= follow DIR in either order.
+# Usage: repo_entry LINE
 repo_entry() {
-	local rest last
+	local rest last padded archive hooks
 	read -r REPO_ENTRY_NAME REPO_ENTRY_SOURCE rest <<<"$1"
 	REPO_ENTRY_SHALLOW=0
 	last=${rest##*[[:space:]]}
@@ -367,13 +538,24 @@ repo_entry() {
 		rest=${rest%"${rest##*[![:space:]]}"}
 	fi
 	REPO_ENTRY_ARCHIVE=''
-	case " $rest" in
-		*[[:space:]]archive=*)
-			REPO_ENTRY_ARCHIVE=${rest##*archive=}
-			rest=${rest%archive=*}
-			rest=${rest%"${rest##*[![:space:]]}"}
-			;;
-	esac
+	REPO_ENTRY_HOOKS=''
+	# The options are taken off the end, whichever starts last first, so they stand in either order
+	# and each value runs to the next option or the end of the line.
+	while :; do
+		padded=" $rest"
+		archive=${padded##*[[:space:]]archive=}
+		hooks=${padded##*[[:space:]]hooks=}
+		if [ "$archive" != "$padded" ] && { [ "$hooks" = "$padded" ] || [ ${#archive} -lt ${#hooks} ]; }; then
+			REPO_ENTRY_ARCHIVE=$archive
+			rest=${padded%"archive=$archive"}
+		elif [ "$hooks" != "$padded" ]; then
+			REPO_ENTRY_HOOKS=$hooks
+			rest=${padded%"hooks=$hooks"}
+		else
+			break
+		fi
+		rest=$(foundation_trim "$rest")
+	done
 	REPO_ENTRY_DIR=$rest
 }
 
@@ -411,6 +593,27 @@ repo_url_shallow() {
 			repo_entry "$line"
 			[ "$REPO_ENTRY_SHALLOW" -eq 1 ] || continue
 			[ "$(repo__url_key "$(repo_resolve_url "$REPO_ENTRY_SOURCE" "$base")")" = "$url" ] && return 0
+		done < <(conf_section "$file" "$group")
+	done < <(conf_sections "$file")
+	return 1
+}
+
+# The hooks folder of the first repository line of FILE that carries hooks=FOLDER and leads to
+# URL, compared as repo__url_key does; fails when no such line does. Needs lib/config.sh.
+# Usage: repo_url_hooks FILE URL
+repo_url_hooks() {
+	local file=$1 base group line url
+	url=$(repo__url_key "$2")
+	base=$(conf_value "$file" base) || base=https://github.com
+	while IFS= read -r group; do
+		while IFS= read -r line; do
+			[ -n "$line" ] || continue
+			repo_entry "$line"
+			[ -n "$REPO_ENTRY_HOOKS" ] || continue
+			if [ "$(repo__url_key "$(repo_resolve_url "$REPO_ENTRY_SOURCE" "$base")")" = "$url" ]; then
+				printf '%s' "$REPO_ENTRY_HOOKS"
+				return 0
+			fi
 		done < <(conf_section "$file" "$group")
 	done < <(conf_sections "$file")
 	return 1

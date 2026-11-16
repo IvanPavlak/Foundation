@@ -18,7 +18,7 @@ default) and
 | ---- | ---- | -------------- | ---------------- |
 | [`repositories.conf`](../../configuration.md#repositoriesconf) | `base URL` | `https://github.com` | The prefix of every relative repository path; the last `base` line wins, so the overlay's replaces the base one |
 | [`repositories.conf`](../../configuration.md#repositoriesconf) | `[Group]` | `[Private]` | A repository group: a menu entry and `Update-Repositories --group GROUP`; `--all` runs every group |
-| [`repositories.conf`](../../configuration.md#repositoriesconf) | `NAME PATH-OR-URL [DIR] [archive=FOLDER] [shallow]` | the repository itself, in `$DOTFILES_ROOT` | One repository: a path under `base` (`/MyUser/MyRepo.git`) or a full URL (`http(s)://`, `git@`, `ssh://`, `git://`, `file://`), cloned into DIR when missing and updated otherwise; a line without DIR is skipped as having no local path on this machine; `archive=FOLDER` is its place under `archive-root` in an `--archive` run, a relative path of any depth; `shallow` clones it `--depth 1`, keeping its `.git` |
+| [`repositories.conf`](../../configuration.md#repositoriesconf) | `NAME PATH-OR-URL [DIR] [archive=FOLDER] [hooks=FOLDER] [shallow]` | the repository itself, in `$DOTFILES_ROOT` | One repository: a path under `base` (`/MyUser/MyRepo.git`) or a full URL (`http(s)://`, `git@`, `ssh://`, `git://`, `file://`), cloned into DIR when missing and updated otherwise; a line without DIR is skipped as having no local path on this machine; `archive=FOLDER` is its place under `archive-root` in an `--archive` run, a relative path of any depth; `hooks=FOLDER` names the hooks folder the repository tracks, relative to its root, and has `core.hooksPath` of the clone set to it after a clone or an update; `shallow` clones it `--depth 1`, keeping its `.git` |
 | [`repositories.conf`](../../configuration.md#repositoriesconf) | `archive-root PATH` | `~/Desktop` | Where an `--archive` run lands: absolute, or relative to `~/Desktop`; `--in-current-directory` replaces it for one run |
 | [`repositories.conf`](../../configuration.md#repositoriesconf) | `include-default-branch on\|off` | off | Also fast-forward each default branch while another branch is checked out; `--include-default-branch` and `--no-include-default-branch` override it for one run |
 | [`repositories.conf`](../../configuration.md#repositoriesconf) | `default-branch NAME` | unset: each repository's `origin/HEAD` | The default branch of every repository, for `include-default-branch` |
@@ -48,6 +48,10 @@ default) and
 6. Where should `--archive` put its copies?
     - Options: `archive-root repos` for a folder on the Desktop, or an absolute path, and `archive=FOLDER` on a repository line for its folder under that root, a relative path of any depth (`archive=Projects/Tools`). A copy lands in `<root>/<FOLDER>/<name>`, so `Update-Repositories --all --archive` rebuilds a whole tree. It goes after DIR and before `shallow`.
     - Default: every copy directly on the Desktop.
+    - More detail: [`repositories.conf`](../../configuration.md#repositoriesconf)
+7. Which repositories should run the git hooks they track?
+    - Options: `hooks=FOLDER` on the line of a repository that keeps its hooks in a folder of its own (`hooks=.githooks`), after DIR, before or after `archive=FOLDER` and before `shallow`. Every clone or update then sets `core.hooksPath` of that clone to FOLDER (its own configuration only, only when it differs). Mark only repositories whose hooks you have read: a hook is code that runs on your machine at every commit. Removing the word unsets the value where this command set it; a value set by hand is left alone and reported once. A missing folder or a hook file without the executable bit is a note on the repository's line, never a failure. [Get-RepositoryHooks](Get-RepositoryHooks.md) lists what each clone has.
+    - Default: no repository is marked and no clone's hooks path is ever touched, whatever the repository contains.
     - More detail: [`repositories.conf`](../../configuration.md#repositoriesconf)
 
 ## Where to Put Values
@@ -95,6 +99,7 @@ repository as needing attention.
 
 ```bash
 Test-ConfigurationSchema --quiet
+Get-RepositoryHooks
 cat Unix/config/repositories.local.conf
 ```
 
@@ -110,7 +115,7 @@ archive-root repos
 
 [Private]
 Dotfiles   /MyUser/Dotfiles.git   $DOTFILES_ROOT
-MyRepo     /MyUser/MyRepo.git     $DEV/MyRepo   archive=Projects/Tools
+MyRepo     /MyUser/MyRepo.git     $DEV/MyRepo   archive=Projects/Tools   hooks=.githooks
 @Laptop MyNotes   /MyUser/MyNotes.git   ~/Documents/MyNotes   archive=Vault   shallow
 
 [Work]

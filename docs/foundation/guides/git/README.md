@@ -7,6 +7,7 @@ Git shorthands and repository cloning and updating, with a link to
 
 | Command | Configuration files | Guide |
 | ------- | ------------------- | ----- |
+| `Get-RepositoryHooks` | `repositories.conf` | [Get-RepositoryHooks](Get-RepositoryHooks.md) |
 | `GitStatus` | `git.conf` | [GitStatus](GitStatus.md) |
 | `Initialize-Repository` | `repositories.conf` | [Initialize-Repository](Initialize-Repository.md) |
 | `Update-Repositories` | `repositories.conf` | [Update-Repositories](Update-Repositories.md) |

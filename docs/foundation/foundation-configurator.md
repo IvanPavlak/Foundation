@@ -127,15 +127,16 @@ The guides carry each command's questions; these notes are the walk-level additi
 
 ### repositories.conf
 
-Line: `NAME PATH-OR-URL DIR [shallow]` under a `[Group]`. Relative paths append to `base`.
+Line: `NAME PATH-OR-URL DIR [hooks=FOLDER] [shallow]` under a `[Group]`. Relative paths append to `base`.
 
 1. **Group.** Which existing group (the menu of `Update-Repositories`), or a new one. Default: `Private`.
 2. **Name.** The token `Update-Repositories NAME` takes. Default: the repository name.
 3. **Source.** `/Owner/Repo.git` under `base` (show the `base` line), or a full URL for another host. If a checkout already exists, read its remote (rule 3) and confirm.
 4. **Directory.** Where it is cloned. Default: `$DEV/<Name>`, the dev root (`machines.conf` `dev-root`, else the folder holding this clone) that the existing entries use; write paths under the dev root as `$DEV/...`, never spelled out.
 5. **History.** Full clone, or `shallow` (`--depth 1`, still able to commit and push) for a repository with a large history such as a notes vault. Default: full.
+6. **Tracked hooks.** Does the repository keep its git hooks in a folder of its own (look for `.githooks/` in an existing checkout, read-only)? Then `hooks=FOLDER` before `shallow`: every clone and update sets `core.hooksPath` of that clone. Ask, never assume: a hook is code that runs on the user's machine at every commit. Default: no `hooks=`.
 
-Check: `grep -n NAME Unix/config/repositories.conf`; the user runs `Update-Repositories NAME` (clones when missing, pulls otherwise).
+Check: `grep -n NAME Unix/config/repositories.conf`; the user runs `Update-Repositories NAME` (clones when missing, pulls otherwise), then `Get-RepositoryHooks` when a line carries `hooks=`.
 
 ### apps.conf
 

@@ -98,3 +98,74 @@ push_upstream() {
 	[ "$(git -C "$BATS_TEST_TMPDIR/other" rev-parse --is-shallow-repository)" = false ]
 	[ "$(git -C "$BATS_TEST_TMPDIR/other" rev-list --count HEAD)" -eq 2 ]
 }
+
+# A tracked hooks folder with an executable pre-commit, pushed to origin.
+push_hooks() {
+	mkdir -p "$REPO/.githooks"
+	printf '#!/bin/sh\nexit 0\n' >"$REPO/.githooks/pre-commit"
+	chmod +x "$REPO/.githooks/pre-commit"
+	git -C "$REPO" add .githooks
+	git -C "$REPO" commit -qm "Hooks"
+	git -C "$REPO" push -q origin master 2>/dev/null
+}
+# The core.hooksPath of a clone's own configuration (empty when unset). Usage: hooks_path DIR
+hooks_path() { git -C "$1" config --local --get core.hooksPath || true; }
+
+@test "hooks: a URL a line marks hooks=FOLDER has its hooks path set after the clone; any other URL is left alone" {
+	push_hooks
+	export FOUNDATION_CONFIG_DIR=$BATS_TEST_TMPDIR/config
+	mkdir -p "$FOUNDATION_CONFIG_DIR"
+	marked=$(origin_url Marked)
+	printf '[Demo]\nMarked  %s.git/  $DEV/Marked hooks=.githooks\nOther  %s  $DEV/Other\n' "${marked%.git}" "$(origin_url Other)" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
+	run "${BASH:-bash}" "$bin/Initialize-Repository" "$marked" "$BATS_TEST_TMPDIR/marked"
+	[ "$status" -eq 0 ]
+	[ "$(hooks_path "$BATS_TEST_TMPDIR/marked")" = .githooks ]
+	grep -q "^$BATS_TEST_TMPDIR/marked"$'\t'".githooks$" "$FOUNDATION_STATE_DIR/repository-hooks.state"
+	[ -z "$(git config --global --get core.hooksPath || true)" ]
+	run "${BASH:-bash}" "$bin/Initialize-Repository" "$(origin_url Other)" "$BATS_TEST_TMPDIR/other"
+	[ "$status" -eq 0 ]
+	[ -z "$(hooks_path "$BATS_TEST_TMPDIR/other")" ]
+}
+
+@test "hooks: a second run sets the hooks path of an existing checkout of a marked URL" {
+	push_hooks
+	export FOUNDATION_CONFIG_DIR=$BATS_TEST_TMPDIR/config
+	mkdir -p "$FOUNDATION_CONFIG_DIR"
+	target=$BATS_TEST_TMPDIR/cloned
+	git clone -q "$ORIGIN" "$target" 2>/dev/null
+	printf '[Demo]\nRepo  %s  $DEV/Repo hooks=.githooks\n' "$(origin_url Repo)" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
+	run "${BASH:-bash}" "$bin/Initialize-Repository" "$(origin_url Repo)" "$target"
+	[ "$status" -eq 0 ]
+	[ "$(hooks_path "$target")" = .githooks ]
+}
+
+@test "hooks: an unmarked URL is never touched, whatever an earlier run recorded or the clone has set" {
+	push_hooks
+	export FOUNDATION_CONFIG_DIR=$BATS_TEST_TMPDIR/config
+	mkdir -p "$FOUNDATION_CONFIG_DIR"
+	target=$BATS_TEST_TMPDIR/cloned
+	printf '[Demo]\nRepo  %s  $DEV/Repo hooks=.githooks\n' "$(origin_url Repo)" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
+	run "${BASH:-bash}" "$bin/Initialize-Repository" "$(origin_url Repo)" "$target"
+	[ "$(hooks_path "$target")" = .githooks ]
+	recorded=$(cat "$FOUNDATION_STATE_DIR/repository-hooks.state")
+	printf '[Demo]\nRepo  %s  $DEV/Repo\n' "$(origin_url Repo)" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
+	run "${BASH:-bash}" "$bin/Initialize-Repository" "$(origin_url Repo)" "$target"
+	[ "$status" -eq 0 ]
+	[ "$(hooks_path "$target")" = .githooks ]
+	[ "$(cat "$FOUNDATION_STATE_DIR/repository-hooks.state")" = "$recorded" ]
+}
+
+@test "hooks: a marked folder missing in the clone is reported and nothing is written; --archive sets nothing" {
+	export FOUNDATION_CONFIG_DIR=$BATS_TEST_TMPDIR/config
+	mkdir -p "$FOUNDATION_CONFIG_DIR"
+	printf '[Demo]\nRepo  %s  $DEV/Repo hooks=.githooks\n' "$(origin_url Repo)" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
+	run "${BASH:-bash}" "$bin/Initialize-Repository" "$(origin_url Repo)" "$BATS_TEST_TMPDIR/cloned"
+	[ "$status" -eq 0 ]
+	[[ $output == *"missing"* ]]
+	[ -z "$(hooks_path "$BATS_TEST_TMPDIR/cloned")" ]
+	[ ! -e "$BATS_TEST_TMPDIR/cloned/.githooks" ]
+	run "${BASH:-bash}" "$bin/Initialize-Repository" "$(origin_url Repo)" "$BATS_TEST_TMPDIR/archived" --archive
+	[ "$status" -eq 0 ]
+	[ ! -e "$BATS_TEST_TMPDIR/archived/.git" ]
+	[ ! -e "$FOUNDATION_STATE_DIR/repository-hooks.state" ]
+}

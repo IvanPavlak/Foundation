@@ -803,3 +803,283 @@ TABLE
 	[ "$(repo_resolve_url https://host.invalid/Owner/R.git https://example.invalid)" = https://host.invalid/Owner/R.git ]
 	[ "$(repo_resolve_url /Owner/R.git https://example.invalid)" = https://example.invalid/Owner/R.git ]
 }
+
+# --- Tracked hooks: hooks=FOLDER on a repository line -------------------------------------------
+
+# A tracked hooks folder with an executable pre-commit, committed in the sandbox clone (not pushed).
+# Usage: hooks_folder [FOLDER]
+hooks_folder() {
+	local folder=${1:-.githooks}
+	mkdir -p "$REPO/$folder"
+	printf '#!/bin/sh\nexit 0\n' >"$REPO/$folder/pre-commit"
+	chmod +x "$REPO/$folder/pre-commit"
+	git -C "$REPO" add "$folder"
+	git -C "$REPO" commit -qm "Hooks"
+}
+# The core.hooksPath of a clone's own configuration (empty when unset). Usage: hooks_path [DIR]
+hooks_path() { git -C "${1:-$REPO}" config --local --get core.hooksPath || true; }
+# [Demo] with Repo = the sandbox clone and WORDS after its folder. Usage: hooks_conf [WORDS]
+hooks_conf() { printf '[Demo]\nRepo  %s  %s %s\n' "$(origin_url Repo)" "$REPO" "${1:-}" >"$FOUNDATION_CONFIG_DIR/repositories.conf"; }
+# The file repo_hooks_apply records its writes in.
+hooks_state() { printf '%s/repository-hooks.state' "$FOUNDATION_STATE_DIR"; }
+
+@test "hooks: an unmarked repository that contains a hooks folder is never touched" {
+	hooks_folder
+	update --group Demo --quiet
+	[ "$status" -eq 0 ]
+	[ -z "$(hooks_path)" ]
+	[ ! -e "$(hooks_state)" ]
+	[[ $output != *"hooks"* ]]
+}
+
+@test "hooks: a marked repository gets core.hooksPath set once, in its own configuration only" {
+	hooks_folder
+	hooks_conf "archive=Deep hooks=.githooks"
+	update --group Demo --quiet
+	[ "$status" -eq 0 ]
+	[ "$(hooks_path)" = .githooks ]
+	[[ $output == *"[Repo] master - up to date, hooks path set to [.githooks]"* ]]
+	[[ $output == *"0 need attention"* ]]
+	grep -q "^$REPO"$'\t'".githooks$" "$(hooks_state)"
+	[ -z "$(git config --global --get core.hooksPath || true)" ]
+	[ ! -e "$REPO/.git/hooks/pre-commit" ]
+	before=$(cat "$(hooks_state)")
+	update --group Demo --quiet
+	[ "$status" -eq 0 ]
+	[[ $output != *"hooks"* ]]
+	[ "$(hooks_path)" = .githooks ]
+	[ "$(cat "$(hooks_state)")" = "$before" ]
+}
+
+@test "hooks: a value unset or changed by hand in a marked clone is set again" {
+	hooks_folder
+	hooks_conf "hooks=.githooks"
+	update --group Demo --quiet
+	git -C "$REPO" config --local --unset core.hooksPath
+	update --group Demo --quiet
+	[ "$(hooks_path)" = .githooks ]
+	git -C "$REPO" config --local core.hooksPath elsewhere
+	update --group Demo
+	[ "$status" -eq 0 ]
+	[ "$(hooks_path)" = .githooks ]
+}
+
+@test "hooks: a folder missing in the clone is a note, never created, and the run stays green" {
+	hooks_conf "hooks=.githooks"
+	update --group Demo --quiet
+	[ "$status" -eq 0 ]
+	[[ $output == *"[Repo] master - up to date, hooks folder [.githooks] missing"* ]]
+	[[ $output == *"1 up to date"*"0 need attention"* ]]
+	[ -z "$(hooks_path)" ]
+	[ ! -e "$REPO/.githooks" ]
+	[ ! -e "$(hooks_state)" ]
+}
+
+@test "hooks: an absolute folder or one that leaves the repository writes nothing" {
+	mkdir -p "$BATS_TEST_TMPDIR/outside"
+	for folder in "$BATS_TEST_TMPDIR/outside" ../outside .githooks/../..; do
+		hooks_conf "hooks=$folder"
+		update --group Demo --quiet
+		[ "$status" -eq 0 ]
+		[[ $output == *"is not a folder inside the repository"* ]]
+		[ -z "$(hooks_path)" ]
+	done
+	[ ! -e "$(hooks_state)" ]
+}
+
+@test "hooks: removing the mark unsets the value this command set, and later runs touch nothing" {
+	hooks_folder
+	hooks_conf "hooks=.githooks"
+	update --group Demo --quiet
+	[ "$(hooks_path)" = .githooks ]
+	hooks_conf
+	update --group Demo --quiet
+	[ "$status" -eq 0 ]
+	[[ $output == *"[Repo] master - up to date, hooks path removed"* ]]
+	[ -z "$(hooks_path)" ]
+	! grep -q "^$REPO"$'\t' "$(hooks_state)" || false
+	git -C "$REPO" config --local core.hooksPath mine
+	update --group Demo --quiet
+	[[ $output != *"hooks"* ]]
+	[ "$(hooks_path)" = mine ]
+}
+
+@test "hooks: removing the mark leaves a value changed by hand alone and reports it once" {
+	hooks_folder
+	hooks_conf "hooks=.githooks"
+	update --group Demo --quiet
+	git -C "$REPO" config --local core.hooksPath mine
+	hooks_conf
+	update --group Demo --quiet
+	[ "$status" -eq 0 ]
+	[[ $output == *"hooks path [mine] was set by hand, left alone"* ]]
+	[[ $output == *"0 need attention"* ]]
+	[ "$(hooks_path)" = mine ]
+	update --group Demo --quiet
+	[[ $output != *"hooks"* ]]
+	[ "$(hooks_path)" = mine ]
+}
+
+@test "hooks: removing the mark after the value was unset by hand only forgets the record" {
+	hooks_folder
+	hooks_conf "hooks=.githooks"
+	update --group Demo --quiet
+	git -C "$REPO" config --local --unset core.hooksPath
+	hooks_conf
+	update --group Demo --quiet
+	[ "$status" -eq 0 ]
+	[ -z "$(hooks_path)" ]
+	! grep -q "^$REPO"$'\t' "$(hooks_state)" || false
+}
+
+@test "hooks: a value set by hand to the configured folder is not adopted, so unmarking keeps it" {
+	hooks_folder
+	git -C "$REPO" config --local core.hooksPath .githooks
+	hooks_conf "hooks=.githooks"
+	update --group Demo --quiet
+	[[ $output != *"hooks"* ]]
+	[ ! -e "$(hooks_state)" ]
+	hooks_conf
+	update --group Demo --quiet
+	[[ $output != *"hooks"* ]]
+	[ "$(hooks_path)" = .githooks ]
+}
+
+@test "hooks: a fresh clone of a marked repository has its hooks path set; --no-clone and --archive set nothing" {
+	hooks_folder
+	git -C "$REPO" push -q origin master 2>/dev/null
+	printf '[Demo]\nFresh  %s  %s/fresh hooks=.githooks\n' "$(origin_url Fresh)" "$BATS_TEST_TMPDIR" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
+	update --group Demo --quiet --no-clone
+	[ "$status" -eq 0 ]
+	[[ $output != *"hooks"* ]]
+	[ ! -e "$(hooks_state)" ]
+	update --group Demo --archive
+	[ "$status" -eq 0 ]
+	[ ! -e "$(hooks_state)" ]
+	update --group Demo --quiet
+	[ "$status" -eq 0 ]
+	[ "$(hooks_path "$BATS_TEST_TMPDIR/fresh")" = .githooks ]
+	[[ $output == *"[Fresh] cloned, hooks path set to [.githooks]"* ]]
+}
+
+@test "hooks: a hook file without the executable bit is named and its mode left alone" {
+	hooks_folder
+	printf '#!/bin/sh\nexit 0\n' >"$REPO/.githooks/commit-msg"
+	echo notes >"$REPO/.githooks/README"
+	git -C "$REPO" add .githooks
+	git -C "$REPO" commit -qm "More hooks"
+	hooks_conf "hooks=.githooks"
+	update --group Demo --quiet
+	[ "$status" -eq 0 ]
+	[[ $output == *"hooks path set to [.githooks], hooks not executable: commit-msg"* ]]
+	[[ $output != *"README"* ]]
+	[[ $output != *"not executable: pre-commit"* ]]
+	[ ! -x "$REPO/.githooks/commit-msg" ]
+	[ -z "$(git -C "$REPO" status --porcelain)" ]
+	update --group Demo --quiet
+	[[ $output == *"[Repo] master - up to date, hooks not executable: commit-msg"* ]]
+}
+
+@test "hooks: the note of one repository never reaches the next line" {
+	hooks_folder
+	git clone -q "$ORIGIN" "$BATS_TEST_TMPDIR/second" 2>/dev/null
+	printf '[Demo]\nRepo  %s  %s hooks=.githooks\nSecond  %s  %s/second\n' "$(origin_url Repo)" "$REPO" "$(origin_url Second)" "$BATS_TEST_TMPDIR" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
+	update --group Demo --quiet
+	[ "$status" -eq 0 ]
+	[[ $output == *"[Repo] master - up to date, hooks path set to [.githooks]"* ]]
+	[[ $output == *$'[Second] master - up to date\n'* ]]
+	[ -z "$(hooks_path "$BATS_TEST_TMPDIR/second")" ]
+}
+
+@test "hooks: a marked folder inside another repository leaves that repository alone" {
+	hooks_folder
+	mkdir -p "$REPO/sub/.githooks"
+	printf '[Demo]\nSub  %s  %s/sub hooks=.githooks\n' "$(origin_url Sub)" "$REPO" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
+	update --group Demo --quiet
+	[ "$status" -eq 1 ]
+	[ -z "$(hooks_path)" ]
+	[ ! -e "$(hooks_state)" ]
+}
+
+@test "hooks: --repository-url sets the hooks path only when a marked line has the same URL" {
+	hooks_folder
+	git -C "$REPO" push -q origin master 2>/dev/null
+	marked=$(origin_url Marked)
+	printf '[Demo]\nMarked  %s.git/  $DEV/Marked hooks=.githooks\n' "${marked%.git}" >"$FOUNDATION_CONFIG_DIR/repositories.conf"
+	update --repository-url "$marked" --local-path "$BATS_TEST_TMPDIR/custom" --quiet
+	[ "$status" -eq 0 ]
+	[ "$(hooks_path "$BATS_TEST_TMPDIR/custom")" = .githooks ]
+	update --repository-url "$(origin_url Plain)" --local-path "$BATS_TEST_TMPDIR/plain" --quiet
+	[ "$status" -eq 0 ]
+	[ -z "$(hooks_path "$BATS_TEST_TMPDIR/plain")" ]
+}
+
+@test "repo_entry: hooks= and archive= follow DIR in either order, shallow stays last" {
+	foundation_load repository
+	repo_entry 'Repo /o/r.git $DEV/Repo archive=Deep/er hooks=.githooks shallow'
+	[ "$REPO_ENTRY_DIR" = '$DEV/Repo' ]
+	[ "$REPO_ENTRY_ARCHIVE" = Deep/er ]
+	[ "$REPO_ENTRY_HOOKS" = .githooks ]
+	[ "$REPO_ENTRY_SHALLOW" -eq 1 ]
+	repo_entry 'Repo /o/r.git $DEV/Repo hooks=tools/hooks archive=Deep'
+	[ "$REPO_ENTRY_DIR" = '$DEV/Repo' ]
+	[ "$REPO_ENTRY_ARCHIVE" = Deep ]
+	[ "$REPO_ENTRY_HOOKS" = tools/hooks ]
+	[ "$REPO_ENTRY_SHALLOW" -eq 0 ]
+	repo_entry 'Repo /o/r.git hooks=.githooks'
+	[ -z "$REPO_ENTRY_DIR" ]
+	[ "$REPO_ENTRY_HOOKS" = .githooks ]
+	repo_entry 'Repo /o/r.git $DEV/Repo'
+	[ "$REPO_ENTRY_DIR" = '$DEV/Repo' ]
+	[ -z "$REPO_ENTRY_HOOKS" ]
+	[ -z "$REPO_ENTRY_ARCHIVE" ]
+}
+
+@test "repo_format_result: a hooks note is added to the line and never changes the category" {
+	foundation_load repository
+	while IFS='|' read -r outcome found missing expected; do
+		repo_result Repo UpToDate
+		REPO_BRANCH=master
+		REPO_HOOKS_OUTCOME=$outcome
+		REPO_HOOKS_PATH=.githooks
+		REPO_HOOKS_FOUND=$found
+		REPO_HOOKS_NOT_EXECUTABLE=$missing
+		repo_format_result
+		[ "$REPO_CATEGORY" = UpToDate ]
+		[ "$REPO_LEVEL" = Success ]
+		[ "$REPO_LINE" = "[Repo] master - up to date$expected" ] || {
+			echo "$outcome: $REPO_LINE"
+			return 1
+		}
+	done <<'TABLE'
+None|||
+AlreadySet|.githooks||
+NotARepository|||
+Set|||, hooks path set to [.githooks]
+Removed|.githooks||, hooks path removed
+MissingFolder|||, hooks folder [.githooks] missing
+Invalid|||, hooks folder [.githooks] is not a folder inside the repository
+Kept|mine||, hooks path [mine] was set by hand, left alone
+Error|||, hooks path could not be written
+AlreadySet|.githooks|commit-msg, pre-push|, hooks not executable: commit-msg, pre-push
+TABLE
+	repo_result Repo UpToDate
+	[ -z "$REPO_HOOKS_OUTCOME$REPO_HOOKS_PATH$REPO_HOOKS_FOUND$REPO_HOOKS_NOT_EXECUTABLE" ]
+}
+
+@test "repo_hooks_apply: an unmarked folder without a record runs no git at all" {
+	foundation_load repository
+	git_wrapper 'echo "$*" >>"'"$BATS_TEST_TMPDIR"'/git-calls"'
+	repo_hooks_apply Repo "$REPO" '' 1
+	[ "$REPO_HOOKS_OUTCOME" = None ]
+	[ ! -e "$BATS_TEST_TMPDIR/git-calls" ]
+}
+
+@test "repo_hooks_apply: a write git refuses is an Error and records nothing" {
+	foundation_load repository
+	hooks_folder
+	git_wrapper 'case " $* " in *" config --local core.hooksPath "*) exit 1 ;; esac'
+	repo_hooks_apply Repo "$REPO" .githooks 1
+	[ "$REPO_HOOKS_OUTCOME" = Error ]
+	[ ! -e "$(hooks_state)" ]
+}

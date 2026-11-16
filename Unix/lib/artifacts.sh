@@ -438,6 +438,10 @@ ai_repository_dir() {
 			case " $rest" in
 				*[[:space:]]archive=*) rest=$(foundation_trim "${rest%archive=*}") ;;
 			esac
+			# hooks=FOLDER stands before or after archive=FOLDER; what is left of it goes here.
+			case " $rest" in
+				*[[:space:]]hooks=*) rest=$(foundation_trim "${rest%hooks=*}") ;;
+			esac
 			[ -n "$rest" ] || return 1
 			foundation_expand_path "$rest"
 			return 0
