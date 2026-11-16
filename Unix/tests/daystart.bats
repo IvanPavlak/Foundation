@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# The day boundary of the daily startup repository update (Get-RepositoryUpdateDayStart on
+# The day boundary of the once-per-day frequency of startup tasks (Test-StartupTaskDue on
 # Windows): today at the start hour, yesterday at it before that hour. `date` is replaced by a
 # fixed clock: epoch 1000000 at the time of day each test names.
 

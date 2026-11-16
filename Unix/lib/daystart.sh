@@ -1,8 +1,7 @@
 # shellcheck shell=bash
-# Day boundary of the Daily schedule of the startup repository update (Get-RepositoryUpdateDayStart
-# on Windows). POSIX sh, because the shared shell rc sources it in zsh and bash alike; the
-# Invoke-StartupRepositoryUpdate command loads it too, so the shell and the command always agree
-# on when a day begins.
+# Day boundary of the once-per-day frequency of startup tasks (Test-StartupTaskDue on Windows).
+# POSIX sh, so the shared shell rc could source it in zsh and bash alike; lib/startup.sh uses it
+# for the stamps and for the day boundary it records for the shell's prompt check.
 
 # Prints the epoch second the current day began, for a day that starts at HOUR:00 local time:
 # today at HOUR, or yesterday at HOUR while it is still earlier than that - so work past midnight

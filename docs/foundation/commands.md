@@ -78,7 +78,7 @@ with the same layout and their pages in `docs/foundation/custom`. The engine win
 | --- | --- |
 | [AI](modules/AI.md) | Deploys the AI agent rules, skills, Claude Code mods and plugin marketplaces, lists the skills the repository carries and vendors skills and mods from upstream. |
 | [Application](modules/Application.md) | Launches and focuses applications and browser groups. |
-| [Bootstrap](modules/Bootstrap.md) | Provisions a Mac: the Bootstrap runner and its steps - the first-run identity and paths, dotfiles, the Firefox profile, system defaults, power settings, Dock pins, login items, dotnet-ef, Conda environments and the NuGet config. |
+| [Bootstrap](modules/Bootstrap.md) | Provisions a Mac: the Bootstrap runner and its steps - the first-run identity and paths, dotfiles, the Firefox profile, system defaults, power settings, Dock pins, login items, the startup task agent, dotnet-ef, Conda environments and the NuGet config. |
 | [Configuration](modules/Configuration.md) | Adds workspaces, projects, browser groups, layouts and links to the Unix config files and checks them. |
 | [Git](modules/Git.md) | Git shorthands and repository cloning and updating. |
 | [Helper](modules/Helper.md) | General helpers: search, translation, the command reference, the colour palette, countdowns, backups, project runs and the .NET/npm shorthands. |
@@ -86,4 +86,4 @@ with the same layout and their pages in `docs/foundation/custom`. The engine win
 | [Logging](modules/Logging.md) | Finds, pins and prunes the session and error logs every Foundation command writes. |
 | [Tests](modules/Tests.md) | Runs the Unix test suites and the shellcheck lint. |
 | [Window](modules/Window.md) | Desktops (AeroSpace workspaces), window lookup and inspection, moving, centering and resizing windows, workspace layouts and their drawings. |
-| [Workflow](modules/Workflow.md) | Workspaces, projects, their terminals, Docker containers and EF Core migrations. |
+| [Workflow](modules/Workflow.md) | Workspaces, projects, their terminals, startup tasks, Docker containers and EF Core migrations. |

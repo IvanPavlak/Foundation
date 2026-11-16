@@ -220,6 +220,84 @@ back, `Unix/shell/autocomplete-guard.zsh` is the hard limit made for it: sourced
 plugin, it kills a worker still running after 10 seconds with its helper. To catch one still
 running, `sample PID 3` shows what it is doing.
 
+## Startup tasks
+
+The tasks of `startup.conf`; the walkthrough is
+[Invoke-StartupTasks](guides/workflow/Invoke-StartupTasks.md).
+
+### A sign-in task cannot control another app
+
+**Problem:** A task started at sign-in that drives AeroSpace windows or a browser (`Open-Workspace`,
+`Open-Browser`) does nothing in those apps, and the log names AppleScript error -1743 ("Not
+authorized to send Apple events").
+
+**Solution:** macOS refuses the Automation consent to a process with no window, and the LaunchAgent
+that runs the sign-in tasks has none. Give the task `window tab`: it then runs in a WezTerm tab of
+the `FoundationStartup` window, which holds the terminal's own Automation permission. Only commands
+that script no other app (`Update-Repositories`, a backup) can run `window hidden`.
+
+### A sign-in task did not run
+
+**Problem:** A task with the SignIn trigger was added, but nothing ran when the Mac started, or
+nothing ran at the last sign-in.
+
+**Solution:** Nothing runs before you sign in: the tasks start with your session, never at boot or
+on the lock screen. The agent behind them is written by `Set-StartupTasks` (Bootstrap's StartupTasks
+step) only once the first task with that trigger exists, and macOS loads it at the next sign-in,
+not when it is written. Check it, then load it now to try it without signing out (that runs the
+sign-in tasks at once):
+
+```bash
+Set-StartupTasks --list
+Invoke-StartupTasks --trigger SignIn --dry-run
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/foundation.StartupTasks-SignIn.plist
+launchctl print gui/$(id -u)/foundation.StartupTasks-SignIn
+```
+
+Once loaded, `launchctl kickstart gui/$(id -u)/foundation.StartupTasks-SignIn` runs it again. A task
+that is disabled, out of this Mac's scope (`machine`, `host`) or not valid needs no agent, and
+`--list` then shows none.
+
+### A task runs again in every new terminal
+
+**Problem:** A TerminalOpen task with `frequency once-per-day` (or `interval`) runs in each terminal
+you open, not once.
+
+**Solution:** Only a run that succeeded counts for the frequency, so a task that failed is due again
+at the next trigger. A task fails when its command exits non-zero, and some commands do that on
+purpose: `Update-Repositories` exits 1 when a repository needs attention. When that should not fail
+the task, append `|| true` to its command:
+
+```conf
+[RepositoryUpdate]
+command   Update-Repositories --all --no-clone --quiet || true
+```
+
+A task skipped because its condition is not met (offline, for `requires Network`) is tried again by
+a new shell after 300 seconds, not at once. `Invoke-StartupTask NAME --dry-run` says whether the
+task would run now and why not.
+
+### Reading what the sign-in run did
+
+**Problem:** A sign-in task failed or never showed a tab, and the failure report tab is gone.
+
+**Solution:** The sign-in run has no window. What the agent itself printed (an error before any
+task started, a missing bash) is in `.startup-agent-SignIn.log` in the log folder; each task's
+result line, and the output of a hidden task, is in the session log of that run (the newest is
+`Get-LogPath Invoke-StartupTasks`; a terminal-open run writes one too); the last failure report is
+`.startup-report-SignIn.txt`. All three are in the log folder:
+
+```bash
+log_dir=$(Get-LogPath --directory)
+cat "$log_dir/.startup-agent-SignIn.log"
+cat "$log_dir/.startup-report-SignIn.txt"
+less "$(Get-LogPath Invoke-StartupTasks)"
+ls -la "$log_dir"/.startup-task-*
+```
+
+`.startup-task-NAME.stamp` is the time of the last successful run; delete it to make the task due
+now.
+
 ## Docker
 
 ### Docker Desktop shows "An unexpected error occurred" when it is stopped

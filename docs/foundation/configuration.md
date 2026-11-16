@@ -73,7 +73,8 @@ takes `@TYPE`. What the base files ship:
 | `workspace-templates.conf` | a commented example | its templates (Dotfiles: `Project`, `Notes`) |
 | `projects.conf` | `[Dotfiles]`, the repository itself, with a ROOT tab and a DOCS tab running the docs server (WinuX's base self project), and the showcase `[ExampleProject]` (API and UI tabs, the PostgreSQL stack) | its projects (Dotfiles: one ROOT tab serving the docs, as its Windows overlay) |
 | `browser-groups.conf` | example groups the base workspaces open (Google, AI, Email, Calendar, News, YouTube) | every group it uses, the example names included |
-| `repositories.conf` | `base https://github.com`, the update schedule, `[Private]` with the repository itself | its `base`, `startup on`, its groups |
+| `repositories.conf` | `base https://github.com`, `[Private]` with the repository itself | its `base`, its groups |
+| `startup.conf` | `failure-report tab` and the `Network` condition (a default route exists), no task | its conditions and tasks |
 | `vscode-folders.conf`, `vscode-workspaces.conf` | the repository folder and `ExampleProject`, the workspaces `directory` | its folders, its `default` lines |
 | `dock.conf`, `login-items.conf` | `clear off` and WezTerm; AeroSpace | `clear on` and its pins; its login items (`-item` takes one back) |
 | `theme.conf`, `wallpapers.conf` | the SetWallpaper step, the shipped `WinuX_Test` prompt, no `list-color` line (eza's own colours); `Black.jpg` / `White.png` for Test and Default | its `theme`, `prompt-theme` and `list-color` lines (Dotfiles: the user in orange, the date in red); its `[Dark]` / `[Light]` |
@@ -145,7 +146,8 @@ layout file in the set (and the set folder when it is missing, as on Windows).
 | `wallpapers.conf` | `WallpaperDarkSettings`, `WallpaperLightSettings` | Set-Wallpaper |
 | `spinners.conf` | `LoadingSpinners`, `DefaultSpinner` | the loading spinner of long waits, Loading-Spinner |
 | `translate.conf` | `DefaultTranslateLanguages` | Invoke-GoogleTranslate |
-| `repositories.conf` | `RepositoryGroups`, `Universal.GitHub.Base`, `RepositoryUpdate` | Update-Repositories, Initialize-Repository, Invoke-StartupRepositoryUpdate, Get-RepositoryHooks |
+| `repositories.conf` | `RepositoryGroups`, `Universal.GitHub.Base`, `RepositoryUpdate` | Update-Repositories, Initialize-Repository, Get-RepositoryHooks |
+| `startup.conf` | `Startup.Tasks`, `Startup.Conditions`, `Startup.FailureReport` | Invoke-StartupTasks, Invoke-StartupTask, Set-StartupTasks (Bootstrap's StartupTasks step); the StartupTasks stage of the shell rc reads only the gate they write |
 | `greeting.conf` | `TerminalGreeting`, `Universal.FastFetchImageLogo` | Show-TerminalGreeting (`c`), Invoke-Clear (`clear`), Invoke-Fastfetch (`fastfetch*`, `image-logo`), Invoke-Onefetch (`onefetch*`), Open-ProjectTerminals (`onefetch-in-project-terminals`) |
 | `kill-all.conf` | `KillAll.Steps`, `VisibleWindowExclusions`, `TerminateProcessNames` | Kill-All, Open-Workspace |
 | `upstream.conf` | WinuX's own manifest, `Windows/PowerShell/Upstream.conf` (same format) | Merge-Upstreams |
@@ -408,27 +410,16 @@ section of Windows; `@TYPE` lines per machine type):
 ```
 include-default-branch on
 archive-root repos
-startup on
-startup-schedule daily
-startup-day-start-hour 6
-@Test startup-scope Private
 ```
 
 `archive-root` is where an `--archive` run lands: absolute, or relative to `~/Desktop`, which is also
 the default (`RepositoryUpdate.ArchiveRoot` on Windows). `--in-current-directory` replaces it for one run.
 
 `include-default-branch` makes Update-Repositories also fast-forward each default branch
-(`default-branch NAME` names one for every repository, otherwise `origin/HEAD` does); `startup`
-turns on the automatic update (Invoke-StartupRepositoryUpdate: the groups of `startup-scope`,
-group names only, as on Windows - a name that is no group, a repository's included, updates
-nothing - never cloning; without a `startup-scope` line for this machine type it takes the
-`repository-scope` of `bootstrap.conf`, then All, as Windows falls back from
-`RepositoryUpdate.Startup.Scope` to `BootstrapConfig.RepositoryUpdateScope`). All are off by default. `startup-schedule daily` (the default) runs it once a
-day: the first shell after the day starts at `startup-day-start-hour` (0-23, default 6, any other value 6; so a shell
-opened past midnight still counts as the day before), or, when a shell was already open, its
-first prompt after that hour - a Mac woken from sleep updates at the first command you run.
-`startup-schedule interval` runs it at most once per `startup-interval-hours` (whole hours, default 24),
-checked only when a shell starts.
+(`default-branch NAME` names one for every repository, otherwise `origin/HEAD` does). Off by default.
+The automatic update is a startup task: a section of [startup.conf](#startupconf) whose command is
+`Update-Repositories --all --no-clone --quiet` (or `--group NAME...`), see
+[Invoke-StartupTasks](guides/workflow/Invoke-StartupTasks.md).
 
 ### git.conf
 
@@ -540,6 +531,69 @@ a `spacer` is rebuilt on every run, as spacers cannot be compared), backing the 
 line, only adds what is missing. Login items are only ever added; `hidden` starts the app without a
 window. A path may contain spaces in both files.
 
+### startup.conf
+
+```
+failure-report tab
+condition Network 60 2 route -n get default
+condition MyVpn 120 2 scutil --nc status MyVpn | grep -q '^Connected'
+
+[RepositoryUpdate]
+command   Update-Repositories --all --no-clone --quiet
+trigger   SignIn TerminalOpen
+requires  Network
+frequency once-per-day
+window    hidden
+
+[MyWorkspace]
+command   Open-Workspace MyWorkspace
+trigger   SignIn
+requires  MyVpn
+host      My-Mac
+window    tab
+```
+
+Commands this Mac runs on its own, at sign-in or when a terminal opens - the `Startup` section of
+Windows. The base ships `failure-report tab` and the `Network` condition and no task, so nothing
+runs until `startup.local.conf` adds one; the overlay rules do the rest: its lines before the first
+section are added (a condition of yours joins `Network`), its `[Task]` replaces a base task of the
+same name, `-LINE` takes a base line back.
+
+Before the first section:
+
+| Line | Windows key | Effect |
+| --- | --- | --- |
+| `failure-report tab\|none` | `Startup.FailureReport` | after a sign-in run in which a task failed, was skipped or timed out, one terminal tab lists them (`tab`, the default) or nothing does |
+| `condition NAME [TIMEOUT [INTERVAL]] TEST` | `Startup.Conditions` | a named test a task can require: TEST is a bash command line, met when it exits 0 (its output is not shown), run every INTERVAL seconds (default 2) until it is met or TIMEOUT seconds (default 60; 0 tests once) have passed |
+
+Each `[Name]` section is one task (letters, digits, `-` and `_`), run in the order written; every
+line is a flag of [Invoke-StartupTask](modules/Workflow.md#invoke-startuptask):
+
+| Line | Default | Effect |
+| --- | --- | --- |
+| `command CMD` | none: the task only opens a terminal | the command line, run by bash with Foundation's PATH (the commands work, the aliases of the shell rc do not); it has failed when it exits non-zero |
+| `trigger SignIn\|TerminalOpen` | required | one or several, a line each or space-separated; `Unlock`, `Wake` and `Boot` are rejected (macOS has no trigger for them) |
+| `machine TYPE...` | every type | the machine types (`machines.conf`) it runs on |
+| `host NAME...` | every host | the host names it runs on; with `machine`, both must match |
+| `requires CONDITION...` | none | the conditions it waits for before the command; a name with no `condition` line makes the task invalid |
+| `window tab\|hidden` | `tab` | where a sign-in run happens: a WezTerm tab in the `FoundationStartup` window, or a background process with no terminal. A TerminalOpen run is always inline, in the shell that just opened |
+| `keep-open on-failure\|always\|never` | `on-failure` (`always` without a command) | whether the task's tab stays open |
+| `parallel on` | off | the sign-in run starts the task and goes on to the next one without waiting |
+| `frequency every-time\|once-per-boot\|once-per-day\|interval` | `every-time` | how often it runs; only a run that succeeded counts, so a failed or skipped task is due again at the next trigger |
+| `day-start-hour N` | 6 | once-per-day: the hour (0-23) a new day starts, so a shell opened past midnight still counts as the day before |
+| `interval-hours N` | 24 | interval: the hours between two successful runs |
+| `elevation prompt` | none | `sudo` asks once in the task's tab before the command; invalid with `window hidden` and with the TerminalOpen trigger. `relaunch` and `silent` are rejected |
+| `timeout SECONDS` | 600 | how long the sign-in run waits for the task before it moves on (0 waits without limit); the task is never stopped |
+| `enabled off` | on | parks the task |
+
+Any line may carry an `@TYPE` prefix. A task with an unknown key or value, a missing trigger or a
+`requires` with no condition is reported at every run and never started. A hidden task cannot
+script other apps through Apple Events (macOS refuses the Automation consent at sign-in), so a task
+that drives AeroSpace or a browser (`Open-Workspace`) needs a tab. The state lives in the log folder:
+`.startup-task-NAME.stamp` (the last successful run), `.lock` and `.result`,
+`.startup-terminal-open` (the gate a new shell reads) and `.startup-report-SignIn.txt`. The walkthrough
+is [Invoke-StartupTasks](guides/workflow/Invoke-StartupTasks.md).
+
 ### bootstrap.conf
 
 ```
@@ -568,8 +622,7 @@ Set-DockPins
 section; the last line for this machine type wins) names the `repositories.conf` groups the
 RepositoryUpdate step updates, the `RepositoryUpdateScope` of Windows; All, or no line, updates
 every repository. Group names only: a name that is no group (a repository's included) is
-reported with the configured groups, nothing is updated and the step fails. It is also the
-startup update's scope when `repositories.conf` has no `startup-scope` for this machine type. `[Packages]` holds `trust TYPE NAME` (a third-party tap
+reported with the configured groups, nothing is updated and the step fails. `[Packages]` holds `trust TYPE NAME` (a third-party tap
 entry to `brew trust`) and optional `brewfile PATH` lines (default `Unix/Brewfile`, then
 `Unix/Brewfile.local`). `[Spotlight]` holds `index VOLUME on|off`, `[Firewall]` the
 `socketfilterfw` switches `globalstate`, `stealthmode`, `allowsigned`, `allowsignedapp`, and

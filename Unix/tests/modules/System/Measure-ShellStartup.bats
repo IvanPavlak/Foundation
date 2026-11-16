@@ -21,7 +21,7 @@ n=$(($(cat "$BATS_TEST_TMPDIR/count" 2>/dev/null || echo 0) + 1))
 echo "$n" >"$BATS_TEST_TMPDIR/count"
 set -- ${VALUES:-5 9 7}
 shift $(((n - 1) % $#))
-for stage in LineEditing Aliases Prompt Plugins Icons Greeting RepositoryUpdate; do
+for stage in LineEditing Aliases Prompt Plugins Icons Greeting StartupTasks; do
 	case ",$FOUNDATION_STARTUP_SKIP," in *",$stage,"*) continue ;; esac
 	printf '%s\t%s\n' "$stage" "$1" >>"$FOUNDATION_STARTUP_TRACE"
 	printf '%s 1000\n%s\tslow\n' "$stage" "$stage" >>"$FOUNDATION_STARTUP_TRACE"
@@ -40,14 +40,14 @@ in_shell_of() { awk -F'\t' -v n="$1" '$1 == n { print $7 }' <<<"$output"; }
 	[ "$status" -eq 0 ]
 	[[ $output == *"Core"* ]]
 	[[ $output == *"+ FastfetchImageLogo"* ]]
-	[[ $output == *"+ RepositoryUpdate"* ]]
+	[[ $output == *"+ StartupTasks"* ]]
 	# No bare row for a shell that is neither zsh nor bash: one warm-up, then 10 configurations x 2 runs.
 	[[ $output != *"bare"* ]]
 	[ "$(grep -c . "$BATS_TEST_TMPDIR/starts")" -eq 21 ]
-	grep -qxF 'LineEditing,Aliases,Prompt,Plugins,Icons,Greeting,FastfetchImageLogo,OnefetchStyle,RepositoryUpdate|/dev/null|-i -c exit' "$BATS_TEST_TMPDIR/starts"
-	grep -qxF 'Prompt,Plugins,Icons,Greeting,FastfetchImageLogo,OnefetchStyle,RepositoryUpdate|/dev/null|-i -c exit' "$BATS_TEST_TMPDIR/starts"
+	grep -qxF 'LineEditing,Aliases,Prompt,Plugins,Icons,Greeting,FastfetchImageLogo,OnefetchStyle,StartupTasks|/dev/null|-i -c exit' "$BATS_TEST_TMPDIR/starts"
+	grep -qxF 'Prompt,Plugins,Icons,Greeting,FastfetchImageLogo,OnefetchStyle,StartupTasks|/dev/null|-i -c exit' "$BATS_TEST_TMPDIR/starts"
 	# The greeting names come after Greeting: the + Greeting row still leaves them out.
-	grep -qxF 'FastfetchImageLogo,OnefetchStyle,RepositoryUpdate|/dev/null|-i -c exit' "$BATS_TEST_TMPDIR/starts"
+	grep -qxF 'FastfetchImageLogo,OnefetchStyle,StartupTasks|/dev/null|-i -c exit' "$BATS_TEST_TMPDIR/starts"
 }
 
 @test "--leave-one-out and --mode Isolated: Full, then each stage skipped alone" {
@@ -85,8 +85,8 @@ in_shell_of() { awk -F'\t' -v n="$1" '$1 == n { print $7 }' <<<"$output"; }
 	run "${BASH:-bash}" "$cmd" --runs 1 --shell "$shell" --stages greeting,PROMPT --pass-thru
 	[ "$status" -eq 0 ]
 	[ "$(cut -f1 <<<"$output" | paste -sd'|' -)" = 'Configuration|Core|+ Greeting|+ Prompt' ]
-	grep -qxF 'LineEditing,Aliases,Plugins,Icons,FastfetchImageLogo,OnefetchStyle,RepositoryUpdate,Prompt|/dev/null|-i -c exit' "$BATS_TEST_TMPDIR/starts"
-	grep -qxF 'LineEditing,Aliases,Plugins,Icons,FastfetchImageLogo,OnefetchStyle,RepositoryUpdate|/dev/null|-i -c exit' "$BATS_TEST_TMPDIR/starts"
+	grep -qxF 'LineEditing,Aliases,Plugins,Icons,FastfetchImageLogo,OnefetchStyle,StartupTasks,Prompt|/dev/null|-i -c exit' "$BATS_TEST_TMPDIR/starts"
+	grep -qxF 'LineEditing,Aliases,Plugins,Icons,FastfetchImageLogo,OnefetchStyle,StartupTasks|/dev/null|-i -c exit' "$BATS_TEST_TMPDIR/starts"
 }
 
 @test "a zsh or bash gets a bare row first, started without its rc, and Core's Delta is against it" {

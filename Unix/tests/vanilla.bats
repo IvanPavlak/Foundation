@@ -52,6 +52,17 @@ data_lines() { grep -vE '^[[:space:]]*(#|$)' "$base/$1" || true; }
 	[ -z "$output" ]
 }
 
+@test "startup.conf ships no task: no section, only the failure-report setting and the Network condition" {
+	run conf_sections "$base/startup.conf"
+	[ -z "$output" ]
+	run awk '!/^[[:space:]]*(#|$)/ { print $1 }' "$base/startup.conf"
+	[ -z "$(printf '%s\n' "$output" | grep -vxE 'failure-report|condition')" ]
+	run awk '!/^[[:space:]]*(#|$)/ && $1 == "condition" { print $2 }' "$base/startup.conf"
+	[ "$output" = Network ]
+	# The one condition sends nothing anywhere: it reads the routing table.
+	[ "$(awk '$1 == "condition" { $1 = $2 = $3 = $4 = ""; sub(/^ +/, ""); print }' "$base/startup.conf")" = 'route -n get default' ]
+}
+
 @test "the base value of each key equals the fallback its code uses for a missing line" {
 	# FILE KEY VALUE CODE-FILE TEXT: the base line of FILE must read VALUE, and CODE-FILE (under
 	# Unix/) must still hold TEXT, the place that falls back to VALUE.
@@ -94,8 +105,7 @@ logging.conf|maintenance|on|lib/logfile.sh|logfile_setting maintenance on
 logging.conf|maintenance-interval-hours|24|lib/logfile.sh|logfile_setting maintenance-interval-hours 24
 machines.conf|default|Test|lib/config.sh|printf '%s' "${fallback:-Test}"
 machines.conf|small-display-width|3000|lib/layout.sh|small-display-width) || limit=3000
-repositories.conf|startup-schedule|daily|modules/Git/bin/Invoke-StartupRepositoryUpdate|setting startup-schedule daily
-repositories.conf|startup-day-start-hour|6|modules/Git/bin/Invoke-StartupRepositoryUpdate|setting startup-day-start-hour 6
+startup.conf|failure-report|tab|modules/Workflow/bin/Invoke-StartupTasks|startup_setting failure-report tab
 ROWS
 	[ "$failed" -eq 0 ]
 }

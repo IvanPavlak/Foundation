@@ -14,7 +14,7 @@ from the sections of `bootstrap.conf`.
 | File | Line | Default (base) | What it controls |
 | ---- | ---- | -------------- | ---------------- |
 | [`bootstrap.conf`](../../configuration.md#bootstrapconf) | `step NAME on\|off` | none: every step keeps its built-in default (`Bootstrap --list`) | Whether a step runs; before the first section, the last line for this machine type wins |
-| [`bootstrap.conf`](../../configuration.md#bootstrapconf) | `repository-scope All\|GROUP...` | `All` | The `repositories.conf` groups the RepositoryUpdate step updates; space- or comma-separated. Group names only: a name that is no group (a repository's included) updates nothing and fails the step. Also the startup update's scope when `repositories.conf` has no `startup-scope` for this machine type |
+| [`bootstrap.conf`](../../configuration.md#bootstrapconf) | `repository-scope All\|GROUP...` | `All` | The `repositories.conf` groups the RepositoryUpdate step updates; space- or comma-separated. Group names only: a name that is no group (a repository's included) updates nothing and fails the step. The automatic update is a startup task with a scope of its own ([Invoke-StartupTasks](../workflow/Invoke-StartupTasks.md)) |
 | [`bootstrap.conf`](../../configuration.md#bootstrapconf) | `[Packages]` `trust TYPE NAME` | the AeroSpace cask tap | A third-party tap entry Homebrew must trust before `brew bundle` loads it (`brew trust --TYPE NAME`) |
 | [`bootstrap.conf`](../../configuration.md#bootstrapconf) | `[Packages]` `brewfile PATH` | none: `Unix/Brewfile`, then `Unix/Brewfile.local` | The Brewfiles the Packages step bundles, in order; a relative path starts at the repository root |
 | [`bootstrap.conf`](../../configuration.md#bootstrapconf) | `[Spotlight]` `index VOLUME on\|off` | `index / on` | Spotlight indexing per volume (`sudo mdutil -i`), applied by the Spotlight step |
@@ -86,7 +86,8 @@ language defaults in `language.local.conf`, the vault and its settings folder in
 The steps that run a command read that command's own file; their pages hold those values:
 [Set-SystemDefaults](Set-SystemDefaults.md) (SystemDefaults), [Set-PowerSettings](Set-PowerSettings.md)
 (Power), [Set-DockPins](Set-DockPins.md) (DockPins), [Set-LoginItems](Set-LoginItems.md)
-(LoginItems), [Deploy-FirefoxProfile](Deploy-FirefoxProfile.md) (FirefoxProfile),
+(LoginItems), [Set-StartupTasks](Set-StartupTasks.md) (StartupTasks),
+[Deploy-FirefoxProfile](Deploy-FirefoxProfile.md) (FirefoxProfile),
 [Install-DotnetEf](Install-DotnetEf.md) (DotnetEf),
 [Install-CondaEnvironments](Install-CondaEnvironments.md) (CondaEnvironments),
 [Configure-NuGetConfig](Configure-NuGetConfig.md) (NuGetConfig),
@@ -128,8 +129,9 @@ repository-scope All
 ```
 
 A name that is no group (a repository's included) is reported with the configured groups and
-nothing is updated. Without a `startup-scope` of its own in `repositories.conf`, the automatic
-update (Invoke-StartupRepositoryUpdate) uses this scope too.
+nothing is updated. This scope is the step's only: the automatic update is a startup task whose
+command names its own groups (`Update-Repositories --group NAME...`), see
+[Invoke-StartupTasks](../workflow/Invoke-StartupTasks.md).
 
 ## Step 3: Fill in the inline step sections
 

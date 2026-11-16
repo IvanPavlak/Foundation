@@ -55,6 +55,7 @@ Unix/tests/modules/Bootstrap/Install-DotnetSdks.bats	2527
 Unix/tests/modules/Bootstrap/Set-DockPins.bats	6252
 Unix/tests/modules/Bootstrap/Set-LoginItems.bats	3087
 Unix/tests/modules/Bootstrap/Set-PowerSettings.bats	4097
+Unix/tests/modules/Bootstrap/Set-StartupTasks.bats	4500
 Unix/tests/modules/Bootstrap/Set-SystemDefaults.bats	6702
 Unix/tests/modules/Bootstrap/bootstrap-first-run.bats	2790
 Unix/tests/modules/Configuration/Add-BrowserGroup.bats	779
@@ -71,7 +72,6 @@ Unix/tests/modules/Git/GitPull.bats	1091
 Unix/tests/modules/Git/GitStatus.bats	2285
 Unix/tests/modules/Git/GitSwitch.bats	2604
 Unix/tests/modules/Git/Initialize-Repository.bats	3483
-Unix/tests/modules/Git/Invoke-StartupRepositoryUpdate.bats	24333
 Unix/tests/modules/Git/Merge-Upstreams.bats	37767
 Unix/tests/modules/Git/Test-GitRepository.bats	709
 Unix/tests/modules/Git/Update-Repositories.bats	60628
@@ -140,6 +140,8 @@ Unix/tests/modules/Workflow/EfCoreMigrationWizard.bats	11673
 Unix/tests/modules/Workflow/Focus-TerminalTab.bats	3518
 Unix/tests/modules/Workflow/Get-WorkspaceBenchmark.bats	3855
 Unix/tests/modules/Workflow/Get-WorkspaceState.bats	5301
+Unix/tests/modules/Workflow/Invoke-StartupTask.bats	14000
+Unix/tests/modules/Workflow/Invoke-StartupTasks.bats	16000
 Unix/tests/modules/Workflow/Measure-WorkspaceOpen.bats	18249
 Unix/tests/modules/Workflow/Open-DnD.bats	6221
 Unix/tests/modules/Workflow/Open-Project.bats	9834
@@ -154,6 +156,7 @@ Unix/tests/selection.bats	2571
 Unix/tests/shellrc.bats	6494
 Unix/tests/skills.bats	1111
 Unix/tests/spinner.bats	642
+Unix/tests/startup.bats	6000
 Unix/tests/state.bats	2617
 Unix/tests/steps.bats	3176
 Unix/tests/terminal.bats	1010

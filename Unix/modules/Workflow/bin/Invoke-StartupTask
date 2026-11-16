@@ -1,0 +1,243 @@
+#!/usr/bin/env bash
+# Invoke-StartupTask - runs one startup task: any command, with conditions, a frequency and a window.
+#
+# Usage: Invoke-StartupTask NAME [--command CMD] [--trigger Manual|SignIn|TerminalOpen]
+#        [--window current|tab|hidden] [--requires CONDITION]... [--frequency F] [--day-start-hour H]
+#        [--interval-hours H] [--keep-open on-failure|always|never] [--parallel] [--timeout S]
+#        [--elevation none|prompt] [--machine TYPE]... [--host NAME]... [--disabled] [--force]
+#        [--no-condition-wait] [--result-file FILE] [--dry-run]
+#
+# The generic runner behind startup tasks (Unix/config/startup.conf). Every line of a task's
+# section is a flag here, so the same task runs by hand:
+#   Invoke-StartupTask MyUpdate --command 'Update-Repositories --all --no-clone --quiet' --requires Network --frequency once-per-day
+# With NAME and no --command it runs the task of that name from startup.conf in this shell; flags
+# given win over the task's lines. Where it runs stays the caller's choice: --window current (the
+# default) runs it here, tab opens a WezTerm tab for it in the FoundationStartup window, hidden
+# runs it in a background process with no terminal; both wait for its result up to --timeout
+# seconds (default 600, 0 without limit; the task is never stopped), or return at once with
+# --parallel.
+# In order: the gates - a --disabled task is Disabled, one whose --machine or --host does not cover
+# this Mac is OutOfScope, one whose --frequency (every-time, once-per-boot, once-per-day with
+# --day-start-hour, interval with --interval-hours) says it already ran is NotDue; --force passes
+# the first and the last, never the scope. Then the task's lock (the same task never runs twice
+# at once: the loser is AlreadyRunning), the --requires conditions (waited for up to their
+# timeout, or tested once with --no-condition-wait; one not met makes the task Skipped), and the
+# command, run by bash: it has Failed when it exits non-zero. Only a run that Succeeded writes the
+# stamp the frequency is measured from, so a failed or skipped task is due again at the next
+# trigger. --elevation prompt asks sudo once before the command, in the task's tab.
+# --dry-run runs nothing and says whether the task would run now (WouldRun, with the conditions it
+# would wait for) and why not otherwise. Prints one line with the status; exits 1 when the task
+# Failed, was Skipped or TimedOut. --result-file is how a task shell reports back to its starter.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config daystart startup
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+usage='usage: Invoke-StartupTask NAME [--command CMD] [--window current|tab|hidden] [--force] [--dry-run] - see --help'
+name=''
+command_given=0
+given=' '
+force=0
+dry=0
+no_wait=0
+window=Current
+trigger=Manual
+result_file=''
+o_command='' o_requires='' o_machines='' o_hosts='' o_frequency='' o_day='' o_interval=''
+o_keep='' o_parallel='' o_timeout='' o_elevation='' o_enabled=''
+
+# Usage: value FLAG VALUE - fails the command when VALUE is missing.
+value() {
+	[ -n "${2+x}" ] || foundation_die "$1 needs a value - $usage"
+}
+
+while [ $# -gt 0 ]; do
+	case $1 in
+		--command)
+			value "$@"
+			o_command=$2
+			command_given=1
+			shift
+			;;
+		--trigger)
+			value "$@"
+			trigger=$(startup_canon "$2" Manual $STARTUP_TRIGGERS) || foundation_die "Unknown trigger [$2] - valid values: Manual, ${STARTUP_TRIGGERS// /, }"
+			shift
+			;;
+		--window)
+			value "$@"
+			window=$(startup_canon "$2" Current Tab Hidden) || foundation_die "Unknown window [$2] - valid values: current, tab, hidden"
+			shift
+			;;
+		--requires)
+			value "$@"
+			o_requires="$o_requires ${2//,/ }"
+			given="$given requires "
+			shift
+			;;
+		--machine)
+			value "$@"
+			o_machines="$o_machines $(printf '%s' "$2" | tr ',/' '  ')"
+			given="$given machine "
+			shift
+			;;
+		--host)
+			value "$@"
+			o_hosts="$o_hosts ${2//,/ }"
+			given="$given host "
+			shift
+			;;
+		--frequency)
+			value "$@"
+			o_frequency=$(startup_canon "$2" EveryTime OncePerBoot OncePerDay Interval) || foundation_die "Unknown frequency [$2] - valid values: every-time, once-per-boot, once-per-day, interval"
+			shift
+			;;
+		--day-start-hour)
+			value "$@"
+			foundation_whole_number "$2" 0 23 || foundation_die "--day-start-hour [$2] is not an hour from 0 to 23"
+			o_day=$((10#$2))
+			shift
+			;;
+		--interval-hours)
+			value "$@"
+			startup_is_number "$2" || foundation_die "--interval-hours [$2] is not a number"
+			o_interval=$2
+			shift
+			;;
+		--keep-open)
+			value "$@"
+			o_keep=$(startup_canon "$2" OnFailure Always Never) || foundation_die "Unknown keep-open [$2] - valid values: on-failure, always, never"
+			shift
+			;;
+		--parallel) o_parallel=1 ;;
+		--timeout)
+			value "$@"
+			startup_is_number "$2" || foundation_die "--timeout [$2] is not a number of seconds (0 or more)"
+			o_timeout=$2
+			shift
+			;;
+		--elevation)
+			value "$@"
+			o_elevation=$(startup_canon "$2" None Prompt) || foundation_die "Unknown elevation [$2] - valid values: none, prompt (relaunch and silent do not exist on macOS)"
+			shift
+			;;
+		--disabled) o_enabled=0 ;;
+		--force) force=1 ;;
+		--no-condition-wait) no_wait=1 ;;
+		--dry-run) dry=1 ;;
+		--result-file)
+			value "$@"
+			result_file=$2
+			shift
+			;;
+		-v | --verbose) ;;
+		-*) foundation_die "Unknown argument [$1] - $usage" ;;
+		*)
+			[ -z "$name" ] || foundation_die "One task at a time: [$name] and [$1] - $usage"
+			name=$1
+			;;
+	esac
+	shift
+done
+[ -n "$name" ] || foundation_die "A task name is needed - $usage"
+[[ $name =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] || foundation_die "Name [$name] may hold only letters, digits, '-' and '_'"
+
+# Prints the status line and exits with the status's code.
+report() {
+	local text="Startup task [$name] $ST_STATUS${ST_REASON:+ - $ST_REASON}"
+	case $ST_STATUS in
+		Succeeded | Ended) log_success "$text" ;;
+		Failed | TimedOut) log_error "$text" ;;
+		Skipped) log_warning "$text" ;;
+		*) log_step "$text" ;;
+	esac
+	startup_status_ok "$ST_STATUS"
+	exit
+}
+
+# shellcheck disable=SC2034 # the ST_* variables are read by startup_run (lib/startup.sh)
+if [ "$command_given" -eq 0 ]; then
+	# By name alone: the configured task supplies what the command line left out.
+	if ! startup_task_load "$name"; then
+		ST_STATUS=Failed
+		ST_REASON="No startup task named [$name] is configured - pass --command, or add a [$name] section to startup.conf"
+		report
+	fi
+	if [ "$ST_VALID" != 1 ]; then
+		ST_STATUS=Failed
+		ST_REASON="The configured task is not valid: $(printf '%s' "$ST_ERRORS" | paste -sd ';' - | sed 's/;/; /g')"
+		report
+	fi
+	ST_CHECK_SCOPE=1
+else
+	ST_NAME=$name
+	ST_COMMAND=$o_command
+	ST_TRIGGERS=''
+	ST_MACHINES='' ST_HOSTS='' ST_REQUIRES=''
+	ST_FREQUENCY=EveryTime ST_DAY_START_HOUR=6 ST_INTERVAL_HOURS=24 ST_TIMEOUT=600
+	ST_ELEVATION=None ST_ENABLED=1 ST_PARALLEL=0 ST_IN_SCOPE=1
+	if [ -n "$o_command" ]; then ST_KEEP_OPEN=OnFailure; else ST_KEEP_OPEN=Always; fi
+	# A task shell runs what its starter already scoped; by hand, the --machine and --host given.
+	ST_CHECK_SCOPE=1
+fi
+
+# The flags given win over the task's lines.
+# shellcheck disable=SC2034 # read by startup_run
+{
+	case $given in *" requires "*) ST_REQUIRES=$o_requires ;; esac
+	case $given in *" machine "*) ST_MACHINES=$o_machines ;; esac
+	case $given in *" host "*) ST_HOSTS=$o_hosts ;; esac
+	[ -z "$o_frequency" ] || ST_FREQUENCY=$o_frequency
+	[ -z "$o_day" ] || ST_DAY_START_HOUR=$o_day
+	[ -z "$o_interval" ] || ST_INTERVAL_HOURS=$o_interval
+	[ -z "$o_keep" ] || ST_KEEP_OPEN=$o_keep
+	[ -z "$o_parallel" ] || ST_PARALLEL=$o_parallel
+	[ -z "$o_timeout" ] || ST_TIMEOUT=$o_timeout
+	[ -z "$o_elevation" ] || ST_ELEVATION=$o_elevation
+	[ -z "$o_enabled" ] || ST_ENABLED=$o_enabled
+}
+
+# The scope again when --machine or --host was given on the command line.
+case $given in
+	*" machine "* | *" host "*)
+		ST_IN_SCOPE=1
+		if [ -n "$(foundation_trim "$ST_MACHINES")" ]; then
+			ST_IN_SCOPE=0
+			machine=$(foundation_lower "${CONF_MACHINE_TYPE:-$(foundation_machine_type 2>/dev/null)}")
+			for item in $ST_MACHINES; do [ "$(foundation_lower "$item")" = "$machine" ] && ST_IN_SCOPE=1; done
+		fi
+		if [ "$ST_IN_SCOPE" -eq 1 ] && [ -n "$(foundation_trim "$ST_HOSTS")" ]; then
+			ST_IN_SCOPE=0
+			host=$(foundation_hostname)
+			for item in $ST_HOSTS; do foundation_ieq "$item" "$host" && ST_IN_SCOPE=1; done
+		fi
+		;;
+esac
+
+for item in $ST_REQUIRES; do
+	startup_condition_get "$item" || foundation_die "--requires names [$item], which is no condition line of startup.conf"
+done
+if [ "$ST_ELEVATION" = Prompt ]; then
+	[ "$window" != Hidden ] || foundation_die "--elevation prompt needs a tab: sudo cannot ask in a hidden window"
+	[ "$trigger" != TerminalOpen ] || foundation_die "--elevation prompt cannot be combined with the TerminalOpen trigger - use a second task"
+fi
+
+# shellcheck disable=SC2034 # read by startup_run
+{
+	ST_RUN_TRIGGER=$trigger
+	ST_RUN_WINDOW=$window
+	ST_FORCE=$force
+	ST_DRY_RUN=$dry
+	ST_NO_WAIT=$no_wait
+	ST_RESULT_FILE=$result_file
+}
+startup_run
+report

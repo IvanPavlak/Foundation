@@ -42,6 +42,7 @@ In execution order. **Default** is the built-in state before any configuration; 
 | KeyboardLayouts | on | | Set-KeyboardLayouts with `default-keyboard-set`. After the language steps, when any of the three ran, Display-SystemLanguageSettings reads back what they applied | KeyboardLayouts, Display-SystemLanguageSettings |
 | DockPins | on | | Set-DockPins | Taskbar |
 | LoginItems | on | | Set-LoginItems | - |
+| StartupTasks | on | | Set-StartupTasks: writes the LaunchAgent behind the SignIn startup tasks of `startup.conf` (loaded at the next sign-in) and removes one nothing needs; registers nothing while no task has that trigger (see [Invoke-StartupTasks](guides/workflow/Invoke-StartupTasks.md)) | StartupTasks |
 | FirefoxProfile | off | | Deploy-FirefoxProfile | Firefox `user.js` links |
 | VSCodeProfiles | off | | Deploy-VSCodeProfiles: links the local extensions and the `vscode-profiles.conf` profiles into VS Code and installs their extensions | VSCodeProfiles |
 | AiArtifacts | off | sudo-optional | Deploy-AiArtifacts: the skills, mods, rules, prompts and agents into the harnesses of the `deploy` line of `ai-artifacts.conf` (see [AI on a Mac](ai.md)) | CoreAiRules, AiSkills, AiMods |
