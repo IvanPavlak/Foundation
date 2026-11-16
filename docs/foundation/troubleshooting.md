@@ -87,6 +87,12 @@ asks the identity and paths again.
 **Solution:** The scope takes group names only (or `All`). Put the repositories to update in a group
 of their own in `repositories.local.conf` and name that group.
 
+### A repository's tracked git hook does not run
+
+**Problem:** A repository whose `repositories.conf` line carries `hooks=FOLDER` commits without running its `pre-commit` (or another hook), or `Update-Repositories --quiet` ends that repository's line with a hooks note.
+
+**Solution:** Run `Get-RepositoryHooks`: it lists every marked repository with the folder configured, the `core.hooksPath` its clone has and a state. `NotSet` or `Different`: run `Update-Repositories NAME`, which sets it. `MissingFolder` (the note `hooks folder [FOLDER] missing`): the checked-out branch has no such folder, or the word is misspelled; nothing is created for you, so check out a branch that has it or correct the line. `Active, not executable: NAME` (the note `hooks not executable: NAME`): git skips a hook file without the executable bit, and Foundation never changes the mode of a tracked file; fix it in the repository with `git update-index --chmod=+x FOLDER/NAME` and commit. `hooks path [VALUE] was set by hand, left alone` appears once, after the word was removed from a line while the clone held another value than the one Foundation wrote: clear it yourself with `git config --local --unset core.hooksPath` if it should go. A repository without `hooks=` on its line is never touched, even when it contains a hooks folder.
+
 ### The Obsidian vault was not found
 
 **Problem:** The ObsidianSettings step warns `Obsidian vault not found`.

@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# Get-RepositoryHooks - lists the repositories marked to use their tracked git hooks and what each clone has set.
+#
+# Usage: Get-RepositoryHooks
+#
+# One line per repository line of Unix/config/repositories.conf that carries `hooks=FOLDER`, in
+# file order and each folder once: the configured folder, the core.hooksPath found in the clone's
+# own configuration, and a state:
+#
+#   Active          the clone's hooks path is the configured folder
+#   NotSet          the clone has no hooks path yet; the next Update-Repositories sets it
+#   Different       the clone has another hooks path; the next Update-Repositories replaces it
+#   MissingFolder   the configured folder is not in the clone (a branch without it, a typo)
+#   Invalid         the configured folder is absolute or leaves the repository
+#   NotCloned       the repository's folder is not on this machine
+#   NotConfigured   the line has no folder on this machine
+#   NotARepository  the folder is not the top of a git repository
+#
+# An Active line also names the hook files git skips because they lack the executable bit.
+# A clone whose hooks path an earlier run set and whose line no longer carries the word is listed
+# as Stale: the next Update-Repositories of that repository removes the value it set.
+# Read-only: it writes no git configuration and no state. A flag it does not know is an error.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_load config repository
+
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+while [ $# -gt 0 ]; do
+	case $1 in
+		-v | --verbose) ;;
+		*) foundation_die "Unknown argument => $1" ;;
+	esac
+	shift
+done
+
+file=$(conf_path repositories.conf) || foundation_die "Missing Unix/config/repositories.conf"
+base=$(conf_value "$file" base) || base=https://github.com
+
+log_title "Repository Hooks"
+
+seen=$'\n'
+marked=$'\n'
+count=0
+while IFS= read -r group; do
+	while IFS= read -r line; do
+		[ -n "$line" ] || continue
+		repo_entry "$line"
+		[ -n "$REPO_ENTRY_HOOKS" ] || continue
+		hooks=$REPO_ENTRY_HOOKS
+		dir=$(foundation_expand_path "$REPO_ENTRY_DIR")
+		key=$dir
+		[ -n "$key" ] || key="name:$REPO_ENTRY_NAME"
+		case $seen in *$'\n'"$key"$'\n'*) continue ;; esac
+		seen="$seen$key"$'\n'
+		[ -z "$dir" ] || marked="$marked$dir"$'\n'
+		# Named from its URL, as Update-Repositories prints it.
+		url=$(repo_resolve_url "$REPO_ENTRY_SOURCE" "$base")
+		name=${url%/}
+		name=${name##*[:/]}
+		name=${name%.git}
+		[ -n "$name" ] || name=$REPO_ENTRY_NAME
+
+		found=''
+		note=''
+		if [ -z "$dir" ]; then
+			state=NotConfigured
+		elif [ ! -e "$dir" ]; then
+			state=NotCloned
+		elif ! cdup=$(git -C "$dir" rev-parse --show-cdup 2>/dev/null) || [ -n "$cdup" ]; then
+			state=NotARepository
+		else
+			found=$(git -C "$dir" config --local --get core.hooksPath 2>/dev/null)
+			if ! repo_hooks_folder_valid "$hooks"; then
+				state=Invalid
+			elif [ ! -d "$dir/$hooks" ]; then
+				state=MissingFolder
+			elif [ "$found" = "$hooks" ]; then
+				state=Active
+				note=$(repo_hooks_not_executable "$dir" "$hooks")
+				[ -z "$note" ] || note=", not executable: $note"
+			elif [ -z "$found" ]; then
+				state=NotSet
+			else
+				state=Different
+			fi
+		fi
+
+		lead=-n
+		[ "$count" -eq 0 ] && lead=''
+		count=$((count + 1))
+		text="[$name] configured [$hooks], found [${found:-none}] - $state$note"
+		if [ "$state" = Active ] && [ -z "$note" ]; then
+			log_success ${lead:+"$lead"} "$text"
+		else
+			log_segments ${lead:+"$lead"} warning "=> $text"
+		fi
+	done < <(conf_section "$file" "$group")
+done < <(conf_sections "$file")
+
+# What an earlier run set in a clone whose line is no longer marked.
+while IFS=$'\t' read -r dir folder; do
+	[ -n "$dir" ] || continue
+	case $marked in *$'\n'"$dir"$'\n'*) continue ;; esac
+	lead=-n
+	[ "$count" -eq 0 ] && lead=''
+	count=$((count + 1))
+	log_segments ${lead:+"$lead"} warning "=> [$dir] recorded [$folder] - Stale (removed by the next Update-Repositories of that repository)"
+done < <(repo_hooks_records)
+
+[ "$count" -gt 0 ] || log_warning "No repository line of repositories.conf carries hooks=FOLDER"
+exit 0

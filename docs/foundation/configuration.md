@@ -145,7 +145,7 @@ layout file in the set (and the set folder when it is missing, as on Windows).
 | `wallpapers.conf` | `WallpaperDarkSettings`, `WallpaperLightSettings` | Set-Wallpaper |
 | `spinners.conf` | `LoadingSpinners`, `DefaultSpinner` | the loading spinner of long waits, Loading-Spinner |
 | `translate.conf` | `DefaultTranslateLanguages` | Invoke-GoogleTranslate |
-| `repositories.conf` | `RepositoryGroups`, `Universal.GitHub.Base`, `RepositoryUpdate` | Update-Repositories, Invoke-StartupRepositoryUpdate |
+| `repositories.conf` | `RepositoryGroups`, `Universal.GitHub.Base`, `RepositoryUpdate` | Update-Repositories, Initialize-Repository, Invoke-StartupRepositoryUpdate, Get-RepositoryHooks |
 | `greeting.conf` | `TerminalGreeting`, `Universal.FastFetchImageLogo` | Show-TerminalGreeting (`c`), Invoke-Clear (`clear`), Invoke-Fastfetch (`fastfetch*`, `image-logo`), Invoke-Onefetch (`onefetch*`), Open-ProjectTerminals (`onefetch-in-project-terminals`) |
 | `kill-all.conf` | `KillAll.Steps`, `VisibleWindowExclusions`, `TerminateProcessNames` | Kill-All, Open-Workspace |
 | `upstream.conf` | WinuX's own manifest, `Windows/PowerShell/Upstream.conf` (same format) | Merge-Upstreams |
@@ -397,8 +397,10 @@ Update-Repositories and by Initialize-Repository for the same URL - the `Shallow
 
 `archive=FOLDER` before it (`MyTool  /MyUser/MyTool.git  $DEV/MyTool  archive=Projects/Tools`)
 places the repository under `archive-root` in an `Update-Repositories --archive` run: a relative
-path of any depth, spaces allowed, and only `shallow` may follow it on the line. It changes no
+path of any depth, spaces allowed, and only `hooks=FOLDER` and `shallow` may follow it on the line. It changes no
 other run. The copy lands in `<root>/<FOLDER>/<name>`, directly in the root without one.
+
+`hooks=FOLDER` after DIR, before or after `archive=FOLDER` and before `shallow` (`MyRepo  /MyUser/MyRepo.git  $DEV/MyRepo  hooks=.githooks`), marks a repository that tracks its git hooks in a folder of its own: after Update-Repositories clones or updates it, and after Initialize-Repository does for the same URL, `core.hooksPath` of that clone is set to FOLDER, so the hooks run without a command per clone and per machine - the `Hooks` of a `RepositoryGroups` entry on Windows. FOLDER is relative to the repository root. Only the clone's own configuration is written (`git config --local`), only when the value differs, and never `.git/hooks`. It is opt-in per repository: a hook is code the repository runs on your machine at every commit, so a repository whose line has no `hooks=` is never touched, whatever it contains. A folder missing in the clone (a branch without it, a typo), or one that is absolute or leaves the repository, is reported and nothing is written or created; a hook file without the executable bit, which git skips, is named and its mode left alone. What was set is recorded in `~/.local/state/foundation/repository-hooks.state`, so removing the word unsets the value at the next Update-Repositories of that repository only where it is still the one written; a value you set by hand is left alone and reported once. [Get-RepositoryHooks](modules/Git.md#get-repositoryhooks) lists every marked repository with the value its clone has.
 
 Top-level lines before the first group set the repository update (the `RepositoryUpdate`
 section of Windows; `@TYPE` lines per machine type):
@@ -796,4 +798,4 @@ or `default-owner` line naming no profile, an unknown line kind, a malformed `pl
 
 `$XDG_STATE_HOME/foundation` (default `~/.local/state/foundation`) holds `open-workspaces`, the ownership
 record Close-Workspace uses, `WorkspaceBenchmark.csv` (one row per workspace open with its early-move mode, its mode - Plain or Alongside - and the layout's attempts, older files gaining the newer columns on the next write, read by Get-WorkspaceBenchmark, written only with `benchmark on`; `benchmark`, `benchmark-display`, `benchmark-history`, `layout-early-move` and `layout-stable-ms` are set at the top of `workspaces.conf`), `WorkspaceOpenMeasurements.csv` (the runs of Measure-WorkspaceOpen with their layout attempts, its sessions listed by `Measure-WorkspaceOpen --list-sessions`), `browser-groups` (the window each group opened, so a rerun skips
-it), `terminal-windows` (the WezTerm window each `Open-Terminal --window-id NAME` opened), `current-layout` and `ai-mcp-servers.state` (the MCP servers Deploy-AiMcpServers registered per app under an AI profile, so it removes only those). Nothing there is configuration. The pinned clones of the AI manifest sources live in `$XDG_DATA_HOME/foundation/ai-manifests` (default `~/.local/share/foundation/ai-manifests`), outside every repository.
+it), `terminal-windows` (the WezTerm window each `Open-Terminal --window-id NAME` opened), `current-layout`, `ai-mcp-servers.state` (the MCP servers Deploy-AiMcpServers registered per app under an AI profile, so it removes only those) and `repository-hooks.state` (the clones whose `core.hooksPath` Update-Repositories or Initialize-Repository set for a `hooks=FOLDER` line, so removing the word unsets only those). Nothing there is configuration. The pinned clones of the AI manifest sources live in `$XDG_DATA_HOME/foundation/ai-manifests` (default `~/.local/share/foundation/ai-manifests`), outside every repository.
