@@ -379,7 +379,8 @@ repo_hooks_apply() {
 		REPO_HOOKS_OUTCOME=NotARepository
 		return 0
 	fi
-	current=$(git -C "$dir" config --local --get core.hooksPath 2>/dev/null)
+	# git exits 1 for an unset value; that is an answer, not a failure (a caller under `set -e`).
+	current=$(git -C "$dir" config --local --get core.hooksPath 2>/dev/null) || current=''
 	REPO_HOOKS_FOUND=$current
 
 	if [ -z "$hooks" ]; then
