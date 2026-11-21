@@ -16,7 +16,8 @@ Git shorthands and repository cloning and updating, with a link to
 
 [Git-Diff](Git-Diff.md), [GitBranch](GitBranch.md),
 [GitBranchDeleteAndPrune](GitBranchDeleteAndPrune.md), [GitMergeM](GitMergeM.md),
-[GitPull](GitPull.md), [GitSwitch](GitSwitch.md), [Merge-Upstreams](Merge-Upstreams.md),
+[GitPull](GitPull.md), [GitSwitch](GitSwitch.md),
+[GitWorktreeRemoveAndPrune](GitWorktreeRemoveAndPrune.md), [Merge-Upstreams](Merge-Upstreams.md),
 [Test-GitRepository](Test-GitRepository.md)
 
 ## Related

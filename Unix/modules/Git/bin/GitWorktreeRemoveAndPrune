@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+# GitWorktreeRemoveAndPrune - removes linked worktrees and offers to delete their branches. Alias: gwd
+#
+# Usage: GitWorktreeRemoveAndPrune [WORKTREE... | --worktree WORKTREE...] [--force]
+#
+# Runs `git worktree prune` first, so a worktree whose folder was deleted by hand is dropped and
+# never offered, then `git worktree remove` on each WORKTREE: the branch checked out in it or its
+# path (a relative path resolves against the current folder). git refuses a worktree with
+# uncommitted changes or untracked files; --force passes `--force` and discards them. The main
+# worktree, the one the shell is in and a locked one are never removed (each is reported and the
+# others still go ahead). WORKTREE may also be given as --worktree WORKTREE (the Windows
+# -Worktree), and `a, b` works as in PowerShell. Without WORKTREE the linked worktrees are offered
+# as `branch -> path` in a menu that takes one or more; locked ones are listed apart and not
+# offered, and Enter removes nothing and exits 0. When a removed worktree had a branch it asks
+# once, Enter meaning No: Yes runs GitBranchDeleteAndPrune on those branches, Force runs it with
+# --force; --force of this command never answers that question. Exit status 1 when a named
+# worktree was not removed.
+_foundation=${BASH_SOURCE[0]}
+while [ -L "$_foundation" ]; do
+	_link=$(readlink "$_foundation")
+	case $_link in /*) _foundation=$_link ;; *) _foundation=$(dirname "$_foundation")/$_link ;; esac
+done
+. "$(dirname "$_foundation")/../../../lib/foundation.sh" || exit 1
+foundation_require_bash || exit 1
+foundation_normalize_args "$@"
+set -- "${FOUNDATION_ARGS[@]}"
+foundation_common_flags "$@"
+
+given=()
+force=0
+while [ $# -gt 0 ]; do
+	case $1 in
+		--worktree | -v | --verbose) ;;
+		--force) force=1 ;;
+		-*) foundation_die "Unknown argument => $1" ;;
+		*) foundation_split_list given "$1" ;;
+	esac
+	shift
+done
+
+# A folder in one spelling: symlinks resolved (/var and /private/var on macOS), no trailing slash.
+canonical() {
+	if [ -d "$1" ]; then (cd "$1" 2>/dev/null && pwd -P) || printf '%s' "${1%/}"; else printf '%s' "${1%/}"; fi
+}
+
+git worktree prune || exit 1
+porcelain=$(git worktree list --porcelain) || exit 1
+
+# One entry per blank-line-separated block of the porcelain output; the first is the main worktree.
+paths=() heads=() names=() locked=()
+while IFS= read -r line; do
+	case $line in
+		'worktree '*)
+			paths+=("${line#worktree }")
+			heads+=('')
+			names+=('')
+			locked+=(0)
+			;;
+		'HEAD '*) heads[${#paths[@]} - 1]=${line#HEAD } ;;
+		'branch refs/heads/'*) names[${#paths[@]} - 1]=${line#branch refs/heads/} ;;
+		locked | 'locked '*) locked[${#paths[@]} - 1]=1 ;;
+	esac
+done <<<"$porcelain"
+[ ${#paths[@]} -gt 0 ] || exit 1
+
+current=$(git rev-parse --show-toplevel 2>/dev/null) && current=$(canonical "$current") || current=''
+canon=() labels=()
+for i in "${!paths[@]}"; do
+	canon+=("$(canonical "${paths[i]}")")
+	if [ -n "${names[i]}" ]; then
+		labels+=("${names[i]} -> ${paths[i]}")
+	else
+		labels+=("(detached ${heads[i]:0:7}) -> ${paths[i]}")
+	fi
+done
+
+# Why entry I may not be removed, or nothing when it may.
+refusal() {
+	if [ "$1" -eq 0 ]; then
+		printf 'is the main worktree, which git never removes'
+	elif [ -n "$current" ] && [ "${canon[$1]}" = "$current" ]; then
+		printf 'is the worktree you are in - leave it first'
+	elif [ "${locked[$1]}" -eq 1 ]; then
+		printf 'is locked - run git worktree unlock first'
+	fi
+}
+
+failed=0
+targets=()
+if [ ${#given[@]} -gt 0 ]; then
+	for value in "${given[@]}"; do
+		match=''
+		for i in "${!paths[@]}"; do
+			[ -n "${names[i]}" ] && [ "${names[i]}" = "$value" ] && {
+				match=$i
+				break
+			}
+		done
+		if [ -z "$match" ]; then
+			candidate=$value
+			case $candidate in /*) ;; *) candidate=$PWD/$candidate ;; esac
+			candidate=$(canonical "$candidate")
+			for i in "${!paths[@]}"; do
+				[ "${canon[i]}" = "$candidate" ] && {
+					match=$i
+					break
+				}
+			done
+		fi
+		if [ -z "$match" ]; then
+			log_error "No worktree has [$value] checked out or lives at that path"
+			failed=1
+			continue
+		fi
+		reason=$(refusal "$match")
+		if [ -n "$reason" ]; then
+			log_error "[$value] $reason"
+			failed=1
+			continue
+		fi
+		case " ${targets[*]-} " in *" $match "*) ;; *) targets+=("$match") ;; esac
+	done
+else
+	options=() indexes=()
+	for i in "${!paths[@]}"; do
+		[ "$i" -eq 0 ] && continue
+		[ -n "$current" ] && [ "${canon[i]}" = "$current" ] && continue
+		if [ "${locked[i]}" -eq 1 ]; then
+			log_warning "[locked] ${labels[i]} - not offered, run git worktree unlock first"
+			continue
+		fi
+		options+=("${labels[i]}")
+		indexes+=("$i")
+	done
+	if [ ${#options[@]} -eq 0 ]; then
+		log_warning "No worktree to remove besides the main and the current one"
+		exit 0
+	fi
+	selection=$(foundation_resolve_selection "[Worktrees]" "Enter worktree(s) to remove by number or name, or press [Enter] to remove none" 1 1 "${options[@]}") || exit 1
+	while IFS= read -r label; do
+		[ -n "$label" ] || continue
+		for k in "${!options[@]}"; do
+			[ "${options[k]}" = "$label" ] && targets+=("${indexes[k]}")
+		done
+	done <<<"$selection"
+fi
+
+[ ${#targets[@]} -gt 0 ] || exit "$failed"
+# Keeps the answer apart from git's output below it.
+printf '\n' >&2
+
+branches=()
+for i in "${targets[@]}"; do
+	if [ "$force" -eq 1 ]; then
+		git worktree remove --force "${paths[i]}"
+	else
+		git worktree remove "${paths[i]}"
+	fi || {
+		failed=1
+		continue
+	}
+	log_success "Removed ${labels[i]}"
+	[ -n "${names[i]}" ] && branches+=("${names[i]}")
+done
+
+[ ${#branches[@]} -gt 0 ] || exit "$failed"
+list=$(printf '%s, ' "${branches[@]}")
+list=${list%, }
+# No terminal answers No, as Enter does.
+answer=$(FOUNDATION_SELECTION_DEFAULT=No foundation_resolve_selection "[Branches]" "Also delete branch(es) $list? Force uses git branch -D" 0 0 Yes No Force) || answer=No
+# Keeps the answer apart from git's output below it.
+case $answer in Yes | Force) printf '\n' >&2 ;; esac
+case $answer in
+	Yes) "$BASH" "$(dirname "$_foundation")/GitBranchDeleteAndPrune" "${branches[@]}" || failed=1 ;;
+	Force) "$BASH" "$(dirname "$_foundation")/GitBranchDeleteAndPrune" "${branches[@]}" --force || failed=1 ;;
+esac
+exit "$failed"

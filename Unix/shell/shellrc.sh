@@ -319,6 +319,7 @@ EOF_FOUNDATION_APPS
 	alias rp='Run-Project'
 	alias gb='GitBranch'
 	alias gbd='GitBranchDeleteAndPrune'
+	alias gwd='GitWorktreeRemoveAndPrune'
 	alias gsw='GitSwitch'
 	alias gp='GitPull'
 	alias gmm='GitMergeM'

@@ -175,7 +175,7 @@ scripts() {
 		Move-Windows Reset-Windows Focus-VirtualDesktop Set-WorkspaceWindowLayout Docker-Cleanup Add-BrowserGroup \
 		Open-Docker Open-Terminal Open-Obsidian Open-SecureBrowser Close-ProjectTerminals Close-Workspace Close-Project \
 		Run-Project Start-Containers Send-WakeOnLan Add-Project Add-Workspace Add-WindowLayout Add-SymbolicLink \
-		Open-Browser Open-VSCode Open-Project Visualize-Layouts GitBranchDeleteAndPrune; do
+		Open-Browser Open-VSCode Open-Project Visualize-Layouts GitBranchDeleteAndPrune GitWorktreeRemoveAndPrune; do
 		for flag in --bogus-flag -WhatIf; do
 			# Set-SystemDefaults and Close-Workspace document --dry-run, so -WhatIf is their dry run
 			# (below).

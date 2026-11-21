@@ -375,6 +375,7 @@ b Invoke-Browser
 rp Run-Project
 gb GitBranch
 gbd GitBranchDeleteAndPrune
+gwd GitWorktreeRemoveAndPrune
 gsw GitSwitch
 gp GitPull
 gmm GitMergeM
