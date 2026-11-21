@@ -14,7 +14,6 @@ Workspaces, projects, their terminals, startup tasks, Docker containers and EF C
 | `Invoke-StartupTask` | `startup.conf`, `machines.conf` | [Invoke-StartupTask](Invoke-StartupTask.md) |
 | `Invoke-StartupTasks` | `startup.conf`, `machines.conf` | [Invoke-StartupTasks](Invoke-StartupTasks.md) |
 | `Measure-WorkspaceOpen` | `workspaces.conf`, `workspace-templates.conf` | [Measure-WorkspaceOpen](Measure-WorkspaceOpen.md) |
-| `Open-DnD` | `dnd.conf` | [Open-DnD](Open-DnD.md) |
 | `Open-Project` | `projects.conf` | [Open-Project](Open-Project.md) |
 | `Open-ProjectSwagger` | `browser-groups.conf` | [Open-ProjectSwagger](Open-ProjectSwagger.md) |
 | `Open-ProjectTerminals` | `projects.conf`, `greeting.conf` | [Open-ProjectTerminals](Open-ProjectTerminals.md) |

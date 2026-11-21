@@ -143,7 +143,6 @@ Unix/tests/modules/Workflow/Get-WorkspaceState.bats	5301
 Unix/tests/modules/Workflow/Invoke-StartupTask.bats	14000
 Unix/tests/modules/Workflow/Invoke-StartupTasks.bats	16000
 Unix/tests/modules/Workflow/Measure-WorkspaceOpen.bats	18249
-Unix/tests/modules/Workflow/Open-DnD.bats	6221
 Unix/tests/modules/Workflow/Open-Project.bats	9834
 Unix/tests/modules/Workflow/Open-ProjectSwagger.bats	12996
 Unix/tests/modules/Workflow/Open-ProjectTerminals.bats	24876

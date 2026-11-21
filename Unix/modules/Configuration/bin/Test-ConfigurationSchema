@@ -25,8 +25,6 @@
 #   machines.conf         every machine type it names, every @TYPE prefix of any file and every
 #                         layouts/<Type>/ set is one of its `type` lines; the dev root ($DEV) is
 #                         a folder
-#   dnd.conf              pdf groups are pdfs.conf sections, browser groups are
-#                         browser-groups.conf groups (path, last segment or URL label)
 #   vscode-workspaces.conf  each default names a workspaces.conf section and a .code-workspace
 #                         file in its directory
 #   ai-artifacts.conf     every harness of the deploy line is an ai-harnesses.conf section; exclude
@@ -326,17 +324,6 @@ if [ -f "$cfg/machines.conf" ]; then
 fi
 
 # Smaller cross-references.
-if [ -f "$cfg/dnd.conf" ]; then
-	pdf_groups=$(sections_of pdfs.conf)
-	while IFS= read -r campaign; do
-		while read -r kind value; do
-			case $kind in
-				pdf) in_list "$value" "$pdf_groups" || problem "dnd.conf [$campaign]: pdf group [$value] is not in pdfs.conf" ;;
-				browser) in_list "$value" "$groups_all" || problem "dnd.conf [$campaign]: browser group [$value] is not in browser-groups.conf" ;;
-			esac
-		done < <(conf_section "$cfg/dnd.conf" "$campaign")
-	done < <(conf_sections "$cfg/dnd.conf")
-fi
 if [ -f "$cfg/vscode-workspaces.conf" ]; then
 	dir=$(foundation_expand_path "$(conf_value "$cfg/vscode-workspaces.conf" directory 2>/dev/null || echo '$DOTFILES_ROOT/VSCode/Workspaces')")
 	while read -r kind ws name; do

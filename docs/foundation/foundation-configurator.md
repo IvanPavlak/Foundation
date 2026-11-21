@@ -54,7 +54,7 @@ It is also model-invoked, so "configure Foundation on this Mac with me" or "add 
     | `layouts/<Type>/<Workspace>_<Type>.conf` | `Modules/Window/Layouts/<Type>/<Workspace>_<Type>.psd1`, one per Windows machine type |
     | `machines.conf` | `HostnameToMachineType`, `BasePaths` |
     | `startup.conf` | `Startup.Tasks`, `Startup.Conditions`, `Startup.FailureReport` |
-    | `wake-on-lan.conf`, `pdfs.conf`, `dnd.conf`, `obsidian.conf` | `WakeOnLanConfig`, `AcrobatPdfGroups`, `CampaignResources`, `Obsidian` |
+    | `wake-on-lan.conf`, `pdfs.conf`, `obsidian.conf` | `WakeOnLanConfig`, `AcrobatPdfGroups`, `Obsidian` |
     | `Unix/Brewfile.local` | the app-list overlays (`*.local.csv`), for a package Windows has a winget, Scoop or Chocolatey id for |
 
     The full map, every Unix file with its Windows source, is the Files table of [Unix Configuration](configuration.md#files).
