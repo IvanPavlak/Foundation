@@ -87,7 +87,7 @@ takes `@TYPE`. What the base files ship:
 | `ai-artifacts.conf` | `use rules CoreAiRules` (the example rules) and commented source examples; no `deploy` line, no source | its `deploy` lines, sources, `exclude` and `use` lines (Dotfiles: Claude Code, Codex and Gemini CLI, a local skills repository as a checkout and a manifest source, its own rules) |
 | `ai-profiles.conf` | the line kinds and a commented example; no profile, so profiles are off | its `host`, `default`, `shared` and `default-owner` lines and one `[Profile]` section each (Dotfiles: `Personal` by default, `Work` for one named host) |
 | `ai-harnesses.conf` | the inactive catalogue: `claude-code`, `codex`, `gemini-cli`, `copilot` | a section of its own for another app, or one replacing a base harness |
-| `ai-marketplaces.conf`, `wake-on-lan.conf`, `pdfs.conf`, `dnd.conf` | a commented example, no entries | its marketplaces and `[plugin:NAME]` sections, machines, PDF groups and campaigns |
+| `ai-marketplaces.conf`, `wake-on-lan.conf`, `pdfs.conf` | a commented example, no entries | its marketplaces and `[plugin:NAME]` sections, machines and PDF groups |
 | `package-pins.conf` | the line kind and a commented example, no pin | its `brew FORMULA` lines |
 | `ai-mcp-servers.conf` | the line kinds and a commented example; no `deploy` line, no server | its `deploy` line and servers (Dotfiles: Linear, Supermemory, Appllama, Mobbin, Awwwards and Playwright into Claude Code and Codex, which its AI profiles pick from) |
 | `greeting.conf` | the clear and fastfetch settings, onefetch off with no arguments, separator or colors (WinuX's base), no `image-logo` (every machine type shows the text logo of its fastfetch config) | its `@TYPE image-logo` lines; `onefetch on` with its arguments, separator and colors |
@@ -126,7 +126,6 @@ layout file in the set (and the set folder when it is missing, as on Windows).
 | `list-functions.conf` | `ListFunctionsColors`, `ShowFunctionDetailsColors`, `FunctionDiscrepancyExclusions` | List-Functions |
 | `machines.conf` | `ValidMachineTypes`, `HostnameToMachineType`, `DefaultMachineType`, `SmallDisplayMachineType`, `LayoutMachineTypeOverrides`, `BasePaths.<Type>.Dev` | machine type, layout set, the dev root `$DEV` of every path; Initialize-Configuration writes it |
 | `git.conf` | `GitConfig.UserName`, `GitConfig.UserEmail`, `GitStatusArguments` | Bootstrap's GitIdentity step; Initialize-Configuration writes it; Test-ConfigurationSchema notes an unset one; GitStatus (`status-arguments`) |
-| `dnd.conf` | `CampaignResources` | Open-DnD |
 | `obsidian.conf` | `Obsidian.Vault`, `Obsidian.DefaultWorkspace`, `MachineSpecificPaths.ObsidianDirectory`, the Obsidian link of `SymbolicLinks` | Open-Obsidian, git-obsidian, Bootstrap's ObsidianSettings step |
 | `pdfs.conf` | `AcrobatPdfGroups`, the PDF paths of `MachineSpecificPaths` | Open-Acrobat |
 | `docker.conf` | `DockerComposeFiles`, `DockerTimeouts`, `DockerCleanupActions`, `DockerCleanupStartMode`, `PathTemplates.DockerDirectory`; `cli-install` is Foundation's own | Start-Containers, Open-Docker, DockerWizard, Docker-Cleanup, Run-Project, Kill-All, Configure-DockerDesktop |

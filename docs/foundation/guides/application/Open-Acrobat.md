@@ -67,8 +67,7 @@ Test-ConfigurationSchema --quiet
 grep -n -A5 '^\[MyProject\]' Unix/config/pdfs.local.conf
 ```
 
-Test-ConfigurationSchema checks the PDF groups `dnd.conf` names; the paths themselves are checked
-when the group opens.
+The paths of a group are checked when the group opens.
 
 ## Verification
 
