@@ -35,8 +35,8 @@ only prints its usage, and any other argument is refused, so neither commits nor
 
 ## [GitBranchDeleteAndPrune](https://github.com/IvanPavlak/Foundation/blob/master/Unix/modules/Git/bin/GitBranchDeleteAndPrune)
 
-- **Description:** Force-deletes a local branch and prunes stale `origin` refs. The Windows `-BranchName` names the branch too; a flag it does not know (`-WhatIf` included) is an error and nothing is deleted.
-- **Usage:** `GitBranchDeleteAndPrune BRANCH | --branch-name BRANCH`
+- **Description:** Force-deletes a local branch and prunes stale `origin` refs. The Windows `-BranchName` names the branch too; a flag it does not know (`-WhatIf` included) is an error and nothing is deleted. Without a branch it lists the local branches (the checked-out one left out) in a menu that takes one or more by number or name; each picked branch is deleted on its own, `origin` is pruned once when at least one was deleted, and Enter deletes nothing and exits 0. Without a terminal the menu cannot be answered and the command fails, deleting nothing.
+- **Usage:** `GitBranchDeleteAndPrune [BRANCH | --branch-name BRANCH]`
 - **Alias:** `gbd`
 
 ## [GitMergeM](https://github.com/IvanPavlak/Foundation/blob/master/Unix/modules/Git/bin/GitMergeM)

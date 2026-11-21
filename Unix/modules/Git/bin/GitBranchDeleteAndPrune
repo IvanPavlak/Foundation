@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# GitBranchDeleteAndPrune - force-deletes a local branch and prunes stale origin refs. Alias: gbd
+# GitBranchDeleteAndPrune - force-deletes local branches and prunes stale origin refs. Alias: gbd
 #
-# Usage: GitBranchDeleteAndPrune BRANCH | --branch-name BRANCH
+# Usage: GitBranchDeleteAndPrune [BRANCH | --branch-name BRANCH]
 #
 # BRANCH may also be given as --branch-name BRANCH (the Windows -BranchName); a flag it does not
-# know is an error, never a branch name.
+# know is an error, never a branch name. Without BRANCH the local branches (the checked-out one
+# left out) are offered in a menu that takes one or more; Enter deletes nothing and exits 0.
 _foundation=${BASH_SOURCE[0]}
 while [ -L "$_foundation" ]; do
 	_link=$(readlink "$_foundation")
@@ -29,6 +30,36 @@ while [ $# -gt 0 ]; do
 	shift
 done
 
-[ -n "$branch" ] || foundation_die "Usage: GitBranchDeleteAndPrune BRANCH"
-git branch -D "$branch" || exit 1
-git remote prune origin
+branches=()
+if [ -n "$branch" ]; then
+	branches=("$branch")
+else
+	# Full refs, so a tag of the same name never makes a short name ambiguous.
+	refs=$(git for-each-ref --format='%(refname)' refs/heads/) || exit 1
+	current=$(git symbolic-ref -q HEAD) || current=''
+	options=()
+	while IFS= read -r ref; do
+		[ -n "$ref" ] && [ "$ref" != "$current" ] && options+=("${ref#refs/heads/}")
+	done <<<"$refs"
+	if [ ${#options[@]} -eq 0 ]; then
+		log_warning "No local branch to delete besides the checked-out one"
+		exit 0
+	fi
+	selection=$(foundation_resolve_selection "[Local Branches]" "Enter branch(es) to delete by number or name, or press [Enter] to delete none" 1 1 "${options[@]}") || exit 1
+	while IFS= read -r name; do [ -n "$name" ] && branches+=("$name"); done <<<"$selection"
+	[ ${#branches[@]} -gt 0 ] || exit 0
+	# Keeps the answer apart from git's output below it.
+	printf '\n' >&2
+fi
+
+# Each branch on its own, so one that fails does not keep the others; prune once at the end,
+# and only when something was deleted.
+failed=0
+deleted=0
+for name in "${branches[@]}"; do
+	if git branch -D "$name"; then deleted=$((deleted + 1)); else failed=1; fi
+done
+if [ "$deleted" -gt 0 ]; then
+	git remote prune origin || failed=1
+fi
+exit "$failed"

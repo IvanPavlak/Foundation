@@ -25,9 +25,42 @@ setup() {
 	! git show-ref --verify -q refs/remotes/origin/doomed || false
 }
 
-@test "without a name it fails and deletes nothing" {
+@test "without a name and without a terminal it fails and deletes nothing" {
+	git branch doomed
 	run "${BASH:-bash}" "$bin/GitBranchDeleteAndPrune"
 	[ "$status" -ne 0 ]
+	git show-ref --verify -q refs/heads/master
+	git show-ref --verify -q refs/heads/doomed
+}
+
+@test "without a name the menu lists every branch but the checked-out one and deletes the ones picked" {
+	git branch alpha
+	git branch beta
+	git branch gamma
+	printf '1, gamma\n' >"$FOUNDATION_TTY"
+	run "${BASH:-bash}" "$bin/GitBranchDeleteAndPrune"
+	[ "$status" -eq 0 ]
+	[[ $output == *"[Local Branches]"* ]]
+	[[ $output == *"alpha"* ]]
+	[[ $output != *"] master"* ]]
+	! git show-ref --verify -q refs/heads/alpha || false
+	git show-ref --verify -q refs/heads/beta
+	! git show-ref --verify -q refs/heads/gamma || false
+	git show-ref --verify -q refs/heads/master
+}
+
+@test "without a name an empty answer deletes nothing and succeeds" {
+	git branch keep
+	printf '\n' >"$FOUNDATION_TTY"
+	run "${BASH:-bash}" "$bin/GitBranchDeleteAndPrune"
+	[ "$status" -eq 0 ]
+	git show-ref --verify -q refs/heads/keep
+}
+
+@test "without a name and no branch besides the checked-out one it asks nothing" {
+	run "${BASH:-bash}" "$bin/GitBranchDeleteAndPrune"
+	[ "$status" -eq 0 ]
+	[[ $output == *"No local branch to delete"* ]]
 	git show-ref --verify -q refs/heads/master
 }
 
