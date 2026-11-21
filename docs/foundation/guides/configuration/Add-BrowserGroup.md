@@ -64,8 +64,8 @@ Docs https://example.com/docs
 Test-ConfigurationSchema --quiet
 ```
 
-It reports an `Open-Browser` line of `workspaces.conf` (and a `browser` line of `dnd.conf`) that
-names no group, group segment or URL label.
+It reports an `Open-Browser` line of `workspaces.conf` that names no group, group segment or URL
+label.
 
 ## Verification
 
