@@ -71,6 +71,7 @@ Unix/tests/modules/Git/GitMergeM.bats	2029
 Unix/tests/modules/Git/GitPull.bats	1091
 Unix/tests/modules/Git/GitStatus.bats	2285
 Unix/tests/modules/Git/GitSwitch.bats	2604
+Unix/tests/modules/Git/GitWorktreeRemoveAndPrune.bats	3000
 Unix/tests/modules/Git/Initialize-Repository.bats	3483
 Unix/tests/modules/Git/Merge-Upstreams.bats	37767
 Unix/tests/modules/Git/Test-GitRepository.bats	709

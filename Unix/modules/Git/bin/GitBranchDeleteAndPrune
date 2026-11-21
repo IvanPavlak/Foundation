@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
-# GitBranchDeleteAndPrune - force-deletes local branches and prunes stale origin refs. Alias: gbd
+# GitBranchDeleteAndPrune - deletes local branches and prunes stale origin refs. Alias: gbd
 #
-# Usage: GitBranchDeleteAndPrune [BRANCH | --branch-name BRANCH]
+# Usage: GitBranchDeleteAndPrune [BRANCH... | --branch-name BRANCH...] [--force]
 #
-# BRANCH may also be given as --branch-name BRANCH (the Windows -BranchName); a flag it does not
-# know is an error, never a branch name. Without BRANCH the local branches (the checked-out one
-# left out) are offered in a menu that takes one or more; Enter deletes nothing and exits 0.
+# Each BRANCH is deleted with `git branch -d`, which refuses one that is not fully merged into its
+# upstream or HEAD (a squash-merged branch included); the refused ones are named and offered once
+# for `git branch -D`, Enter meaning No. --force deletes with -D straight away and asks nothing.
+# BRANCH may also be given as --branch-name BRANCH (the Windows -BranchName), and `a, b` works as
+# in PowerShell; a flag it does not know is an error, never a branch name. Without BRANCH the
+# local branches (the checked-out one left out) are offered in a menu that takes one or more;
+# Enter deletes nothing and exits 0. `git remote prune origin` runs once, only when at least one
+# branch was deleted. Exit status 1 when a branch was not deleted.
 _foundation=${BASH_SOURCE[0]}
 while [ -L "$_foundation" ]; do
 	_link=$(readlink "$_foundation")
@@ -17,23 +22,19 @@ foundation_normalize_args "$@"
 set -- "${FOUNDATION_ARGS[@]}"
 foundation_common_flags "$@"
 
-branch=''
+branches=()
+force=0
 while [ $# -gt 0 ]; do
 	case $1 in
 		--branch-name | -v | --verbose) ;;
+		--force) force=1 ;;
 		-*) foundation_die "Unknown argument => $1" ;;
-		*)
-			[ -z "$branch" ] || foundation_die "One branch at a time - got [$branch] and [$1]"
-			branch=$1
-			;;
+		*) foundation_split_list branches "$1" ;;
 	esac
 	shift
 done
 
-branches=()
-if [ -n "$branch" ]; then
-	branches=("$branch")
-else
+if [ ${#branches[@]} -eq 0 ]; then
 	# Full refs, so a tag of the same name never makes a short name ambiguous.
 	refs=$(git for-each-ref --format='%(refname)' refs/heads/) || exit 1
 	current=$(git symbolic-ref -q HEAD) || current=''
@@ -54,11 +55,32 @@ fi
 
 # Each branch on its own, so one that fails does not keep the others; prune once at the end,
 # and only when something was deleted.
+flag=-d
+[ "$force" -eq 1 ] && flag=-D
 failed=0
 deleted=0
+refused=()
 for name in "${branches[@]}"; do
-	if git branch -D "$name"; then deleted=$((deleted + 1)); else failed=1; fi
+	if git branch "$flag" "$name"; then deleted=$((deleted + 1)); else refused+=("$name"); fi
 done
+
+# Only a plain delete asks: --force already used -D, and a branch -D refuses (missing, checked
+# out in a worktree) would only fail again.
+if [ ${#refused[@]} -gt 0 ]; then
+	failed=1
+	if [ "$force" -eq 0 ]; then
+		list=$(printf '%s, ' "${refused[@]}")
+		list=${list%, }
+		log_warning "Not deleted: $list (not fully merged, or see git's message above)"
+		if foundation_confirm "[Unmerged Branches]" "Force-delete $list with git branch -D?"; then
+			printf '\n' >&2
+			failed=0
+			for name in "${refused[@]}"; do
+				if git branch -D "$name"; then deleted=$((deleted + 1)); else failed=1; fi
+			done
+		fi
+	fi
+fi
 if [ "$deleted" -gt 0 ]; then
 	git remote prune origin || failed=1
 fi

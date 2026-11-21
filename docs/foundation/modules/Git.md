@@ -35,8 +35,8 @@ only prints its usage, and any other argument is refused, so neither commits nor
 
 ## [GitBranchDeleteAndPrune](https://github.com/IvanPavlak/Foundation/blob/master/Unix/modules/Git/bin/GitBranchDeleteAndPrune)
 
-- **Description:** Force-deletes a local branch and prunes stale `origin` refs. The Windows `-BranchName` names the branch too; a flag it does not know (`-WhatIf` included) is an error and nothing is deleted. Without a branch it lists the local branches (the checked-out one left out) in a menu that takes one or more by number or name; each picked branch is deleted on its own, `origin` is pruned once when at least one was deleted, and Enter deletes nothing and exits 0. Without a terminal the menu cannot be answered and the command fails, deleting nothing.
-- **Usage:** `GitBranchDeleteAndPrune [BRANCH | --branch-name BRANCH]`
+- **Description:** Deletes local branches with `git branch -d` and prunes stale `origin` refs. `git branch -d` refuses a branch that is not fully merged into its upstream or HEAD (a squash-merged branch included): the refused ones are named and offered once for `git branch -D`, Enter meaning No (without a terminal they are kept). `--force` deletes with `-D` straight away and asks nothing. The Windows `-BranchName` and `-Force` work too, and `a, b` names several branches as in PowerShell; a flag it does not know (`-WhatIf` included) is an error and nothing is deleted. Without a branch it lists the local branches (the checked-out one left out) in a menu that takes one or more by number or name, and Enter deletes nothing and exits 0; without a terminal the menu cannot be answered and the command fails, deleting nothing. Each branch is deleted on its own and `origin` is pruned once, only when at least one was deleted. Exit status 1 when a branch was not deleted.
+- **Usage:** `GitBranchDeleteAndPrune [BRANCH... | --branch-name BRANCH...] [--force]`
 - **Alias:** `gbd`
 
 ## [GitMergeM](https://github.com/IvanPavlak/Foundation/blob/master/Unix/modules/Git/bin/GitMergeM)
@@ -62,6 +62,12 @@ only prints its usage, and any other argument is refused, so neither commits nor
 - **Description:** Switches to BRANCH, or to master/main when none is given. Only local branches count, as on Windows: a branch that exists only on `origin` is refused (`Branch 'NAME' does not exist!`), never created as a tracking branch. The Windows `-BranchName` names the branch too; a flag it does not know is an error.
 - **Usage:** `GitSwitch [BRANCH | --branch-name BRANCH]`
 - **Alias:** `gsw`
+
+## [GitWorktreeRemoveAndPrune](https://github.com/IvanPavlak/Foundation/blob/master/Unix/modules/Git/bin/GitWorktreeRemoveAndPrune)
+
+- **Description:** Removes linked worktrees and offers to delete their branches. Runs `git worktree prune` first, so a worktree whose folder was deleted by hand is dropped and never offered, then `git worktree remove` on each WORKTREE, named by the branch checked out in it or by its path (a relative path resolves against the current folder). git refuses a worktree with uncommitted changes or untracked files; `--force` passes `--force` and discards them. The main worktree, the one the shell is in and a locked one are never removed: each is reported and the others still go ahead (unlock a locked one with `git worktree unlock` first). The Windows `-Worktree` and `-Force` work too, and `a, b` names several worktrees as in PowerShell; a flag it does not know (`-WhatIf` included) is an error and nothing is removed. Without WORKTREE it lists the linked worktrees as `branch -> path` (`(detached abc1234) -> path` without a branch) in a menu that takes one or more; locked ones are listed apart and not offered, and Enter removes nothing and exits 0. When a removed worktree had a branch it asks once, Enter meaning No (and no terminal too): `Yes` runs [GitBranchDeleteAndPrune](#gitbranchdeleteandprune) on those branches, which offers `-D` for the unmerged ones, and `Force` runs it with `--force`; `--force` of this command never answers that question. Exit status 1 when a named worktree was not removed.
+- **Usage:** `GitWorktreeRemoveAndPrune [WORKTREE... | --worktree WORKTREE...] [--force]`
+- **Alias:** `gwd`
 
 ## [Initialize-Repository](https://github.com/IvanPavlak/Foundation/blob/master/Unix/modules/Git/bin/Initialize-Repository)
 
