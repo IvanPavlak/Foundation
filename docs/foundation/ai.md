@@ -123,16 +123,34 @@ unattended and, with a profile active, only warns and names `Initialize-AiProfil
 
 ## Repository policies
 
-A profile gives each repository it works on a trust level, and one hook enforces the level of the
-repository a session works in. The levels are a closed set, from most to least trust:
+A profile gives each repository it works on a trust level, and one hook enforces it on every tool call that touches that
+repository. The levels are a closed set, from most to least trust:
 
 | Level | Agents may | Agents may not |
 | --- | --- | --- |
 | `autonomous` | everything `branch` allows, plus `gh pr merge` when every CI check of the pull request passed, and one form of force push to a named non-default branch | merge with a failing or pending check, or with no check reported (unless a `merge-without-checks` line names the repository) |
 | `branch` | commit, push a non-default branch, open and ready pull requests | merge |
 | `draft` | commit, push a non-default branch, open draft pull requests (`gh pr create --draft`) | `gh pr ready`, merge, a pull request without `--draft` |
+| `edit` | read, and edit the working tree with the Edit, Write, MultiEdit and NotebookEdit tools | any Bash or PowerShell call (so no git or gh at all), and any edit inside `.git` (the folder, or a worktree's `.git` file) |
 | `readonly` | read, search and explain: the reading tools | any Bash or PowerShell call, and the Edit, Write, MultiEdit and NotebookEdit tools |
 | `blocked` | nothing: the ownership guard refuses the prompt and every tool call | |
+
+The `edit` level is for a repository that something other than an agent commits, such as a notes
+vault a sync plugin pushes: agents change its files, and git stays with the owner and the plugin. It
+refuses the shell as a whole rather than the git and gh commands in it, since the hook reads
+command text and an alias, function or script would carry git past a text match.
+
+**Which repositories a call touches.** A tool call is held to the least trusting level of every
+repository it touches, not only the one the session started in: the repository of the session's
+folder, the one holding the file a file tool edits (its nearest existing folder, for a file in a
+folder not yet made), and for a shell call every folder it names by a literal `cd` (`pushd`,
+`chdir`, `Set-Location`, `Push-Location`, `sl`), `git -C`, `--git-dir`, `--work-tree`, `GIT_DIR` or
+`GIT_WORK_TREE`, a relative folder counting from the last `cd` before it. A session in a `branch`
+repository that runs `git -C <notes> commit` or edits a note is therefore held to the notes
+repository's level, and the refusal names that repository. A folder outside any repository, or
+without `origin`, has the `default-policy` level, so a stricter `default-policy` also covers files
+written outside every repository. A folder held in a variable (`cd $dir`) or reached by a script
+the call runs is not read. A repository is relaxed by moving it to a more trusting level.
 
 Every level keeps the always-denied list: a push to the default branch (an explicit
 `master`/`main`/default refspec, `refs/heads/` or not, or a push naming no branch or `HEAD` while it
@@ -189,7 +207,7 @@ review a merge also needs (a judge score, say) is the agent's own check, not the
 
 **Unattended runs.** The launcher of an unattended run sets the `AI_UNATTENDED` environment
 variable (`1`, `on`, `true` or `yes`). The ownership guard then refuses the run when the profile
-has `unattended off` (or no `unattended` line), and in a repository at `draft` or `readonly`:
+has `unattended off` (or no `unattended` line), and in a repository at `draft`, `edit` or `readonly`:
 unattended work needs `autonomous` or `branch`. An attended session is not affected.
 
 `Test-AiProfile` lists the default level, every `policy` and `autonomous` pattern with its level in

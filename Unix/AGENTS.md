@@ -33,6 +33,11 @@ Bootstrap step, path ownership).
 - **Governance stays consistent.** A rule changed here or in `AI/Instructions/ShellConventions.md`
   is changed in the other surfaces that state it (`.github/instructions/`) in the same change.
 
+## Releases
+
+A pull request leaves its entries under `## [Unreleased]` in `Unix/CHANGELOG.md`. A Foundation release
+is cut on its own, when the maintainer asks for one, following `Unix/VERSIONING.md`.
+
 ## Running Tests (Delegate to the Developer)
 
 Do NOT run the suites yourself. After you add or change commands, tests or docs, give the developer
