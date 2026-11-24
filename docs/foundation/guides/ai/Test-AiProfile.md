@@ -36,7 +36,7 @@ Checks that this Mac runs the AI profile it should, that Claude Code is signed i
     - Default: no harness deployed, reported as a mismatch.
     - More detail: [AI on a Mac](../../ai.md#the-base-catalogue)
 4. Which trust level does each repository get, per profile?
-    - Options: `policy LEVEL PATTERN...` lines - `autonomous` (also merge a pull request whose CI checks all passed), `branch` (commit, push a feature branch, open pull requests), `draft` (draft pull requests only), `readonly` (no shell, no file edits), `blocked` (no work); the last matching line wins, so broad patterns go first and exceptions after. `default-policy LEVEL` for every other repository; `merge-without-checks PATTERN...` for `autonomous` repositories without CI that may still merge. `autonomous PATTERN...` is a synonym of `policy autonomous`.
+    - Options: `policy LEVEL PATTERN...` lines - `autonomous` (also merge a pull request whose CI checks all passed), `branch` (commit, push a feature branch, open pull requests), `draft` (draft pull requests only), `edit` (file edits outside `.git`, no shell, so no git), `readonly` (no shell, no file edits), `blocked` (no work); the last matching line wins, so broad patterns go first and exceptions after. `default-policy LEVEL` for every other repository; `merge-without-checks PATTERN...` for `autonomous` repositories without CI that may still merge. `autonomous PATTERN...` is a synonym of `policy autonomous`.
     - Default: every repository is at `branch`; nothing merges on its own.
     - More detail: [AI on a Mac - Repository policies](../../ai.md#repository-policies)
 

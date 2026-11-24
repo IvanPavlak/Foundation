@@ -129,7 +129,7 @@ policy autonomous github.com/me/a" ]
 
 @test "ai_profile_conf_text: policy lines in file order, autonomous as a level, default-policy, merge-without-checks" {
 	profiles 'default A' '[A]' 'policy Branch github.com/me/* github.com/x/y' 'autonomous github.com/me/a' \
-		'policy autonomus github.com/me/typo' 'policy readonly github.com/me/old' 'default-policy draft' \
+		'policy autonomus github.com/me/typo' 'policy readonly github.com/me/old' 'policy edit github.com/me/notes' 'default-policy draft' \
 		'merge-without-checks github.com/me/a github.com/me/b'
 	ai_profile_load
 	[ "$(ai_profile_conf_text | sed -n '/^autonomous /,$p')" = "autonomous github.com/me/a
@@ -138,9 +138,10 @@ policy branch github.com/me/*
 policy branch github.com/x/y
 policy autonomous github.com/me/a
 policy readonly github.com/me/old
+policy edit github.com/me/notes
 merge-without-checks github.com/me/a
 merge-without-checks github.com/me/b" ]
-	[ "$(ai_profile_policy_problems)" = "AI profile [A]: a policy line names an unknown level [autonomus] - its patterns are skipped (levels: autonomous, branch, draft, readonly, blocked)" ]
+	[ "$(ai_profile_policy_problems)" = "AI profile [A]: a policy line names an unknown level [autonomus] - its patterns are skipped (levels: autonomous, branch, draft, edit, readonly, blocked)" ]
 }
 
 @test "ai_profile_default_policy: branch when unset, readonly when it names no level" {

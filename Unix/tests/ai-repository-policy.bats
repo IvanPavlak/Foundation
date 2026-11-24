@@ -26,6 +26,13 @@ setup_file() {
 	git -C "$POLICY_ROOT/ondevelop" -c user.name=Test -c user.email=test@example.com -c commit.gpgsign=false commit -q --allow-empty -m Start
 	git -C "$POLICY_ROOT/ondevelop" branch develop
 	git -C "$POLICY_ROOT/ondevelop" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/develop
+	# A fourth, another repository next to them, for the calls that touch it from their folder.
+	git init -q -b master "$POLICY_ROOT/notes"
+	git -C "$POLICY_ROOT/notes" remote add origin https://github.com/MyUser/Notes.git
+	git -C "$POLICY_ROOT/notes" -c user.name=Test -c user.email=test@example.com -c commit.gpgsign=false commit -q --allow-empty -m Start
+	mkdir -p "$POLICY_ROOT/notes/Folder"
+	# Every touched-repository case reads this origin; without it they all pass as allow.
+	[ "$(git -C "$POLICY_ROOT/notes" remote get-url origin)" = https://github.com/MyUser/Notes.git ]
 }
 
 setup() {
@@ -71,11 +78,18 @@ json_escape() {
 
 # Runs a hook on one hook input and prints its decision: allow, deny: REASON or block: REASON.
 # Each call is a new session (CALLS counts them, so call it outside $(...) or bump CALLS first), so
-# no level is cached between calls, unless POLICY_SESSION names one. Usage: decide COMMAND [TOOL [CWD [HOOK [EVENT [UNATTENDED]]]]]
+# no level is cached between calls, unless POLICY_SESSION names one. POLICY_FILE_PATH, when set, is
+# the path a file tool edits (notebook_path for NotebookEdit, file_path otherwise) in place of the
+# command. Usage: decide COMMAND [TOOL [CWD [HOOK [EVENT [UNATTENDED]]]]]
 decide() {
-	local command=$1 tool=${2:-Bash} cwd=${3:-$FEATURE} hook=${4:-$POLICY_HOOK} event=${5:-} unattended=${6:-} json output
-	json=$(printf '{"session_id":"%s","cwd":"%s","tool_name":"%s","tool_input":{"command":"%s"}}' \
-		"${POLICY_SESSION:-s$BATS_TEST_NUMBER-$CALLS-$$}" "$cwd" "$tool" "$(json_escape "$command")")
+	local command=$1 tool=${2:-Bash} cwd=${3:-$FEATURE} hook=${4:-$POLICY_HOOK} event=${5:-} unattended=${6:-} json output tool_input key=file_path
+	tool_input=$(printf '"command":"%s"' "$(json_escape "$command")")
+	if [ -n "${POLICY_FILE_PATH:-}" ]; then
+		[ "$tool" != NotebookEdit ] || key=notebook_path
+		tool_input=$(printf '"%s":"%s"' "$key" "$(json_escape "$POLICY_FILE_PATH")")
+	fi
+	json=$(printf '{"session_id":"%s","cwd":"%s","tool_name":"%s","tool_input":{%s}}' \
+		"${POLICY_SESSION:-s$BATS_TEST_NUMBER-$CALLS-$$}" "$cwd" "$tool" "$tool_input")
 	# shellcheck disable=SC2086 # EVENT is one word or none
 	output=$(printf '%s' "$json" | env -u AI_UNATTENDED AI_PROFILE_CONF="$CONF" TMPDIR="$BATS_TEST_TMPDIR/tmp" \
 		PATH="$POLICY_ROOT/bin:$PATH" ${unattended:+AI_UNATTENDED=$unattended} "$HOOK_BASH" "$hook" $event)
@@ -348,6 +362,70 @@ level_sample() {
 	expect 'deny: *' 'gh pr merge 12'
 }
 
+@test "edit: the file tools on the working tree, never inside .git, and no shell at all" {
+	local tool command
+	policy_conf 'profile Personal' 'default-policy edit'
+	for tool in Edit Write MultiEdit; do
+		POLICY_FILE_PATH="$FEATURE/Notes/Note.md" expect allow '' "$tool"
+	done
+	POLICY_FILE_PATH="$FEATURE/Notebook.ipynb" expect allow '' NotebookEdit
+	# A name that only starts with .git is a working-tree file.
+	POLICY_FILE_PATH="$FEATURE/.gitignore" expect allow '' Write
+	POLICY_FILE_PATH="$FEATURE/Notes/.github/Note.md" expect allow '' Write
+	# .git itself: hooks and config there would run git.
+	POLICY_FILE_PATH="$FEATURE/.git/hooks/pre-commit" expect 'deny: *, edit)*.git*' '' Write
+	POLICY_FILE_PATH="$FEATURE/.git/config" expect 'deny: *, edit)*.git*' '' Edit
+	POLICY_FILE_PATH="$FEATURE/.GIT/config" expect 'deny: *, edit)*.git*' '' Edit
+	POLICY_FILE_PATH="$FEATURE/.git" expect 'deny: *, edit)*.git*' '' Write
+	POLICY_FILE_PATH='C:\Users\Me\Notes\.git\config' expect 'deny: *, edit)*.git*' '' Edit
+	# No shell, git or not.
+	for command in ls 'git commit -m Note'; do
+		expect 'deny: *, edit)*Bash and PowerShell*' "$command"
+		expect 'deny: *, edit)*Bash and PowerShell*' "$command" PowerShell
+	done
+	expect allow '' Read
+	expect allow '' Grep
+	# Its place in the line order: below draft, above readonly.
+	policy_conf 'profile Personal' 'policy draft github.com/myuser/*' 'policy edit github.com/myuser/myproject'
+	expect 'deny: *, edit)*' ls
+	policy_conf 'profile Personal' 'policy edit github.com/myuser/*' 'policy readonly github.com/myuser/myproject'
+	POLICY_FILE_PATH="$FEATURE/Note.md" expect 'deny: *, readonly)*' '' Edit
+}
+
+@test "a call is held to the strictest repository it touches: shell folders and file paths" {
+	local notes="$POLICY_ROOT/notes" command
+	policy_conf 'profile Personal' 'policy edit github.com/myuser/notes'
+	for command in "git -C $notes commit -m Note" "git -C \"$notes\" status" "git --no-pager -C $notes log" \
+		"cd $notes && git commit -m Note" 'cd ../notes && git status' "pushd $notes; ls" \
+		"git --git-dir=$notes/.git log" "git --work-tree $notes status" "GIT_DIR=$notes/.git git log"; do
+		expect 'deny: *(github.com/myuser/notes, edit)*Bash and PowerShell*' "$command"
+	done
+	expect 'deny: *(github.com/myuser/notes, edit)*' "Set-Location -Path '$notes'; git status" PowerShell
+	# A relative folder counts from the last cd before it; a cd into the stricter repository counts
+	# even when the call leaves it again.
+	expect 'deny: *(github.com/myuser/notes, edit)*' "cd $OUTSIDE && git -C ../notes status"
+	expect 'deny: *(github.com/myuser/notes, edit)*' "cd $notes && cd ../feature && git -C . status"
+	# Folders at the call's own level or looser, and a folder held in a variable, change nothing.
+	expect allow 'git status'
+	expect allow "cd $OUTSIDE && ls"
+	expect allow "cd \$HOME/notes && git status"
+	expect allow 'git -c core.pager=cat log -1'
+	# A file tool is held to the repository holding the file (its nearest existing folder).
+	policy_conf 'profile Personal' 'policy readonly github.com/myuser/notes'
+	POLICY_FILE_PATH="$notes/Note.md" expect 'deny: *(github.com/myuser/notes, readonly)*' '' Edit
+	POLICY_FILE_PATH="$notes/New/Folder/Note.md" expect 'deny: *(github.com/myuser/notes, readonly)*' '' Write
+	POLICY_FILE_PATH="$FEATURE/Note.md" expect allow '' Edit
+	policy_conf 'profile Personal' 'policy edit github.com/myuser/notes'
+	POLICY_FILE_PATH="$notes/Note.md" expect allow '' Edit
+	POLICY_FILE_PATH="$notes/.git/hooks/pre-commit" expect 'deny: *(github.com/myuser/notes, edit)*.git*' '' Write
+	# The session folder's level holds when it is the stricter one.
+	policy_conf 'profile Personal' 'policy readonly github.com/myuser/myproject'
+	POLICY_FILE_PATH="$notes/Note.md" expect 'deny: *(github.com/myuser/myproject, readonly)*' '' Edit
+	# A file outside any repository has the default-policy level.
+	policy_conf 'profile Personal' 'default-policy readonly' 'policy branch github.com/myuser/*'
+	POLICY_FILE_PATH="$OUTSIDE/Note.md" expect 'deny: *(no origin, readonly)*' '' Write
+}
+
 @test "readonly and blocked deny the shell and the file tools, readonly keeps the reading tools" {
 	local tool
 	policy_conf 'profile Personal' 'default-policy readonly'
@@ -390,6 +468,9 @@ level_sample() {
 	policy_conf "${base[@]}" 'policy blocked github.com/myuser/*'
 	expect 'block: *is blocked*' '' Bash "$FEATURE" "$GUARD" UserPromptSubmit
 	policy_conf "${base[@]}" 'policy draft github.com/myuser/*'
+	expect allow '' Bash "$FEATURE" "$GUARD" UserPromptSubmit
+	expect 'block: *unattended runs need*' '' Bash "$FEATURE" "$GUARD" UserPromptSubmit 1
+	policy_conf "${base[@]}" 'policy edit github.com/myuser/*'
 	expect allow '' Bash "$FEATURE" "$GUARD" UserPromptSubmit
 	expect 'block: *unattended runs need*' '' Bash "$FEATURE" "$GUARD" UserPromptSubmit 1
 	policy_conf "${base[@]}" 'default-policy readonly'

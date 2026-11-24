@@ -202,7 +202,7 @@ ai_profile_unattended() {
 
 # The repository policy levels (docs/foundation/ai.md#repository-policies), a closed set from most
 # to least trust.
-AI_POLICY_LEVELS='autonomous branch draft readonly blocked'
+AI_POLICY_LEVELS='autonomous branch draft edit readonly blocked'
 
 # Is LEVEL one of AI_POLICY_LEVELS (exact spelling, as the hooks compare it)? Usage: ai_policy_level LEVEL
 ai_policy_level() {

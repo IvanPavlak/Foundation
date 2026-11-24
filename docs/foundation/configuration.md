@@ -836,7 +836,7 @@ named deploys only those items), `exclude KIND/NAME...`, `mcp NAME...` and `mark
 `policy LEVEL PATTERN...` (repeatable, the last matching line wins), `autonomous PATTERN...` (a
 synonym of `policy autonomous`), `default-policy LEVEL` (default `branch`),
 `merge-without-checks PATTERN...` and `env NAME...`; the levels are `autonomous`, `branch`,
-`draft`, `readonly` and `blocked` ([Repository policies](ai.md#repository-policies)). A PATTERN is a shell glob on the `origin` remote
+`draft`, `edit`, `readonly` and `blocked` ([Repository policies](ai.md#repository-policies)). A PATTERN is a shell glob on the `origin` remote
 normalised to `host/owner/name`. With no section, profiles are off and every AI command behaves as
 without the file. `FOUNDATION_AI_PROFILE` overrides the host and default lines for one shell, and
 the profile Switch-AiProfile set (the root-owned `ai-profile.switch` next to the managed settings
